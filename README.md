@@ -7,6 +7,7 @@ New features added for all supported boards:
 - Upgraded the Yocto Project to version 5.1 Styhead.
 - Supports the GCC 14.2 toolchain.
 - Supports Glitch Detection (GDET) on i.MX 93.
+- Added Flutter and Dart SDK support via meta-flutter layer.
 - Cortex-M33 update for 8ULP and i.MX 93, Cortex-M7 updates for i.MX 8M Nano, i.MX 8M Plus, and i.MX 95,
 and Cortex-M4 update for i.MX 7ULP, i.MX 8M Mini, and i.MX 8M Quad.
 - Security
