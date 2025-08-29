@@ -1,3 +1,11 @@
+IMAGE_INSTALL:append = "\
+    pipewire pipewire-pulse wireplumber \
+    gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+    ladspa-sdk lv2 gstreamer1.0-plugins-ladspa \
+    ardour tensorflow-lite armnn onnxruntime fftw libsamplerate \
+"
+
 ROOTFS_POSTPROCESS_COMMAND:append:mx93-nxp-bsp = "install_demo_93; "
 ROOTFS_POSTPROCESS_COMMAND:append:mx8-nxp-bsp = "install_demo; "
 ROOTFS_POSTPROCESS_COMMAND:append:mx95-nxp-bsp = "install_demo; "
