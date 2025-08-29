@@ -16,6 +16,24 @@ IMAGE_INSTALL += " \
     ${IMAGE_INSTALL_OPENCV} \
     ${IMAGE_INSTALL_PARSEC} \
     ${IMAGE_INSTALL_PKCS11TOOL} \
+    pipewire \
+    pipewire-pulse \
+    wireplumber \
+    gstreamer1.0 \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    ladspa-sdk \
+    lv2 \
+    gstreamer1.0-plugins-ladspa \
+    jack \
+    ardour \
+    tensorflow-lite \
+    armnn \
+    onnxruntime \
+    fftw \
+    libsamplerate0 \
 "
 
 IMAGE_INSTALL_OPENCV              = ""
