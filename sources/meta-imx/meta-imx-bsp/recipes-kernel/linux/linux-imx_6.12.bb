@@ -18,6 +18,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=6bc538ed5bd9a7fc9398086aedcd7e46"
 DEPENDS += "coreutils-native"
 
 SRC_URI = "${LINUX_IMX_SRC}"
+SRC_URI += "file://0001-uac2-use-out-clock-for-input.patch"
 LINUX_IMX_SRC ?= "git://github.com/debix-tech/linux-nxp-debix;protocol=https;branch=${SRCBRANCH}"
 SRCBRANCH = "lf_6.12.3-debix_model_ab"
 KBRANCH = "${SRCBRANCH}"
