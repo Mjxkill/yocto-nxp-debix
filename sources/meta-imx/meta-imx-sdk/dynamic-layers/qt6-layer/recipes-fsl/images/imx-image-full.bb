@@ -23,7 +23,7 @@ IMAGE_INSTALL += " \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly \
+    ${@bb.utils.contains('LICENSE_FLAGS_ACCEPTED', 'commercial', 'gstreamer1.0-plugins-ugly', '', d)} \
     ladspa-sdk \
     lv2 \
     gstreamer1.0-plugins-ladspa \
