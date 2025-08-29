@@ -2,7 +2,6 @@ IMAGE_INSTALL:append = "\
     pipewire pipewire-pulse wireplumber \
     gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad ${@bb.utils.contains('LICENSE_FLAGS_ACCEPTED', 'commercial', 'gstreamer1.0-plugins-ugly', '', d)} \
-    gstreamer1.0-plugins-ladspa \
     ardour tensorflow-lite armnn onnxruntime fftw libsamplerate \
 "
 
