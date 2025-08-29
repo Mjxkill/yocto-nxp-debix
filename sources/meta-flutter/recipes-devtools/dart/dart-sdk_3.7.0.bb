@@ -4,8 +4,6 @@ SRC_URI = "https://storage.googleapis.com/dart-archive/channels/stable/release/3
 SRC_URI[sha256sum] = "0000000000000000000000000000000000000000000000000000000000000000"
 S = "${WORKDIR}/dart-sdk"
 
-inherit unzip
-
 RDEPENDS:${PN} = ""
 
 PACKAGE_ARCH = "${MACHINE_ARCH}"
