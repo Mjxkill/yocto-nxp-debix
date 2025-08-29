@@ -23,6 +23,8 @@ SRCBRANCH = "lf_6.12.3-debix_model_ab"
 KBRANCH = "${SRCBRANCH}"
 LOCALVERSION = ""
 SRCREV = "34099a3c1a8c09693a46ea7ba5370115a733996e"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+SRC_URI += "file://debix-custom.cfg"
 
 # PV is defined in the base in linux-imx.inc file and uses the LINUX_VERSION definition
 # required by kernel-yocto.bbclass.
@@ -72,6 +74,7 @@ do_copy_defconfig () {
 
 DELTA_KERNEL_DEFCONFIG ?= ""
 #DELTA_KERNEL_DEFCONFIG:mx8-nxp-bsp = "imx.config"
+DELTA_KERNEL_DEFCONFIG:mx8-nxp-bsp += " debix-custom.cfg"
 
 do_merge_delta_config[dirs] = "${B}"
 do_merge_delta_config[depends] += " \
