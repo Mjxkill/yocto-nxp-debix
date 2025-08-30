@@ -147,8 +147,9 @@ echo "EXTRA_IMAGE_FEATURES += \"package-management\"" >> conf/local.conf
 ##echo "IMAGE_INSTALL:append = \"android-tools android-tools-conf\"" >> conf/local.conf
 
 
-### John_gao 
-echo "BB_NUMBER_THREADS = \"16\"" >> conf/local.conf
+### John_gao
+echo "BB_NUMBER_THREADS = \"8\"" >> conf/local.conf
+echo "PARALLEL_MAKE = \"-j 8\"" >> conf/local.conf
 echo "IMAGE_FSTYPES = \"wic tar.bz2\"" >> conf/local.conf
 
 if [ ! -e $BUILD_DIR/conf/bblayers.conf.org ]; then
