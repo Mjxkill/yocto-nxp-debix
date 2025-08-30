@@ -2,7 +2,7 @@ IMAGE_INSTALL:append = "\
     pipewire pipewire-pulse wireplumber \
     gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad ${@bb.utils.contains('LICENSE_FLAGS_ACCEPTED', 'commercial', 'gstreamer1.0-plugins-ugly', '', d)} \
-    tensorflow-lite onnxruntime fftw libsamplerate \
+    tensorflow-lite onnxruntime fftw libsamplerate0 \
 "
 
 ROOTFS_POSTPROCESS_COMMAND:append:mx93-nxp-bsp = "install_demo_93; "
