@@ -25,7 +25,11 @@ SRC_URI = "\
 
 SRCREV_FORMAT = "voice_model_player"
 SRCREV_voice = "cc51bc7475c0134fcb006ba28a16b2dcd418cf3a"
-SRCREV_model = "cce123ab86c3861d46b8f29a88866bf9bf771f71"
+# Use the latest commit available on the lf-6.12.3_1.0.0 branch which
+# contains the required demo-experience-voice-player assets. The previous
+# revision pointed to a non-existent commit, leading bitbake to fail during
+# the fetch task.
+SRCREV_model = "921d890419b2d74f09067d938a9d5a7caab80426"
 SRCREV_player = "a70dba74eeff1b90f47425bae9779c4daa9c1aa0"
 
 S = "${WORKDIR}/git"
