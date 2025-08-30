@@ -9,14 +9,17 @@ checksum.
 
 Upstream-Status: Pending
 ---
- cmake/deps.txt | 8 ++++----
- 1 file changed, 4 insertions(+), 4 deletions(-)
+ cmake/deps.txt | 9 +++------
+ 1 file changed, 3 insertions(+), 6 deletions(-)
 
 diff --git a/cmake/deps.txt b/cmake/deps.txt
-index 2e52d0f..c1d39f8 100644
+index ba9c2bb73..c8aed070f 100644
 --- a/cmake/deps.txt
 +++ b/cmake/deps.txt
-@@
+@@ -16,12 +16,9 @@ abseil_cpp;https://github.com/abseil/abseil-cpp/archive/refs/tags/20240116.0.zip
+ cxxopts;https://github.com/jarro2783/cxxopts/archive/3c73d91c0b04e2b59462f0a741be8c07024c1bc0.zip;6c6ca7f8480b26c8d00476e0e24b7184717fe4f0
+ date;https://github.com/HowardHinnant/date/archive/refs/tags/v3.0.1.zip;2dac0c81dc54ebdd8f8d073a75c053b04b56e159
+ dlpack;https://github.com/dmlc/dlpack/archive/refs/tags/v0.6.zip;4d565dd2e5b31321e5549591d78aa7f377173445
 -# This Eigen commit id matches the eigen archive being consumed from https://gitlab.com/libeigen/eigen/-/archive/3.4/eigen-3.4.zip
 -# prior to the 3.4.1 RC changing the bits and invalidating the hash.
 -# it contains changes on top of 3.4.0 which are required to fix build issues.
@@ -26,8 +29,8 @@ index 2e52d0f..c1d39f8 100644
 +# Moved to github mirror to avoid gitlab issues.
 +# Issue link: https://github.com/bazelbuild/bazel-central-registry/issues/4355
 +eigen;https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip;05b19b49e6fbb91246be711d801160528c135e34
-+
- #xnnpack 2024.09.04
- googlexnnpack;https://github.com/google/XNNPACK/archive/fe98e0b93565382648129271381c14d6205255e3.zip;14f61dcf17cec2cde34ba2dcf61d6f24bf6059f3
---
+ flatbuffers;https://github.com/google/flatbuffers/archive/refs/tags/v1.12.0.zip;ba0a75fd12dbef8f6557a74e611b7a3d0c5fe7bf
+ fp16;https://github.com/Maratyszcza/FP16/archive/0a92994d729ff76a58f692d3028ca1b64b145d91.zip;b985f6985a05a1c03ff1bb71190f66d8f98a1494
+ fxdiv;https://github.com/Maratyszcza/FXdiv/archive/63058eff77e11aa15bf531df5dd34395ec3017c8.zip;a5658f4036402dbca7cebee32be57fb8149811e1
+-- 
 2.39.5
