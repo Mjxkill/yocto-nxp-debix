@@ -150,6 +150,8 @@ echo "EXTRA_IMAGE_FEATURES += \"package-management\"" >> conf/local.conf
 ### John_gao
 echo "BB_NUMBER_THREADS = \"8\"" >> conf/local.conf
 echo "PARALLEL_MAKE = \"-j 8\"" >> conf/local.conf
+export BB_NUMBER_THREADS=8
+export PARALLEL_MAKE="-j 8"
 echo "IMAGE_FSTYPES = \"wic tar.bz2\"" >> conf/local.conf
 
 if [ ! -e $BUILD_DIR/conf/bblayers.conf.org ]; then
