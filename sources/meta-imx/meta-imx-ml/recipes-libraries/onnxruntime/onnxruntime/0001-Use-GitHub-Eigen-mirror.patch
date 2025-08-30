@@ -1,0 +1,33 @@
+From 1edb7f8f4a8f0c9371d1ca83c6d8681c29b66e2f Mon Sep 17 00:00:00 2001
+From: OpenAI Assistant <assistant@example.com>
+Date: Thu, 10 Oct 2024 00:00:00 +0000
+Subject: [PATCH] Use GitHub Eigen mirror
+
+Switch Eigen dependency from GitLab to the GitHub mirror to avoid
+unstable archive hashes. The new archive is verified with its SHA1
+checksum.
+
+Upstream-Status: Pending
+---
+ cmake/deps.txt | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/cmake/deps.txt b/cmake/deps.txt
+index 2e52d0f..c1d39f8 100644
+--- a/cmake/deps.txt
++++ b/cmake/deps.txt
+@@
+-# This Eigen commit id matches the eigen archive being consumed from https://gitlab.com/libeigen/eigen/-/archive/3.4/eigen-3.4.zip
+-# prior to the 3.4.1 RC changing the bits and invalidating the hash.
+-# it contains changes on top of 3.4.0 which are required to fix build issues.
+-# Until the 3.4.1 release this is the best option we have.
+-# Issue link: https://gitlab.com/libeigen/eigen/-/issues/2744
+-eigen;https://gitlab.com/libeigen/eigen/-/archive/e7248b26a1ed53fa030c5c459f7ea095dfd276ac/eigen-e7248b26a1ed53fa030c5c459f7ea095dfd276ac.zip;be8be39fdbc6e60e94fa7870b280707069b5b81a
++# Moved to github mirror to avoid gitlab issues.
++# Issue link: https://github.com/bazelbuild/bazel-central-registry/issues/4355
++eigen;https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip;05b19b49e6fbb91246be711d801160528c135e34
++
+ #xnnpack 2024.09.04
+ googlexnnpack;https://github.com/google/XNNPACK/archive/fe98e0b93565382648129271381c14d6205255e3.zip;14f61dcf17cec2cde34ba2dcf61d6f24bf6059f3
+--
+2.39.5
