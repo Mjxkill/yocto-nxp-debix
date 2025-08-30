@@ -3,6 +3,8 @@ From: Libre Agent <libre@agent>
 Date: Thu, 1 Jan 1970 00:00:00 +0000
 Subject: [PATCH] usb: gadget: uac2: share output clock for input
 
+Upstream-Status: Backport [from Linux v6.6.36]
+
 Port patch from kernel 6.6.36 to use a single clock source for both
 playback and capture in the USB Audio Class 2 gadget driver. The input
 clock descriptor is removed and the output clock is reused for input
