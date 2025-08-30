@@ -43,8 +43,8 @@ local_conf_header:
 
   setup: |
     PACKAGE_CLASSES = "package_ipk"
-    BB_NUMBER_THREADS ?= "16"
-    PARALLEL_MAKE ?= "-j16"
+    BB_NUMBER_THREADS ?= "8"
+    PARALLEL_MAKE ?= "-j8"
     PACKAGECONFIG:append:pn-perf = " coresight"
 
 machine: unset
