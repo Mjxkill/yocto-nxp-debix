@@ -26,7 +26,6 @@ IMAGE_INSTALL += " \
     ${@bb.utils.contains('LICENSE_FLAGS_ACCEPTED', 'commercial', 'gstreamer1.0-plugins-ugly', '', d)} \
     jack \
     tensorflow-lite \
-    armnn \
     onnxruntime \
     fftw \
     libsamplerate0 \
