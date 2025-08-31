@@ -24,7 +24,9 @@ IMAGE_INSTALL += " \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
     ${@bb.utils.contains('LICENSE_FLAGS_ACCEPTED', 'commercial', 'gstreamer1.0-plugins-ugly', '', d)} \
-    jack \
+    jack-server \
+    jack-utils \
+    libjack \
     tensorflow-lite \
     onnxruntime \
     libfftw \
