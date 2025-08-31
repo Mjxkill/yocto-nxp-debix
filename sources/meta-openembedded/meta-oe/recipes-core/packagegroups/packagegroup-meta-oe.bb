@@ -661,8 +661,7 @@ RDEPENDS:packagegroup-meta-oe-multimedia ="\
     id3lib \
     audiofile \
     a2jmidid \
-    jack-server \
-    jack-utils \
+    jack \
     libass \
     libcdio-paranoia \
     libcdio \
