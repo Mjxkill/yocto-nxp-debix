@@ -51,6 +51,7 @@ This fork extends the NXP i.MX BSP with additional features and fixes:
 
 - Integrated the `meta-flutter` layer to provide Dart and Flutter SDK support.
 - Added custom kernel configuration and a USB Audio Class 2 patch for improved MIDI and audio functionality on Debix boards.
+- Disabled the CAAM cryptographic accelerator to avoid initialization issues during boot.
 - Extended the default image with audio and AI tools such as Jack, Ardour, TensorFlow Lite and ONNX Runtime.
 - Patched hostapd to apply a fresh defconfig directly from the source tree.
 - Updated the voice UI player demo to use a valid model revision.
@@ -58,6 +59,33 @@ This fork extends the NXP i.MX BSP with additional features and fixes:
 - Included Debix-specific rootfs scripts and services (ADB enablement, mass storage) along with Broadcom Wi-Fi firmware.
 - Limited build parallelism to eight threads and made the gstreamer ugly plugin optional.
 - Configured NTP to use `ntp.aliyun.com` as the default server.
+
+## Branch and Patch Review
+
+### Branches
+- `L6.12.3-debix_model_ab`: baseline of the NXP BSP for Debix boards.
+- `work`: current integration branch that aggregates all customizations listed above.
+
+### Patch status
+**Working patches**
+- `meta-flutter` layer with Dart and Flutter SDK recipes.
+- Custom kernel configuration and USB Audio Class 2 fixes for better MIDI/audio support.
+- U-Boot SPL legacy image support for i.MX8MP (legacy boot enabled).
+- CAAM driver disabled to avoid hardware initialization errors.
+- Ardour recipe and packaging cleanup for ONNX Runtime, hostapd and build thread limitation.
+
+**Removed or non-working patches**
+- `gstreamer1.0-plugins-ugly` made optional because the package is not always buildable.
+- `lv2`, `ladspa-sdk` and `jack-utils` dropped from images due to missing dependencies.
+
+### Future work
+- Reintroduce multimedia packages when upstream becomes stable.
+- Add camera preview support for i.MX 8DualX and improve Jack integration.
+
+### Upstreaming strategy
+- Submit kernel and U-Boot changes to NXP's `meta-imx` and `linux-imx` projects.
+- Contribute recipe updates to upstream layers such as `meta-openembedded` and `meta-flutter`.
+- Follow the Yocto Project contribution workflow (sign-off, mailing lists or GitHub pull requests) to merge patches into the official distribution.
 # Host Setup
 To get the Yocto Project expected behavior in a Linux Host Machine, the packages and utilities described
 below must be installed. An important consideration is the hard disk space required in the host machine. For
