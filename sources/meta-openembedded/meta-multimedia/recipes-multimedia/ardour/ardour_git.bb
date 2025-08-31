@@ -8,8 +8,8 @@ SRCREV = "${AUTOREV}"
 
 S = "${WORKDIR}/git"
 
-DEPENDS = "glib-2.0 atk cairo pango gtk+3 alsa-lib jack"
+DEPENDS = "glib-2.0 atk cairo pango gtk+3 alsa-lib"
 
 inherit waf pkgconfig
 
-EXTRA_OECONF = "--with-backends=jack,alsa"
+EXTRA_OECONF = "--with-backends=alsa"
