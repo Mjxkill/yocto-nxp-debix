@@ -43,9 +43,21 @@ and Cortex-M4 update for i.MX 7ULP, i.MX 8M Mini, and i.MX 8M Quad.
   2. i.MX 8DXL A1 DDR3L EVK
   3. i.MX 6QuadPlus SABRE-AI
   4. i.MX 6Quad/Dual SABRE-AI
-  5. i.MX 6DualLite SABRE-AI  
+  5. i.MX 6DualLite SABRE-AI
 
 
+# Fork-specific changes
+This fork extends the NXP i.MX BSP with additional features and fixes:
+
+- Integrated the `meta-flutter` layer to provide Dart and Flutter SDK support.
+- Added custom kernel configuration and a USB Audio Class 2 patch for improved MIDI and audio functionality on Debix boards.
+- Extended the default image with audio and AI tools such as Jack, Ardour, TensorFlow Lite and ONNX Runtime.
+- Patched hostapd to apply a fresh defconfig directly from the source tree.
+- Updated the voice UI player demo to use a valid model revision.
+- Improved ONNX Runtime packaging and allowed building with GCC 13 by ignoring interference-size warnings.
+- Included Debix-specific rootfs scripts and services (ADB enablement, mass storage) along with Broadcom Wi-Fi firmware.
+- Limited build parallelism to eight threads and made the gstreamer ugly plugin optional.
+- Configured NTP to use `ntp.aliyun.com` as the default server.
 # Host Setup
 To get the Yocto Project expected behavior in a Linux Host Machine, the packages and utilities described
 below must be installed. An important consideration is the hard disk space required in the host machine. For
