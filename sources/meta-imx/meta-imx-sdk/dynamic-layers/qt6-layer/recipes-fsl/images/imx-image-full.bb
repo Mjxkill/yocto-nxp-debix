@@ -24,7 +24,6 @@ IMAGE_INSTALL += " \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
     ${@bb.utils.contains('LICENSE_FLAGS_ACCEPTED', 'commercial', 'gstreamer1.0-plugins-ugly', '', d)} \
-    jack \
     tensorflow-lite \
     onnxruntime \
     libfftw \
@@ -38,6 +37,9 @@ IMAGE_INSTALL_OPENCV_PKGS = " \
     opencv-apps \
     opencv-samples \
     python3-opencv"
+
+# Disable JACK integration in PipeWire to drop jack runtime dependency
+PACKAGECONFIG:remove:pn-pipewire = "jack"
 
 IMAGE_INSTALL_PARSEC = " \
     packagegroup-security-tpm2 \
