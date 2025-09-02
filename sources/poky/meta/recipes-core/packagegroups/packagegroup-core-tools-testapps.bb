@@ -13,7 +13,6 @@ inherit packagegroup
 KEXECTOOLS ?= "kexec"
 KEXECTOOLS:e5500-64b ?= ""
 KEXECTOOLS:microblaze ?= ""
-KEXECTOOLS:mipsarcho32 ?= ""
 KEXECTOOLS:nios2 ?= ""
 KEXECTOOLS:riscv64 ?= ""
 KEXECTOOLS:riscv32 ?= ""

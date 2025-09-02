@@ -11,18 +11,18 @@ This layer depends on:
 
   URI: git://git.openembedded.org/openembedded-core
   layers: meta
-  branch: styhead
+  branch: scarthgap
 
   URI: git://git.openembedded.org/meta-openembedded
   layers: meta-oe
-  branch: styhead
+  branch: scarthgap
 
 Patches
 =======
 
 Please submit any patches against the filesystems layer to the
 OpenEmbedded development mailing list (openembedded-devel@lists.openembedded.org)
-with '[meta-filesystems][styhead]' in the subject.
+with '[meta-filesystems][scarthgap]' in the subject.
 
 Layer maintainer: Armin Kuster <akuster808@gmail.com>
 
@@ -30,7 +30,7 @@ When sending single patches, please use something like:
 
    git send-email -1 -M \
         --to openembedded-devel@lists.openembedded.org \
-        --subject-prefix='meta-filesystems][styhead][PATCH'
+        --subject-prefix='meta-filesystems][scarthgap][PATCH'
 
 
 Table of Contents

@@ -25,7 +25,6 @@ SRC_URI = "https://github.com/SSSD/sssd/releases/download/${PV}/${BP}.tar.gz \
            file://fix-ldblibdir.patch \
            file://musl_fixup.patch \
            file://0001-sssctl-add-error-analyzer.patch \
-           file://CVE-2023-3758.patch \
            "
 SRC_URI[sha256sum] = "827bc65d64132410e6dd3df003f04829d60387ec30e72b2d4e22d93bb6f762ba"
 
@@ -67,6 +66,7 @@ EXTRA_OECONF += " \
     --without-ipa-getkeytab \
     --without-python2-bindings \
     --enable-pammoddir=${base_libdir}/security \
+    --without-python2-bindings \
     --with-xml-catalog-path=${STAGING_ETCDIR_NATIVE}/xml/catalog \
     --with-pid-path=/run \
 "
@@ -91,7 +91,7 @@ do_install () {
     install -d ${D}/${PYTHON_SITEPACKAGES_DIR}
     mv ${D}/${BPN}  ${D}/${PYTHON_SITEPACKAGES_DIR}
 
-    install -m 600 ${UNPACKDIR}/${BPN}.conf ${D}/${sysconfdir}/${BPN}
+    install -m 600 ${WORKDIR}/${BPN}.conf ${D}/${sysconfdir}/${BPN}
 
     # /var/log/sssd needs to be created in runtime. Use rmdir to catch if
     # upstream stops creating /var/log/sssd, or adds something else in

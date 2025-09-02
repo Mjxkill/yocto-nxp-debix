@@ -12,7 +12,6 @@ to move to one release of the Yocto Project from the previous one.
 .. toctree::
 
    migration-general
-   release-5.1
    release-5.0
    release-4.3
    release-4.2

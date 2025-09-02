@@ -112,9 +112,6 @@ INHIBIT_DEFAULT_DEPS = "1"
 # Directory in testsdk that contains testcases
 TESTSDK_CASES = "buildtools-cases"
 
-# We have our own code, avoid deferred inherit
-SDK_CLASSES:remove = "testsdk"
-
 python do_testsdk() {
     import oeqa.sdk.testsdk
     testsdk = oeqa.sdk.testsdk.TestSDK()

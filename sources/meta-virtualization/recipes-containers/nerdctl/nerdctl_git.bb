@@ -11,9 +11,9 @@ DEPENDS = " \
 
 # Specify the first two important SRCREVs as the format
 SRCREV_FORMAT="nerdcli_cgroups"
-SRCREV_nerdcli = "d273fd202abdf8153cc7d8739fc1a2eda1a9efc1"
+SRCREV_nerdcli = "265d6b9cf526ce7d9ed8d34a0e3c3066901cc463"
 
-SRC_URI = "git://github.com/containerd/nerdctl.git;name=nerdcli;branch=main;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX}"
+SRC_URI = "git://github.com/containerd/nerdctl.git;name=nerdcli;branch=main;protocol=https"
 
 include src_uri.inc
 
@@ -27,7 +27,7 @@ LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=3b83ef96387f14655fc854ddc3c6bd
 
 GO_IMPORT = "import"
 
-S = "${WORKDIR}/git"
+# S = "${WORKDIR}/git"
 
 PV = "v2.0.0-beta.1"
 
@@ -69,7 +69,7 @@ do_compile() {
 	# our copied .go files are to be used for the build
 	ln -sf vendor.copy vendor
 	# inform go that we know what we are doing
-	cp ${UNPACKDIR}/modules.txt vendor/
+	cp ${WORKDIR}/modules.txt vendor/
 
 	oe_runmake GO=${GO} BUILDTAGS="${BUILDTAGS}" binaries
 }

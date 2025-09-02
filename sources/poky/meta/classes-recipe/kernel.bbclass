@@ -21,10 +21,7 @@ PACKAGE_WRITE_DEPS += "depmodwrapper-cross"
 do_deploy[depends] += "depmodwrapper-cross:do_populate_sysroot gzip-native:do_populate_sysroot"
 do_clean[depends] += "make-mod-scripts:do_clean"
 
-# CPE entries from NVD use linux_kernel, but the raw CVE entries from the kernel CNA have
-# vendor: linux and product: linux. Note that multiple distributions use "linux" as a product
-# name, so we need to fill vendor to avoid false positives
-CVE_PRODUCT ?= "linux_kernel linux:linux"
+CVE_PRODUCT ?= "linux_kernel"
 
 S = "${STAGING_KERNEL_DIR}"
 B = "${WORKDIR}/build"
@@ -227,6 +224,8 @@ KERNEL_DTBVENDORED ?= "0"
 #
 # configuration
 #
+export CMDLINE_CONSOLE = "console=${@d.getVar("KERNEL_CONSOLE") or "ttyS0"}"
+
 KERNEL_VERSION = "${@get_kernelversion_headers('${B}')}"
 
 # kernels are generally machine specific
@@ -682,12 +681,19 @@ kernel_do_configure() {
 
 	# Copy defconfig to .config if .config does not exist. This allows
 	# recipes to manage the .config themselves in do_configure:prepend().
-	if [ -f "${UNPACKDIR}/defconfig" ] && [ ! -f "${B}/.config" ]; then
-		cp "${UNPACKDIR}/defconfig" "${B}/.config"
+	if [ -f "${WORKDIR}/defconfig" ] && [ ! -f "${B}/.config" ]; then
+		cp "${WORKDIR}/defconfig" "${B}/.config"
 	fi
 
 	${KERNEL_CONFIG_COMMAND}
 }
+
+do_savedefconfig() {
+	bbplain "Saving defconfig to:\n${B}/defconfig"
+	oe_runmake -C ${B} savedefconfig
+}
+do_savedefconfig[nostamp] = "1"
+addtask savedefconfig after do_configure
 
 inherit cml1 pkgconfig
 
@@ -711,10 +717,9 @@ RDEPENDS:${KERNEL_PACKAGE_NAME} = "${KERNEL_PACKAGE_NAME}-base (= ${EXTENDPKGV})
 # not wanted in images as standard
 RRECOMMENDS:${KERNEL_PACKAGE_NAME}-base ?= "${KERNEL_PACKAGE_NAME}-image (= ${EXTENDPKGV})"
 PKG:${KERNEL_PACKAGE_NAME}-image = "${KERNEL_PACKAGE_NAME}-image-${@legitimize_package_name(d.getVar('KERNEL_VERSION'))}"
-RPROVIDES:${KERNEL_PACKAGE_NAME}-image += "${KERNEL_PACKAGE_NAME}-image"
 RDEPENDS:${KERNEL_PACKAGE_NAME}-image += "${@oe.utils.conditional('KERNEL_IMAGETYPE', 'vmlinux', '${KERNEL_PACKAGE_NAME}-vmlinux (= ${EXTENDPKGV})', '', d)}"
 PKG:${KERNEL_PACKAGE_NAME}-base = "${KERNEL_PACKAGE_NAME}-${@legitimize_package_name(d.getVar('KERNEL_VERSION'))}"
-RPROVIDES:${KERNEL_PACKAGE_NAME}-base += "${KERNEL_PACKAGE_NAME}-${KERNEL_VERSION} ${KERNEL_PACKAGE_NAME}-base"
+RPROVIDES:${KERNEL_PACKAGE_NAME}-base += "${KERNEL_PACKAGE_NAME}-${KERNEL_VERSION}"
 ALLOW_EMPTY:${KERNEL_PACKAGE_NAME} = "1"
 ALLOW_EMPTY:${KERNEL_PACKAGE_NAME}-base = "1"
 ALLOW_EMPTY:${KERNEL_PACKAGE_NAME}-image = "1"

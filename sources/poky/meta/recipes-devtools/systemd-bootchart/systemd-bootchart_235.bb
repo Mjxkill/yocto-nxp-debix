@@ -17,7 +17,6 @@ SRC_URI:append:libc-musl = " \
     file://0001-comparison_fn_t-is-glibc-specific-use-raw-signature-.patch \
     file://0002-musl-does-not-provide-printf-h.patch \
     file://0003-musl-does-not-provide-canonicalize_file_name.patch \
-    file://0001-Define-portable-basename-function.patch \
     "
 
 

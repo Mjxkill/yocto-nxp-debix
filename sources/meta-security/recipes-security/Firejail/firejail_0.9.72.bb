@@ -16,7 +16,7 @@ SRC_URI = "git://github.com/netblue30/firejail.git;protocol=https;branch=master 
 
 DEPENDS = "libseccomp"
 
-S = "${UNPACKDIR}/git"
+S = "${WORKDIR}/git"
 
 inherit autotools-brokensep pkgconfig bash-completion features_check
 

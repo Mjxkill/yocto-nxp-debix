@@ -16,11 +16,6 @@ SRC_URI += " \
     file://suricata.service \
     file://run-ptest \
     file://fixup.patch \
-    file://CVE-2024-37151.patch \
-    file://CVE-2024-38534.patch \
-    file://CVE-2024-38535_pre.patch \
-    file://CVE-2024-38535.patch \
-    file://CVE-2024-38536.patch \
     "
 
 inherit autotools pkgconfig python3native systemd ptest cargo cargo-update-recipe-crates
@@ -68,10 +63,8 @@ do_configure:prepend () {
     # use host for RUST_SURICATA_LIB_XC_DIR
     sed -i -e 's,\${host_alias},${RUST_HOST_SYS},' ${S}/configure.ac
     sed -i -e 's,libsuricata_rust.a,libsuricata.a,' ${S}/configure.ac
-    autotools_do_configure
+    oe_runconf
 }
-
-CFLAGS += "-Wno-error=incompatible-pointer-types"
 
 do_compile () {
     # we do this to bypass the make provided by this pkg 
@@ -89,14 +82,14 @@ do_install () {
     oe_runmake install DESTDIR=${D}
 
     install -d ${D}${sysconfdir}/suricata ${D}${sysconfdir}/default/volatiles
-    install -m 0644 ${UNPACKDIR}/volatiles.03_suricata  ${D}${sysconfdir}/default/volatiles/03_suricata
+    install -m 0644 ${WORKDIR}/volatiles.03_suricata  ${D}${sysconfdir}/default/volatiles/03_suricata
 
     install -m 0644 ${S}/threshold.config ${D}${sysconfdir}/suricata
     install -m 0644 ${S}/suricata.yaml ${D}${sysconfdir}/suricata
 
     if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
         install -d ${D}${sysconfdir}/tmpfiles.d
-        install -m 0644 ${UNPACKDIR}/tmpfiles.suricata ${D}${sysconfdir}/tmpfiles.d/suricata.conf
+        install -m 0644 ${WORKDIR}/tmpfiles.suricata ${D}${sysconfdir}/tmpfiles.d/suricata.conf
 
         install -d ${D}${systemd_unitdir}/system
         sed  -e s:/etc:${sysconfdir}:g \
@@ -105,7 +98,7 @@ do_install () {
              -e s:/usr/bin:${bindir}:g \
              -e s:/bin/kill:${base_bindir}/kill:g \
              -e s:/usr/lib:${libdir}:g \
-             ${UNPACKDIR}/suricata.service > ${D}${systemd_unitdir}/system/suricata.service
+             ${WORKDIR}/suricata.service > ${D}${systemd_unitdir}/system/suricata.service
     fi
 
     # Remove /var/run as it is created on startup
@@ -114,10 +107,6 @@ do_install () {
     sed -i -e "s:#!.*$:#!${USRBINPATH}/env python3:g" ${D}${bindir}/suricatasc
     sed -i -e "s:#!.*$:#!${USRBINPATH}/env python3:g" ${D}${bindir}/suricatactl
     sed -i -e "s:#!.*$:#!${USRBINPATH}/env python3:g" ${D}${libdir}/suricata/python/suricata/sc/suricatasc.py
-    # The build process dumps config logs into the binary, remove them.
-    sed -i -e 's#${RECIPE_SYSROOT}##g' ${D}${bindir}/suricata
-    sed -i -e 's#${RECIPE_SYSROOT_NATIVE}##g' ${D}${bindir}/suricata
-    sed -i -e 's#CFLAGS.*##g' ${D}${bindir}/suricata
 }
 
 pkg_postinst_ontarget:${PN} () {
@@ -135,4 +124,3 @@ FILES:${PN} += "${systemd_unitdir} ${sysconfdir}/tmpfiles.d"
 FILES:${PN}-python = "${bindir}/suricatasc ${PYTHON_SITEPACKAGES_DIR}"
 
 CONFFILES:${PN} = "${sysconfdir}/suricata/suricata.yaml"
-INSANE_SKIP:${PN} = "already-stripped"

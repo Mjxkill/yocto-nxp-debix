@@ -10,9 +10,7 @@ SECTION = "x11"
 RCONFLICTS:${PN} = "matchbox-common"
 
 SRC_URI = "file://matchbox-session"
-
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
+S = "${WORKDIR}"
 
 
 inherit update-alternatives

@@ -6,13 +6,9 @@ LIC_FILES_CHKSUM = " \
     file://LICENSES/Qt-GPL-exception-1.0.txt;md5=9a13522cd91a88fba784baf16ea66af8 \
 "
 
-inherit qt6-cmake features_check
+inherit qt6-cmake
 
 include recipes-qt/qt6/qt6-git.inc
 include recipes-qt/qt6/qt6.inc
 
-REQUIRED_DISTRO_FEATURES = "opengl"
-
 DEPENDS += "qtbase qtdeclarative qtdeclarative-native"
-
-INSANE_SKIP:${PN}-ptest += "buildpaths"

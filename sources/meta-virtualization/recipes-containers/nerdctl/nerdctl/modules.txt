@@ -1,36 +1,34 @@
 # github.com/Masterminds/semver/v3 v3.2.1
 ## explicit
-# github.com/Microsoft/go-winio v0.6.2
+# github.com/Microsoft/go-winio v0.6.1
 ## explicit
-# github.com/Microsoft/hcsshim v0.12.4
+# github.com/Microsoft/hcsshim v0.11.4
 ## explicit
-# github.com/awslabs/soci-snapshotter v0.6.1
+# github.com/awslabs/soci-snapshotter v0.4.1
 ## explicit
-# github.com/compose-spec/compose-go/v2 v2.1.3
+# github.com/compose-spec/compose-go v1.20.2
 ## explicit
-# github.com/containerd/accelerated-container-image v1.1.3
+# github.com/containerd/accelerated-container-image v1.0.2
 ## explicit
 # github.com/containerd/cgroups/v3 v3.0.3
 ## explicit
 # github.com/containerd/console v1.0.4
 ## explicit
-# github.com/containerd/containerd v1.7.19
-## explicit
-# github.com/containerd/containerd/api v1.7.19
+# github.com/containerd/containerd v1.7.13
 ## explicit
 # github.com/containerd/continuity v0.4.3
 ## explicit
 # github.com/containerd/fifo v1.1.0
 ## explicit
-# github.com/containerd/go-cni v1.1.10
+# github.com/containerd/go-cni v1.1.9
 ## explicit
-# github.com/containerd/imgcrypt v1.1.11
+# github.com/containerd/imgcrypt v1.1.9
 ## explicit
 # github.com/containerd/log v0.1.0
 ## explicit
-# github.com/containerd/nydus-snapshotter v0.13.13
+# github.com/containerd/nydus-snapshotter v0.13.7
 ## explicit
-# github.com/containerd/platforms v0.2.1
+# github.com/containerd/platforms v0.1.1
 ## explicit
 # github.com/containerd/stargz-snapshotter v0.15.1
 ## explicit
@@ -38,29 +36,29 @@
 ## explicit
 # github.com/containerd/stargz-snapshotter/ipfs v0.15.1
 ## explicit
-# github.com/containerd/typeurl/v2 v2.2.0
+# github.com/containerd/typeurl/v2 v2.1.1
 ## explicit
-# github.com/containernetworking/cni v1.2.2
+# github.com/containernetworking/cni v1.1.2
 ## explicit
-# github.com/containernetworking/plugins v1.5.1
+# github.com/containernetworking/plugins v1.4.0
 ## explicit
 # github.com/coreos/go-iptables v0.7.0
 ## explicit
 # github.com/coreos/go-systemd/v22 v22.5.0
 ## explicit
-# github.com/cyphar/filepath-securejoin v0.3.0
+# github.com/cyphar/filepath-securejoin v0.2.4
 ## explicit
-# github.com/docker/cli v27.0.3+incompatible
+# github.com/docker/cli v24.0.7+incompatible
 ## explicit
-# github.com/docker/docker v27.0.3+incompatible
+# github.com/docker/docker v24.0.7+incompatible
 ## explicit
 # github.com/docker/go-connections v0.5.0
 ## explicit
 # github.com/docker/go-units v0.5.0
 ## explicit
-# github.com/fahedouch/go-logrotate v0.2.1
+# github.com/fahedouch/go-logrotate v0.2.0
 ## explicit
-# github.com/fatih/color v1.17.0
+# github.com/fatih/color v1.16.0
 ## explicit
 # github.com/fluent/fluent-logger-golang v1.9.0
 ## explicit
@@ -84,13 +82,13 @@
 ## explicit
 # github.com/opencontainers/runtime-spec v1.2.0
 ## explicit
-# github.com/pelletier/go-toml/v2 v2.2.2
+# github.com/pelletier/go-toml/v2 v2.1.1
 ## explicit
-# github.com/rootless-containers/bypass4netns v0.4.1
+# github.com/rootless-containers/bypass4netns v0.4.0
 ## explicit
-# github.com/rootless-containers/rootlesskit/v2 v2.1.0
+# github.com/rootless-containers/rootlesskit/v2 v2.0.1
 ## explicit
-# github.com/spf13/cobra v1.8.1
+# github.com/spf13/cobra v1.8.0
 ## explicit
 # github.com/spf13/pflag v1.0.5
 ## explicit
@@ -104,23 +102,23 @@
 ## explicit
 # go.uber.org/mock v0.4.0
 ## explicit
-# golang.org/x/crypto v0.25.0
+# golang.org/x/crypto v0.19.0
 ## explicit
-# golang.org/x/net v0.27.0
+# golang.org/x/net v0.21.0
 ## explicit
-# golang.org/x/sync v0.7.0
+# golang.org/x/sync v0.6.0
 ## explicit
-# golang.org/x/sys v0.22.0
+# golang.org/x/sys v0.17.0
 ## explicit
-# golang.org/x/term v0.22.0
+# golang.org/x/term v0.17.0
 ## explicit
-# golang.org/x/text v0.16.0
+# golang.org/x/text v0.14.0
 ## explicit
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 # gotest.tools/v3 v3.5.1
 ## explicit
-# github.com/go-viper/mapstructure/v2 v2.0.0
+# github.com/moby/sys/user v0.1.0
 ## explicit
 # github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24
 ## explicit
@@ -132,19 +130,19 @@
 ## explicit
 # github.com/cilium/ebpf v0.11.0
 ## explicit
-# github.com/containerd/errdefs v0.1.0
+# github.com/containerd/cgroups v1.1.0
 ## explicit
 # github.com/containerd/go-runc v1.0.0
 ## explicit
-# github.com/containerd/ttrpc v1.2.5
+# github.com/containerd/ttrpc v1.2.2
 ## explicit
 # github.com/containerd/typeurl v1.0.3-0.20220422153119-7f6e6d160d67
 ## explicit
-# github.com/containers/ocicrypt v1.1.10
+# github.com/containers/ocicrypt v1.1.9
 ## explicit
-# github.com/distribution/reference v0.6.0
+# github.com/distribution/reference v0.5.0
 ## explicit
-# github.com/djherbis/times v1.6.0
+# github.com/djherbis/times v1.5.0
 ## explicit
 # github.com/docker/docker-credential-helpers v0.7.0
 ## explicit
@@ -152,9 +150,9 @@
 ## explicit
 # github.com/felixge/httpsnoop v1.0.3
 ## explicit
-# github.com/go-jose/go-jose/v3 v3.0.3
+# github.com/go-jose/go-jose/v3 v3.0.1
 ## explicit
-# github.com/go-logr/logr v1.4.1
+# github.com/go-logr/logr v1.3.0
 ## explicit
 # github.com/go-logr/stdr v1.2.2
 ## explicit
@@ -164,7 +162,7 @@
 ## explicit
 # github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 ## explicit
-# github.com/golang/protobuf v1.5.4
+# github.com/golang/protobuf v1.5.3
 ## explicit
 # github.com/google/go-cmp v0.6.0
 ## explicit
@@ -174,9 +172,11 @@
 ## explicit
 # github.com/hashicorp/go-multierror v1.1.1
 ## explicit
+# github.com/imdario/mergo v0.3.16
+## explicit
 # github.com/inconshreveable/mousetrap v1.1.0
 ## explicit
-# github.com/klauspost/compress v1.17.9
+# github.com/klauspost/compress v1.17.6
 ## explicit
 # github.com/klauspost/cpuid/v2 v2.2.3
 ## explicit
@@ -190,8 +190,6 @@
 ## explicit
 # github.com/mitchellh/go-homedir v1.1.0
 ## explicit
-# github.com/moby/docker-image-spec v1.3.1
-## explicit
 # github.com/moby/locker v1.0.1
 ## explicit
 # github.com/moby/sys/mountinfo v0.7.1
@@ -199,8 +197,6 @@
 # github.com/moby/sys/sequential v0.5.0
 ## explicit
 # github.com/moby/sys/symlink v0.2.0
-## explicit
-# github.com/moby/sys/user v0.1.0
 ## explicit
 # github.com/mr-tron/base58 v1.2.0
 ## explicit
@@ -228,7 +224,7 @@
 ## explicit
 # github.com/spaolacci/murmur3 v1.1.0
 ## explicit
-# github.com/stefanberger/go-pkcs11uri v0.0.0-20230803200340-78284954bff6
+# github.com/stefanberger/go-pkcs11uri v0.0.0-20201008174630-78d3cae3a980
 ## explicit
 # github.com/tidwall/match v1.1.1
 ## explicit
@@ -256,15 +252,19 @@
 ## explicit
 # go.opentelemetry.io/otel/trace v1.19.0
 ## explicit
-# golang.org/x/exp v0.0.0-20240112132812-db7319d0e0e3
+# golang.org/x/exp v0.0.0-20231006140011-7918f672742d
 ## explicit
-# google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80
+# golang.org/x/mod v0.13.0
 ## explicit
-# google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80
+# golang.org/x/tools v0.14.0
 ## explicit
-# google.golang.org/grpc v1.62.0
+# google.golang.org/genproto v0.0.0-20231012201019-e917dd12ba7a
 ## explicit
-# google.golang.org/protobuf v1.33.0
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20231016165738-49dd2c1f3d0b
+## explicit
+# google.golang.org/grpc v1.59.0
+## explicit
+# google.golang.org/protobuf v1.31.0
 ## explicit
 # lukechampine.com/blake3 v1.1.7
 ## explicit

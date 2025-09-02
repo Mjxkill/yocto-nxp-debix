@@ -1,23 +1,8 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
-SRC_URI += "file://0001-tests-Fix-cl-test-Include-Directories-error-Error-0-.patch"
+SRC_URI += "file://0001-tests-Fix-cl-test-Include-Directories-error-Error-0-.patch \
+            file://0001-tests-Fix-cl-test-program-execute-builtin-builtin-fl.patch \
+"
 
-PACKAGECONFIG:append = " \
-    ${PACKAGECONFIG_GBM} \
-    ${PACKAGECONFIG_VULKAN}"
-PACKAGECONFIG:remove = " \
-    ${PACKAGECONFIG_REMOVE_X11}"
-
-PACKAGECONFIG_GBM                    ?= "gbm"
-PACKAGECONFIG_GBM:imxgpu:mx6-nxp-bsp  = ""
-PACKAGECONFIG_GBM:imxgpu:mx7-nxp-bsp  = ""
-
+PACKAGECONFIG += "${PACKAGECONFIG_VULKAN}"
 PACKAGECONFIG_VULKAN ?= "${@bb.utils.filter('DISTRO_FEATURES', 'vulkan', d)}"
-
-PACKAGECONFIG_REMOVE_X11                    ?= ""
-PACKAGECONFIG_REMOVE_X11:imxgpu:mx6-nxp-bsp  = "x11"
-PACKAGECONFIG_REMOVE_X11:imxgpu:mx7-nxp-bsp  = "x11"
-
-PACKAGECONFIG[gbm] = "-DPIGLIT_USE_GBM=1,-DPIGLIT_USE_GBM=0,virtual/libgbm"
-
-CFLAGS:append:imxgpu = " -Wno-error=int-conversion -Wno-error=incompatible-pointer-types"

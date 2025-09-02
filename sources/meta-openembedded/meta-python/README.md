@@ -13,11 +13,11 @@ The meta-python layer depends on:
 
 	URI: git://git.openembedded.org/openembedded-core
 	layers: meta
-	branch: styhead
+	branch: scarthgap
 
 	URI: git://git.openembedded.org/meta-openembedded
 	layers: meta-oe
-	branch: styhead
+	branch: scarthgap
 
 Contributing
 -------------------------
@@ -28,10 +28,10 @@ comments and patch review. It is subscriber only, so please register
 before posting.
 
 Send pull requests to openembedded-devel@lists.openembedded.org with
-'[meta-python][styhead]' in the subject.
+'[meta-python][scarthgap]' in the subject.
 
 When sending single patches, please use something like:
-git send-email -M -1 --to=openembedded-devel@lists.openembedded.org --subject-prefix='meta-python][styhead][PATCH'
+git send-email -M -1 --to=openembedded-devel@lists.openembedded.org --subject-prefix='meta-python][scarthgap][PATCH'
 
 Maintenance
 -------------------------

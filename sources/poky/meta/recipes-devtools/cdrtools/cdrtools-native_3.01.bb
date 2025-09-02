@@ -37,7 +37,7 @@ do_configure() {
 
         install -m 0755 ${STAGING_DATADIR_NATIVE}/gnu-config/config.sub ${S}/autoconf
         install -m 0755 ${STAGING_DATADIR_NATIVE}/gnu-config/config.guess ${S}/autoconf
-        install -m 0644 ${UNPACKDIR}/riscv64-linux-gcc.rul ${S}/RULES/
+        install -m 0644 ${WORKDIR}/riscv64-linux-gcc.rul ${S}/RULES/
 }
 
 do_install() {

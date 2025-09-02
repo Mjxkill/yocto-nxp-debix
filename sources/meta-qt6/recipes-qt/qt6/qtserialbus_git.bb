@@ -22,5 +22,3 @@ PACKAGECONFIG:class-nativesdk = ""
 
 PACKAGECONFIG[modbus-serialport] = "-DFEATURE_modbus_serialport=ON,-DFEATURE_modbus_serialport=OFF,qtserialport"
 PACKAGECONFIG[socketcan] = "-DFEATURE_socketcan=ON,-DFEATURE_socketcan=OFF,,libsocketcan"
-
-INSANE_SKIP:${PN}-ptest += "buildpaths"

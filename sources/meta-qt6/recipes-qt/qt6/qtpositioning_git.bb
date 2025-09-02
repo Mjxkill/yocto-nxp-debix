@@ -17,10 +17,9 @@ include recipes-qt/qt6/qt6.inc
 
 DEPENDS += "qtbase"
 
-PACKAGECONFIG ?= "nmea qml geoclue"
+PACKAGECONFIG ?= "nmea qml"
 PACKAGECONFIG[geoclue] = ",,,geoclue"
 PACKAGECONFIG[gypsy] = "-DFEATURE_gypsy=ON,-DFEATURE_gypsy=OFF,gconf gypsy"
 PACKAGECONFIG[nmea] = ",,qtserialport"
 PACKAGECONFIG[qml] = ",,qtdeclarative qtdeclarative-native"
 
-INSANE_SKIP:${PN}-ptest += "buildpaths"

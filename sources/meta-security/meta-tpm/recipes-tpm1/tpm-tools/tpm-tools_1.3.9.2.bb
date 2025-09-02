@@ -22,11 +22,7 @@ SRC_URI = " \
 
 inherit autotools-brokensep gettext
 
-S = "${UNPACKDIR}/git"
-
-# Compile failing with gcc-14
-CFLAGS += " -Wno-incompatible-pointer-types -Wno-stringop-truncation -Wno-error=implicit-function-declaration"
-BUILD_CFLAGS += " -Wno-incompatible-pointer-types -Wno-stringop-truncation -Wno-error=implicit-function-declaration"
+S = "${WORKDIR}/git"
 
 do_configure:prepend () {
 	mkdir -p po

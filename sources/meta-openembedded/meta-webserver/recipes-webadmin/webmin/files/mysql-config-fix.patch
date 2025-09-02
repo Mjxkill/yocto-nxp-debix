@@ -10,6 +10,8 @@ Signed-off-by: Diego Rondini <diego.ml@zoho.com>
  mysql/config | 18 +++++++++---------
  1 file changed, 9 insertions(+), 9 deletions(-)
 
+diff --git a/mysql/config b/mysql/config
+index e5b6fb3..77bfe69 100644
 --- a/mysql/config
 +++ b/mysql/config
 @@ -1,13 +1,13 @@
@@ -31,7 +33,7 @@ Signed-off-by: Diego Rondini <diego.ml@zoho.com>
 -mysqladmin=/usr/local/mysql/bin/mysqladmin
 +mysql_libs=/usr/lib
 +mysqladmin=/usr/bin/mysqladmin
- style=1
+ style=0
  add_mode=1
  nodbi=0
 @@ -15,7 +15,7 @@ access=*: *
@@ -43,3 +45,6 @@ Signed-off-by: Diego Rondini <diego.ml@zoho.com>
  max_dbs=50
  my_cnf=/etc/my.cnf
  max_text=1000
+-- 
+2.5.0
+

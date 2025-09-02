@@ -36,6 +36,3 @@ RDEPENDS:${PN}-compiler = "protobuf-compiler"
 RDEPENDS:${PN}-dev += "${PN}-compiler"
 
 BBCLASSEXTEND = "native nativesdk"
-
-# No 64bit atomics
-LDFLAGS:append:riscv32 = " -latomic"

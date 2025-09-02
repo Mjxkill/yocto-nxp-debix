@@ -1,4 +1,4 @@
-# Copyright 2017-2024 NXP
+# Copyright (C) 2017-2021 NXP
 
 require optee-client-fslc.inc
 

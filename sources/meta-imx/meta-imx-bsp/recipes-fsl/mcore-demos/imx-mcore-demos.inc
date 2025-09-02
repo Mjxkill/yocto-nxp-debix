@@ -39,17 +39,16 @@ SCR = "SCR-${SOC}-${MCORE_TYPE}-demo.txt"
 
 do_install () {
     # install elf format binary to /lib/firmware
-    install -d ${D}${nonarch_base_libdir}/firmware
-    install -m 0644 ${S}/*.elf ${D}${nonarch_base_libdir}/firmware
+    install -d ${D}${base_libdir}/firmware
+    install -m 0644 ${S}/*.elf ${D}${base_libdir}/firmware
 }
 
 DEPLOY_FILE_EXT       ?= "bin"
 DEPLOY_FILE_EXT:mx7ulp-nxp-bsp = "img"
 
 do_deploy () {
-    # Install the demo binaries
-    install -d ${DEPLOYDIR}/mcore-demos
-    install -m 0644 ${S}/*.${DEPLOY_FILE_EXT} ${DEPLOYDIR}/mcore-demos/
+   # Install the demo binaries
+   install -m 0644 ${S}/*.${DEPLOY_FILE_EXT} ${DEPLOYDIR}/
 }
 
 addtask deploy after do_install

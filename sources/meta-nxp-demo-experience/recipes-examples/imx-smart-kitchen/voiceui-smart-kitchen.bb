@@ -14,7 +14,7 @@ SRCBRANCH_voice = "MM_04.09.00_2405_L6.6.y"
 
 NXP_DEMO_ASSET_SRC ?= "git://github.com/NXP/nxp-demo-experience-assets.git;protocol=https"
 
-SRCBRANCH_model = "lf-6.12.3_1.0.0"
+SRCBRANCH_model = "lf-6.6.36_2.1.0"
 
 SRC_URI = "\
 	${NXPAFE_VOICESEEKER_SRC};branch=${SRCBRANCH_voice};name=voice \
@@ -23,10 +23,10 @@ SRC_URI = "\
 SRCREV_FORMAT = "voice_model"
 
 SRCREV_voice = "cc51bc7475c0134fcb006ba28a16b2dcd418cf3a"
-SRCREV_model = "cce123ab86c3861d46b8f29a88866bf9bf771f71"
+SRCREV_model = "a552bd1ed30e93011d470636294ff3fa54b9690a"
 
 S = "${WORKDIR}/git"
-MODEL_DIR = "${UNPACKDIR}/demo-experience-smart-kitchen"
+MODEL_DIR = "${WORKDIR}/demo-experience-smart-kitchen"
 
 EXTRA_CONF = "--enable-armv8 --bindir=/unit_tests/ --libdir=${libdir}"
 

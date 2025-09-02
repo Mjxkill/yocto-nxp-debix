@@ -4,14 +4,26 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/libcap-ng:"
 
 SUMMARY .= " - python"
 
-inherit python3targetconfig
+inherit lib_package autotools python3targetconfig
 
-DEPENDS += "libcap-ng python3 swig-native"
+# drop setuptools when version > 0.8.3 is released; it's needed only for distutils
+DEPENDS += "libcap-ng python3 swig-native python3-setuptools-native"
+
+S = "${WORKDIR}/libcap-ng-${PV}"
 
 EXTRA_OECONF += "--with-python3"
 
-do_install() {
-    oe_runmake 'DESTDIR=${D}' install -C ${B}/bindings/python3
+do_install:append() {
+    rm -rf ${D}${bindir}
+    rm -rf ${D}${libdir}/.debug
+    rm -f ${D}${libdir}/lib*
+    rm -rf ${D}${libdir}/pkgconfig
+    rm -rf ${D}${datadir}
+    rm -rf ${D}${includedir}
 }
 
+# PACKAGES = "${PN}"
+
 FILES:${PN} = "${libdir}/python${PYTHON_BASEVERSION}"
+FILES:${PN}-dbg =+ "${PYTHON_SITEPACKAGES_DIR}/.debug/_capng.so"
+

@@ -1,13 +1,13 @@
 DESCRIPTION = "A library to retrieve i.MX GPU performance data"
 LICENSE = "Proprietary"
-LIC_FILES_CHKSUM = "file://COPYING;md5=c0fb372b5d7f12181de23ef480f225f3" 
+LIC_FILES_CHKSUM = "file://COPYING;md5=ca53281cc0caa7e320d4945a896fb837" 
 
-IMX_SRCREV_ABBREV = "95b9a52"
+IMX_SRCREV_ABBREV = "99ab423"
 
-SRC_URI[arm-fb.sha256sum] = "085a2a26724a48b91bf49aef3b43dca6f62541523221ddbcbd9945912adea1cd"
-SRC_URI[arm-wayland.sha256sum] = "930b727e7bd0bdbd8a54ef031a8acd6449a96a55306a6fad72a6efd3ee7b7eac"
-SRC_URI[aarch64-wayland.sha256sum] = "bff16f2b8a374574c5057fd5e8b66aa61fc7a9e09a2d09b852bf471f22c7b0c5"
-SRC_URI[aarch64-wayland-mali.sha256sum] = "4c0beee920dd34fd332bdd7573db942b4b222c4b9114d99ce7e078545e3bda6e"
+SRC_URI[arm-fb.sha256sum] = "be907da4aa533e1c325002dee93364965553a1f971442b1c3661bc8a3c9b6212"
+SRC_URI[arm-wayland.sha256sum] = "07334d80e692b6c228437d037ec97ca5d59af9f9b3ddf12a8503defc9bd7e1be"
+SRC_URI[aarch64-wayland.sha256sum] = "1f24a74fae88814eae2d3ca35addddace7889438500105a137265c961d1bacdd"
+SRC_URI[aarch64-wayland-mali.sha256sum] = "a0dff721ac7ff6a89862f85bf5a49f60df571dbab8676babbf702feb8e4d5da5"
 
 inherit fsl-eula-unpack2 fsl-eula-graphics fsl-eula-recent
 

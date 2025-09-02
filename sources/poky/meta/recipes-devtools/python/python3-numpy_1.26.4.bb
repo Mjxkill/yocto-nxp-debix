@@ -61,7 +61,4 @@ RDEPENDS:${PN}-ptest += "python3-pytest \
                          ldd \
 "
 
-# Upstream has a pyproject.toml but as of 1.26.4 it's marked as experimental
-INSANE_SKIP = "pep517-backend"
-
 BBCLASSEXTEND = "native nativesdk"

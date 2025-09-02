@@ -10,7 +10,6 @@ SRC_URI = "git://github.com/kkaempf/cmpi-bindings.git;protocol=https;branch=mast
            file://cmpi-bindings-0.4.17-no-ruby-perl.patch \
            file://cmpi-bindings-0.4.17-sblim-sigsegv.patch \
            file://0001-Fix-error.patch \
-           file://0001-cmpi-bindings-Fix-build-error-with-gcc14.patch \
            "
 
 SRCREV = "69077ee4d249816ed428155fc933dca424167e77"
@@ -33,7 +32,3 @@ FILES:${PN} =+"${libdir}/cmpi/libpy3CmpiProvider.so ${PYTHON_SITEPACKAGES_DIR}/*
 FILES:${PN}-dbg =+ "${libdir}/cmpi/.debug/libpyCmpiProvider.so"
 
 BBCLASSEXTEND = "native"
-
-# http://errors.yoctoproject.org/Errors/Details/766910/
-# cmpi-bindings/1.0.4/git/swig/python/../../src/target_python.c:168:21: error: passing argument 1 of 'Py_SetProgramName' from incompatible pointer type [-Wincompatible-pointer-types]
-CFLAGS += "-Wno-error=incompatible-pointer-types"

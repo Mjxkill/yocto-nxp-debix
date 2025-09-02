@@ -9,5 +9,5 @@ header:
 machine: fvp-base
 
 target:
-  - core-image-full-cmdline
+  - core-image-sato
   - boot-wrapper-aarch64

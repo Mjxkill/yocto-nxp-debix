@@ -7,7 +7,10 @@ PR = "r2"
 DEPENDS = "libxml2 fmlib tclap"
 
 SRC_URI = "git://github.com/nxp-qoriq/fmc;protocol=https;nobranch=1"
-SRCREV = "5b9f4b16a864e9dfa58cdcc860be278a7f66ac18"
+SRC_URI:append = " \
+    file://0001-FMCCFGReader-improve-parameter-definition-of-functio.patch \
+"
+SRCREV = "63c8ac99899a9bcd723801579b4d786594670455"
 
 S = "${WORKDIR}/git"
 

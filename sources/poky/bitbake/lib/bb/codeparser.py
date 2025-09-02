@@ -87,17 +87,14 @@ def add_module_functions(fn, functions, namespace):
             if e in functions:
                 execs.remove(e)
                 execs.add(namespace + "." + e)
-        visitorcode = None
-        if hasattr(functions[f], 'visitorcode'):
-            visitorcode = getattr(functions[f], "visitorcode")
-        modulecode_deps[name] = [parser.references.copy(), execs, parser.var_execs.copy(), parser.contains.copy(), parser.extra, visitorcode]
+        modulecode_deps[name] = [parser.references.copy(), execs, parser.var_execs.copy(), parser.contains.copy(), parser.extra]
         #bb.warn("%s: %s\nRefs:%s Execs: %s %s %s" % (name, fn, parser.references, parser.execs, parser.var_execs, parser.contains))
 
 def update_module_dependencies(d):
     for mod in modulecode_deps:
         excludes = set((d.getVarFlag(mod, "vardepsexclude") or "").split())
         if excludes:
-            modulecode_deps[mod] = [modulecode_deps[mod][0] - excludes, modulecode_deps[mod][1] - excludes, modulecode_deps[mod][2] - excludes, modulecode_deps[mod][3], modulecode_deps[mod][4], modulecode_deps[mod][5]]
+            modulecode_deps[mod] = [modulecode_deps[mod][0] - excludes, modulecode_deps[mod][1] - excludes, modulecode_deps[mod][2] - excludes, modulecode_deps[mod][3], modulecode_deps[mod][4]]
 
 # A custom getstate/setstate using tuples is actually worth 15% cachesize by
 # avoiding duplication of the attribute names!
@@ -164,7 +161,7 @@ class CodeParserCache(MultiProcessCache):
     # so that an existing cache gets invalidated. Additionally you'll need
     # to increment __cache_version__ in cache.py in order to ensure that old
     # recipe caches don't trigger "Taskhash mismatch" errors.
-    CACHE_VERSION = 14
+    CACHE_VERSION = 12
 
     def __init__(self):
         MultiProcessCache.__init__(self)
@@ -264,15 +261,7 @@ class PythonParser():
 
     def visit_Call(self, node):
         name = self.called_node_name(node.func)
-        if name and name in modulecode_deps and modulecode_deps[name][5]:
-            visitorcode = modulecode_deps[name][5]
-            contains, execs, warn = visitorcode(name, node.args)
-            for i in contains:
-                self.contains[i] = contains[i]
-            self.execs |= execs
-            if warn:
-                self.warn(node.func, warn)
-        elif name and (name.endswith(self.getvars) or name.endswith(self.getvarflags) or name in self.containsfuncs or name in self.containsanyfuncs):
+        if name and (name.endswith(self.getvars) or name.endswith(self.getvarflags) or name in self.containsfuncs or name in self.containsanyfuncs):
             if isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                 varname = node.args[0].value
                 if name in self.containsfuncs and isinstance(node.args[1], ast.Constant):
@@ -506,34 +495,19 @@ class ShellParser():
         """
 
         words = list(words)
-        for word in words:
+        for word in list(words):
             wtree = pyshlex.make_wordtree(word[1])
             for part in wtree:
                 if not isinstance(part, list):
                     continue
 
-                candidates = [part]
+                if part[0] in ('`', '$('):
+                    command = pyshlex.wordtree_as_string(part[1:-1])
+                    self._parse_shell(command)
 
-                # If command is of type:
-                #
-                #   var="... $(cmd [...]) ..."
-                #
-                # Then iterate on what's between the quotes and if we find a
-                # list, make that what we check for below.
-                if len(part) >= 3 and part[0] == '"':
-                    for p in part[1:-1]:
-                        if isinstance(p, list):
-                            candidates.append(p)
-
-                for candidate in candidates:
-                    if len(candidate) >= 2:
-                        if candidate[0] in ('`', '$('):
-                            command = pyshlex.wordtree_as_string(candidate[1:-1])
-                            self._parse_shell(command)
-
-                            if word[0] in ("cmd_name", "cmd_word"):
-                                if word in words:
-                                    words.remove(word)
+                    if word[0] in ("cmd_name", "cmd_word"):
+                        if word in words:
+                            words.remove(word)
 
         usetoken = False
         for word in words:

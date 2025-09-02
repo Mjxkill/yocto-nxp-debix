@@ -29,12 +29,14 @@ RDEPENDS:${PN}:append:class-target = "\
     python3-json \
     python3-logging \
     python3-netclient \
+    python3-pathlib2 \
     python3-pprint \
     python3-shell \
 "
 
 RDEPENDS:${PN} += "\
     python3-pip \
+    python3-six \
 "
 
 BBCLASSEXTEND = "native nativesdk"

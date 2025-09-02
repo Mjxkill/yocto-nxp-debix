@@ -33,12 +33,12 @@ RREPLACES:${PN}  = "gst1.0-fsl-plugin"
 RPROVIDES:${PN}  = "gst1.0-fsl-plugin"
 RCONFLICTS:${PN} = "gst1.0-fsl-plugin"
 
-PV = "4.9.3+git${SRCPV}"
+PV = "4.9.1+git${SRCPV}"
 
 SRC_URI = "${IMXGST_SRC};branch=${SRCBRANCH}"
 IMXGST_SRC ?= "git://github.com/nxp-imx/imx-gst1.0-plugin.git;protocol=https"
-SRCBRANCH = "MM_04.09.03_2412_L6.12.y"
-SRCREV = "370510ef8137874339df18a2a35ec1d04d98fa0b"
+SRCBRANCH = "MM_04.09.01_2408_L6.6.y"
+SRCREV = "87135d5f084b6c61efa6671cddc3a5509ab11640"
 
 S = "${WORKDIR}/git"
 

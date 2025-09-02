@@ -154,7 +154,6 @@ class SQLTable(collections.abc.MutableMapping):
 
     def __exit__(self, *excinfo):
         self.connection.__exit__(*excinfo)
-        self.connection.close()
 
     @_Decorators.retry()
     @_Decorators.transaction

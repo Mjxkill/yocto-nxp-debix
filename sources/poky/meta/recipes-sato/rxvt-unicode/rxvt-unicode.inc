@@ -19,7 +19,7 @@ PROVIDES = "virtual/x-terminal-emulator"
 ALTERNATIVE:${PN} = "x-terminal-emulator"
 ALTERNATIVE_TARGET[x-terminal-emulator] = "${bindir}/rxvt"
 
-CFLAGS += "-fpermissive"
+CFLAGS:append = " -fpermissive"
 
 EXTRA_OECONF = "--enable-xim \
 		--with-term=rxvt --enable-keepscrolling \
@@ -28,8 +28,7 @@ EXTRA_OECONF = "--enable-xim \
 		--with-codesets=eu --enable-pointer-blank \
 		--enable-text-blink --enable-rxvt-scroll \
 		--enable-combining --disable-perl \
-		--with-x=${STAGING_DIR_HOST}${prefix} \
-		ac_cv_path_TIC=:"
+		--with-x=${STAGING_DIR_HOST}${prefix}"
 
 PACKAGECONFIG ??= ""
 PACKAGECONFIG[startup] = "--enable-startup-notification,--disable-startup-notification,startup-notification,"
@@ -52,8 +51,8 @@ do_install:append () {
 	install -d ${D}/${datadir}/applications
 	install -d ${D}/${datadir}/pixmaps/
 
-	install -m 0644 ${UNPACKDIR}/rxvt.png ${D}/${datadir}/pixmaps
-	install -m 0644 ${UNPACKDIR}/rxvt.desktop ${D}/${datadir}/applications
+	install -m 0644 ${WORKDIR}/rxvt.png ${D}/${datadir}/pixmaps
+	install -m 0644 ${WORKDIR}/rxvt.desktop ${D}/${datadir}/applications
 
 	${STAGING_BINDIR_NATIVE}/tic -x ${S}/doc/etc/rxvt-unicode.terminfo -o ${D}${datadir}/terminfo || \
 	${STAGING_BINDIR_NATIVE}/tic ${S}/doc/etc/rxvt-unicode.terminfo -o ${D}${datadir}/terminfo

@@ -2,7 +2,7 @@ SUMARY = "EdgeLock Enclave(ELE) security demo"
 DESCRIPTION = "Recipe of ELE demo application"
 SECTION = "Security"
 LICENSE = "Proprietary"
-LIC_FILES_CHKSUM = "file://LICENSE.txt;md5=a9b152a21821b0419330795aee9f6602"
+LIC_FILES_CHKSUM = "file://LICENSE.txt;md5=1053d8bb787ee53eb7a075420a4a616e"
 
 NXP_ELE_DEMO_SRC ?= "gitsm://github.com/nxp-imx-support/imx-ele-demo.git;protocol=https"
 
@@ -12,7 +12,7 @@ DEMODIR = "${GPNT_APPS_FOLDER}/scripts/security/ele"
 SRC_URI = "${NXP_ELE_DEMO_SRC};branch=${SRCBRANCH}\
 			file://0001-fix-wayland-busy-flush-and-add-wm_capabilities.patch"
 
-SRCREV = "2134feeef0c7a89b02664c97b5083c6a47094b85"
+SRCREV = "f3a7d1085803b659feef5204195c235daf999a51"
 
 S = "${WORKDIR}/git"
 
@@ -26,7 +26,7 @@ RDEPENDS:${PN}+= "bash"
 EXTRA_OEMAKE = "ELE_ROOT=${STAGING_DIR_HOST}"
 
 do_patch() {
-	mv ${UNPACKDIR}/0001-fix-wayland-busy-flush-and-add-wm_capabilities.patch ${WORKDIR}/git/lv_drivers
+	mv ${WORKDIR}/0001-fix-wayland-busy-flush-and-add-wm_capabilities.patch ${WORKDIR}/git/lv_drivers
 	cd ${WORKDIR}/git/lv_drivers && git apply 0001-fix-wayland-busy-flush-and-add-wm_capabilities.patch
 	cd ${WORKDIR}/git/
 	cp -rf protocols/ lv_drivers/wayland/

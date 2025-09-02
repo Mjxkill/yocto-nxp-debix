@@ -17,7 +17,6 @@ EXTRA_OECONF_PATHS = "\
 EXTRA_OECONF:append:linuxstdbase = " --enable-clocale=gnu"
 EXTRA_OECONF:append = " --cache-file=${B}/config.cache"
 EXTRA_OECONF:append:libc-newlib = " --with-newlib --with-target-subdir"
-EXTRA_OECONF:append:libc-picolibc = " --with-newlib --with-target-subdir"
 EXTRA_OECONF:append:libc-baremetal = " --with-target-subdir"
 
 # Disable ifuncs for libatomic on arm conflicts -march/-mcpu
@@ -28,7 +27,6 @@ DISABLE_STATIC:class-nativesdk ?= ""
 
 # Newlib does not support symbol versioning on libsdtcc++
 SYMVERS_CONF:libc-newlib = ""
-SYMVERS_CONF:libc-picolibc = ""
 
 # Building with thumb enabled on armv6t fails
 ARM_INSTRUCTION_SET:armv6 = "arm"
@@ -45,11 +43,10 @@ RUNTIMELIBSSP ?= ""
 RUNTIMELIBSSP:mingw32 ?= "libssp"
 
 RUNTIMETARGET = "${RUNTIMELIBSSP} libstdc++-v3 libgomp libatomic ${RUNTIMELIBITM} \
-    ${@bb.utils.contains('FORTRAN', ',fortran', 'libquadmath', '', d)} \
+    ${@bb.utils.contains_any('FORTRAN', [',fortran',',f77'], 'libquadmath', '', d)} \
 "
 # Only build libstdc++ for newlib
 RUNTIMETARGET:libc-newlib = "libstdc++-v3"
-RUNTIMETARGET:libc-picolibc = "libstdc++-v3"
 
 # libiberty
 # libgfortran needs separate recipe due to libquadmath dependency
@@ -167,6 +164,8 @@ PACKAGES = "\
     libstdc++-precompile-dev \
     libstdc++-dev \
     libstdc++-staticdev \
+    libg2c \
+    libg2c-dev \
     libssp \
     libssp-dev \
     libssp-staticdev \
@@ -196,6 +195,15 @@ FILES:${PN}-dbg += "\
 # bash is not availbale and builds fails
 # So it needs to be added manually to images sadly.
 # RDEPENDS:${PN}-dbg += "python3-datetime"
+
+FILES:libg2c = "${target_libdir}/libg2c.so.*"
+SUMMARY:libg2c = "Companion runtime library for g77"
+FILES:libg2c-dev = "\
+    ${libdir}/libg2c.so \
+    ${libdir}/libg2c.a \
+    ${libdir}/libfrtbegin.a \
+"
+SUMMARY:libg2c-dev = "Companion runtime library for g77 - development files"
 
 FILES:libstdc++ = "${libdir}/libstdc++.so.*"
 SUMMARY:libstdc++ = "GNU standard C++ library"
@@ -292,7 +300,6 @@ do_check[prefuncs] += "extend_recipe_sysroot"
 do_check[prefuncs] += "check_prepare"
 do_check[dirs] = "${WORKDIR}/dejagnu ${B}"
 do_check[nostamp] = "1"
-do_check[network] = "1"
 do_check() {
     export DEJAGNU="${WORKDIR}/dejagnu/site.exp"
 

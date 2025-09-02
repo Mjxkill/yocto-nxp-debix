@@ -1,4 +1,4 @@
-# Copyright 2020-2024 NXP
+# Copyright 2020-23 NXP
 require recipes-security/optee/optee.inc
 
 SUMMARY = "NXP i.MX Security Middleware Library"
@@ -6,7 +6,7 @@ DESCRIPTION = "NXP i.MX Security Middleware Library"
 SECTION = "base"
 LICENSE = "BSD-3-Clause"
 LICENSE = "Apache-2.0 & BSD-3-Clause & Zlib"
-LIC_FILES_CHKSUM = "file://LICENSE;md5=6087d19da5441648e33f85ae64cf2a7d \
+LIC_FILES_CHKSUM = "file://LICENSE;md5=8636bd68fc00cc6a3809b7b58b45f982 \
                     file://../psa-arch-tests/LICENSE.md;md5=2a944942e1496af1886903d274dedb13"
 
 DEPENDS = " \
@@ -14,7 +14,6 @@ DEPENDS = " \
     json-c \
     optee-client \
     optee-os-tadevkit \
-    sqlite3 \
 "
 
 SRC_URI = "${SMW_LIB_SRC};branch=${SRCBRANCH_smw};name=smw;destsuffix=git/smw \
@@ -25,28 +24,24 @@ PSA_LIB_SRC ?= "git://github.com/ARM-software/psa-arch-tests.git;protocol=https"
 PSA_ARCH_TESTS_SRC_PATH = "psa-arch-tests"
 SRCBRANCH_smw = "release/version_4.x"
 SRCBRANCH_psa = "main"
-SRCREV_smw = "dc266b3fc7afb181558a05984ff985e35819ce7b"
+SRCREV_smw = "ce86555fd1f588494fa4aec900b294d133af9778"
 SRCREV_psa = "463cb95ada820bc6f758d50066cf8c0ed5cc3a02"
 SRCREV_FORMAT = "smw_psa"
 S = "${WORKDIR}/git/smw"
 
 inherit cmake python3native
 
-PACKAGECONFIG ??= "${PACKAGECONFIG_DRIVERS} ${PACKAGECONFIG_FEATURES}"
+PACKAGECONFIG ??= "${PACKAGECONFIG_DRIVERS}"
 PACKAGECONFIG_DRIVERS                = ""
-PACKAGECONFIG_DRIVERS:mx8x-nxp-bsp   = "ele-seco"
+PACKAGECONFIG_DRIVERS:mx8qxp-nxp-bsp = "ele-seco"
+PACKAGECONFIG_DRIVERS:mx8dx-nxp-bsp  = "ele-seco"
 PACKAGECONFIG_DRIVERS:mx8ulp-nxp-bsp = "ele"
 PACKAGECONFIG_DRIVERS:mx91-nxp-bsp   = "ele"
 PACKAGECONFIG_DRIVERS:mx93-nxp-bsp   = "ele"
 PACKAGECONFIG_DRIVERS:mx95-nxp-bsp   = "ele"
 
-PACKAGECONFIG_FEATURES              = ""
-PACKAGECONFIG_FEATURES:mx91-nxp-bsp = "tls12"
-PACKAGECONFIG_FEATURES:mx93-nxp-bsp = "tls12"
-
 PACKAGECONFIG[ele] = "-DELE_ROOT=${STAGING_DIR_HOST},,imx-secure-enclave,,,ele-seco"
 PACKAGECONFIG[ele-seco] = "-DSECO_ROOT=${STAGING_DIR_HOST},,imx-secure-enclave-seco,,,ele"
-PACKAGECONFIG[tls12] = "-DENABLE_TLS12=ON,-DENABLE_TLS12=OFF,openssl"
 
 CFLAGS[unexport] = "1"
 CPPFLAGS[unexport] = "1"
@@ -73,13 +68,6 @@ FILES:${PN} += "${nonarch_base_libdir}/optee_armtz/*"
 
 FILES:${PN}-tests = "${bindir}/* ${datadir}/${BPN}/*"
 
-# Work around do_package_qa QA errors
-INSANE_SKIP:${PN}-dbg += "buildpaths"
-INSANE_SKIP:${PN}-dev += "buildpaths"
-INSANE_SKIP:${PN}-tests += "buildpaths"
-
 RDEPENDS:${PN}-tests += "bash cmake"
-
-PACKAGE_ARCH = "${MACHINE_SOCARCH}"
 
 COMPATIBLE_MACHINE = "(imx-nxp-bsp)"

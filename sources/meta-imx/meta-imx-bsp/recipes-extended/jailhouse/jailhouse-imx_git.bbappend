@@ -1,6 +1,6 @@
 
-SRCBRANCH = "lf-6.12.3_1.0.0"
-SRCREV = "a68ba027402013ae444544d33ae676ddce9a6bbf"
+SRCBRANCH = "lf-6.6.36_2.1.0"
+SRCREV = "327e56941e3e96ef9a291d2decb7add21078d8de"
 
 PV = "2023.03+git${SRCPV}"
 
@@ -10,7 +10,4 @@ SRC_URI = "${IMX_JAILHOUSE_SRC};branch=${SRCBRANCH}"
 RDEPENDS:${PN} += " \
     pyjailhouse \
 "
-ERROR_QA:remove = "buildpaths"
-WARN_QA:append = " buildpaths"
-
 COMPATIBLE_MACHINE = "(mx8m-nxp-bsp|mx8ulp-nxp-bsp|mx9-nxp-bsp)"

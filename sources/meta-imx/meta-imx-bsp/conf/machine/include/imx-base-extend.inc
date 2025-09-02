@@ -1,17 +1,6 @@
 # This file is included from meta-freescale/conf/machine/include/imx-base.inc
 # and provides a simple mechanism to override settings in the file
 
-IMX_DEFAULT_BSP = "nxp"
-
-# The default bootloader and kernel set in meta-freescale is for fslc
-IMX_DEFAULT_BOOTLOADER:imx-nxp-bsp = "u-boot-imx"
-IMX_DEFAULT_KERNEL:imx-nxp-bsp     = "linux-imx"
-
-# FIXME: Remove the hard-coded assignment to u-boot-fslc that exists
-# in imx6sllevk.conf so the following workaround can also be removed
-PREFERRED_PROVIDER_u-boot:imx6sllevk             = "${IMX_DEFAULT_BOOTLOADER}"
-PREFERRED_PROVIDER_virtual/bootloader:imx6sllevk = "${IMX_DEFAULT_BOOTLOADER}"
-
 # IMXBOOT_VARIANT infrastructure
 IMXBOOT_VARIANT  ?= ""
 IMXBOOT_VARIANTS ?= "NONE"
@@ -20,6 +9,7 @@ BOOT_VARIANT = "${@bb.utils.contains_any('IMXBOOT_VARIANT', '${IMXBOOT_VARIANTS}
 # Update i.MX 8MQ
 SOC_ATF_BOOT_UART_BASE:mx8mq-generic-bsp   = "0x30860000"
 
+
 # Update i.MX 8ULP
 IMX_EXTRA_FIRMWARE:mx8ulp-generic-bsp = "firmware-upower firmware-ele-imx"
 
@@ -27,13 +17,6 @@ IMX_EXTRA_FIRMWARE:mx8ulp-generic-bsp = "firmware-upower firmware-ele-imx"
 IMX_SOC_REV:mx93-generic-bsp  ?= "A1"
 IMX_EXTRA_FIRMWARE:mx93-generic-bsp = "imx-boot-firmware-files firmware-ele-imx"
 UBOOT_DTB_NAME:mx93-generic-bsp = ""
-
-# Add new SoC i.MX 943
-IMX_SOC_REV:mx943-generic-bsp  ?= "A0"
-MACHINEOVERRIDES_EXTENDER:mx943:use-nxp-bsp  = "imx-generic-bsp:imx-nxp-bsp:imxdrm:imxpxp:mx9-generic-bsp:mx9-nxp-bsp:mx93-generic-bsp:mx93-nxp-bsp:mx943-generic-bsp:mx943-nxp-bsp"
-MACHINE_SOCARCH_SUFFIX:mx943-nxp-bsp = "-mx943"
-IMX_EXTRA_FIRMWARE:mx943-nxp-bsp = "imx-boot-firmware-files firmware-ele-imx ${SYSTEM_MANAGER_RPROVIDER} imx-oei"
-SECO_FIRMWARE_NAME:mx943-generic-bsp ?= "mx943${IMX_SOC_REV_LOWER}-ahab-container.img"
 
 # Add new SoC i.MX 95
 DEFAULTTUNE:mx95-nxp-bsp   ?= "armv8a-crc-crypto"
@@ -89,73 +72,49 @@ PREFERRED_PROVIDER_virtual/libgl:imxgpu   ?= "mesa-gl"
 PREFERRED_PROVIDER_virtual/libgl:imxgpu3d  = "mesa-gl"
 PREFERRED_PROVIDER_virtual/mesa:imxgpu    ?= "mesa-gl"
 
-# GStreamer forked recipes
-PREFERRED_VERSION_gstreamer1.0:imx-nxp-bsp              ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-plugins-bad:imx-nxp-bsp  ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-plugins-base:imx-nxp-bsp ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-plugins-good:imx-nxp-bsp ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-libav:imx-nxp-bsp        ??= "1.24.7"
-
-# To overwrite imx-base.inc
-PREFERRED_VERSION_gstreamer1.0:mx8-nxp-bsp              ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-plugins-bad:mx8-nxp-bsp  ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-plugins-base:mx8-nxp-bsp ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-plugins-good:mx8-nxp-bsp ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0:mx9-nxp-bsp              ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-plugins-bad:mx9-nxp-bsp  ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-plugins-base:mx9-nxp-bsp ??= "1.24.7.imx"
-PREFERRED_VERSION_gstreamer1.0-plugins-good:mx9-nxp-bsp ??= "1.24.7.imx"
-
-# GStreamer backport recipes
-PREFERRED_VERSION_gstreamer1.0-libav:mx8-nxp-bsp        ??= "1.24.7"
-PREFERRED_VERSION_gstreamer1.0-libav:mx9-nxp-bsp        ??= "1.24.7"
-
-# Keep ffmpeg version align with OE upstream
-PREFERRED_VERSION_ffmpeg:mx8-nxp-bsp ??= "7.0.2"
-PREFERRED_VERSION_ffmpeg:mx9-nxp-bsp ??= "7.0.2"
-
-PREFERRED_VERSION_weston:imx-nxp-bsp ??= "14.0.1.imx"
 # i.MX 6 & 7 stay on weston 10.0 for fbdev
 PREFERRED_VERSION_weston:mx6-nxp-bsp ??= "10.0.5.imx"
 PREFERRED_VERSION_weston:mx7-nxp-bsp ??= "10.0.5.imx"
+PREFERRED_VERSION_weston:imx-nxp-bsp ??= "12.0.4.imx"
 
-PREFERRED_VERSION_wayland-protocols:imx-nxp-bsp ??= "1.37.imx"
+PREFERRED_VERSION_wayland-protocols:mx6-nxp-bsp ??= "1.32.imx"
+PREFERRED_VERSION_wayland-protocols:mx7-nxp-bsp ??= "1.32.imx"
+PREFERRED_VERSION_wayland-protocols:mx8-nxp-bsp ??= "1.32.imx"
+PREFERRED_VERSION_wayland-protocols:mx9-nxp-bsp ??= "1.32.imx"
 
-PREFERRED_VERSION_xwayland:imx-nxp-bsp ??= ""
+PREFERRED_VERSION_spirv-headers:imxvulkan            ??= "1.3.275.0"
+PREFERRED_VERSION_spirv-tools:imxvulkan              ??= "1.3.275.0"
+PREFERRED_VERSION_vulkan-headers:imxvulkan           ??= "1.3.275.0"
+PREFERRED_VERSION_vulkan-loader:imxvulkan            ??= "1.3.275.0"
+PREFERRED_VERSION_vulkan-tools:imxvulkan             ??= "1.3.275.0"
+PREFERRED_VERSION_vulkan-validation-layers:imxvulkan ??= "1.3.275.0"
 
-PREFERRED_VERSION_libdrm:imx-nxp-bsp ??= "2.4.123.imx"
+PREFERRED_VERSION_ffmpeg ??= "4.4.1"
 
-PREFERRED_VERSION_gfxreconstruct:imxvulkan             ??= "1.3.275.0"
-PREFERRED_VERSION_glslang:imxvulkan                    ??= "1.3.275.0.imx"
-PREFERRED_VERSION_vulkan-utility-libraries:imxvulkan   ??= "1.3.275.0.imx"
-PREFERRED_VERSION_glslang:imx-nxp-bsp                  ??= "1.3.290.0"
-PREFERRED_VERSION_vulkan-utility-libraries:imx-nxp-bsp ??= "1.3.290.0"
+PREFERRED_VERSION_libdrm:mx6-nxp-bsp ??= "2.4.116.imx"
+PREFERRED_VERSION_libdrm:mx7-nxp-bsp ??= "2.4.116.imx"
+PREFERRED_VERSION_libdrm:mx8-nxp-bsp ??= "2.4.116.imx"
+PREFERRED_VERSION_libdrm:mx9-nxp-bsp ??= "2.4.116.imx"
 
-PREFERRED_VERSION_optee-client:mx6-nxp-bsp ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-client:mx7-nxp-bsp ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-client:mx8-nxp-bsp ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-client:mx9-nxp-bsp ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-os:mx6-nxp-bsp     ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-os:mx7-nxp-bsp     ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-os:mx8-nxp-bsp     ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-os:mx9-nxp-bsp     ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-test:mx6-nxp-bsp   ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-test:mx7-nxp-bsp   ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-test:mx8-nxp-bsp   ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-test:mx9-nxp-bsp   ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-os-tadevkit:mx6-nxp-bsp   ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-os-tadevkit:mx7-nxp-bsp   ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-os-tadevkit:mx8-nxp-bsp   ??= "4.4.0.imx"
-PREFERRED_VERSION_optee-os-tadevkit:mx9-nxp-bsp   ??= "4.4.0.imx"
+PREFERRED_VERSION_optee-client:mx6-nxp-bsp ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-client:mx7-nxp-bsp ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-client:mx8-nxp-bsp ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-client:mx9-nxp-bsp ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-os:mx6-nxp-bsp     ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-os:mx7-nxp-bsp     ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-os:mx8-nxp-bsp     ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-os:mx9-nxp-bsp     ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-test:mx6-nxp-bsp   ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-test:mx7-nxp-bsp   ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-test:mx8-nxp-bsp   ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-test:mx9-nxp-bsp   ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-os-tadevkit:mx6-nxp-bsp   ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-os-tadevkit:mx7-nxp-bsp   ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-os-tadevkit:mx8-nxp-bsp   ??= "4.2.0.imx"
+PREFERRED_VERSION_optee-os-tadevkit:mx9-nxp-bsp   ??= "4.2.0.imx"
 
 PREFERRED_VERSION_opencv:mx8-nxp-bsp ??= "4.10.0.imx"
 PREFERRED_VERSION_opencv:mx9-nxp-bsp ??= "4.10.0.imx"
-
-PREFERRED_VERSION_xen-tools = "4.18.imx+stable"
-PREFERRED_VERSION_xen       = "4.18.imx+stable"
-
-QEMUVERSION              = "9.0.2"
-QEMUVERSION:mx95-nxp-bsp = "9.0.2.imx"
 
 SOC_DEFAULT_IMAGE_FSTYPES = "wic.bmap wic.zst tar.zst"
 ZSTD_COMPRESSION_LEVEL ?= "-10"

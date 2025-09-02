@@ -1,16 +1,21 @@
 # Changelog
 
-## [v2.23.0] - 2024-06-20
+## [v2.24.0+scarthgap] - 2024-06-20
 
-### added
+### Added
 
-* [layer] Make layer compatible with scarthgap release
-* [vigiles.bbclass] Add custom annotations to packages in generated SBOM
+* [vigiles.bbclass] Add custom annotations to packages in generated SBOM 
 * [vigiles.bbclass] Add feature to disable sbom and report generation for initramfs image
 
 ### Fixed
 
 * [checkcves.py] Fix API key parsing in 'check_linuxlink_key' function
+
+## [v2.23.0+scarthgap] - 2024-05-13
+
+### Added
+
+* [layer] Make compatible with scarthgap
 
 ## [v2.22.0] - 2024-04-11
 

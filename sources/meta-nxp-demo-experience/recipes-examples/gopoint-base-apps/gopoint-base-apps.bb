@@ -1,19 +1,19 @@
 SUMMARY = "GoPoint for i.MX Application Processors"
 DESCRIPTION = "Launcher for GoPoint for i.MX Application Processors"
-LICENSE = "Proprietary"
-LIC_FILES_CHKSUM = "file://LICENSE.txt;md5=ece4d92215ee8177e48fbf5fc100ad20"
+LICENSE = "BSD-2-Clause"
+LIC_FILES_CHKSUM = "file://LICENSE.txt;md5=8414149b19eabc57ab1350562aa605b1"
 
 S = "${WORKDIR}/git"
 
-SRCBRANCH = "lf-6.12.3_1.0.0"
+SRCBRANCH = "lf-6.6.36_2.1.0"
 
 NXP_DEMO_LIST_SRC ?= "git://github.com/nxp-imx-support/nxp-demo-experience-demos-list.git;protocol=https"
 
 SRC_URI = "${NXP_DEMO_LIST_SRC};branch=${SRCBRANCH};name=demos"
 
-SRCREV = "${AUTOREV}"
+SRCREV = "5570a8cf588ae9752ed38607bb4fe35da183567d"
 
-PV = "lf-6.12.3_1.0.0+git${SRCREV}"
+PV = "lf-6.6.36_2.1.0+git${SRCREV}"
 
 RDEPENDS:${PN} += "bash python3-packaging python3-paramiko iproute2 iproute2-tc python3-matplotlib "
 

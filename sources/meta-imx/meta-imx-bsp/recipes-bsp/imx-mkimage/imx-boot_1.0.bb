@@ -1,4 +1,4 @@
-# Copyright (C) 2017-2024 NXP
+# Copyright (C) 2017-2023 NXP
 
 require imx-mkimage_git.inc
 
@@ -7,7 +7,7 @@ LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/GPL-2.0-only;md5=801f80980d171dd6425610833a22dbe6"
 SECTION = "BSP"
 
-inherit use-imx-security-controller-firmware uboot-config
+inherit use-imx-security-controller-firmware uboot-sign
 
 DEPENDS += " \
     u-boot \
@@ -19,10 +19,14 @@ DEPENDS += " \
 DEPENDS += "xxd-native"
 DEPENDS:append:mx8m-generic-bsp = " u-boot-mkimage-native dtc-native"
 DEPENDS:append:mx93-generic-bsp = " u-boot-mkimage-native dtc-native"
+BOOT_NAME = "imx-boot"
+PROVIDES = "${BOOT_NAME}"
 
 inherit deploy uuu_bootloader_tag
 
-UUU_BOOTLOADER = "imx-boot"
+UUU_BOOTLOADER        = "${BOOT_NAME}"
+UUU_BOOTLOADER_TAGGED = "${BOOT_NAME}-tagged"
+UUU_BOOTLOADER_UNTAGGED = "${BOOT_NAME}-untagged"
 
 # Add CFLAGS with native INCDIR & LIBDIR for imx-mkimage build
 CFLAGS = "-O2 -Wall -std=c99 -I ${STAGING_INCDIR_NATIVE} -L ${STAGING_LIBDIR_NATIVE}"
@@ -51,7 +55,6 @@ TOOLS_NAME ?= "mkimage_imx8"
 IMX_BOOT_SOC_TARGET       ?= "INVALID"
 
 DEPLOY_OPTEE = "${@bb.utils.contains('MACHINE_FEATURES', 'optee', 'true', 'false', d)}"
-DEPLOY_OPTEE_STMM = "${@bb.utils.contains('MACHINE_FEATURES', 'optee stmm', 'true', 'false', d)}"
 
 IMXBOOT_TARGETS ?= \
     "${@bb.utils.contains('UBOOT_CONFIG', 'fspi', 'flash_flexspi', \
@@ -70,7 +73,7 @@ SOC_FAMILY:mx8-generic-bsp    = "mx8"
 SOC_FAMILY:mx8m-generic-bsp   = "mx8m"
 SOC_FAMILY:mx8x-generic-bsp   = "mx8x"
 SOC_FAMILY:mx8ulp-generic-bsp = "mx8ulp"
-SOC_FAMILY:mx91-generic-bsp   = "mx91"
+SOC_FAMILY:mx91-generic-bsp  = "mx91"
 SOC_FAMILY:mx93-generic-bsp   = "mx93"
 SOC_FAMILY:mx95-generic-bsp   = "mx95"
 
@@ -85,7 +88,11 @@ MKIMAGE_EXTRA_ARGS:imx95-19x19-verdin ?= " \
     ${MKIMAGE_EXTRA_ARGS:mx95-nxp-bsp} \
     QSPI_HEADER=./scripts/fspi_header_133"
 
-UBOOT_DTB_BINARY ?= "u-boot.dtb"
+do_uboot_assemble_fitimage:prepend:imx-generic-bsp() {
+    for config in ${UBOOT_MACHINE}; do
+        mkdir -p ${B}/${config}
+    done
+}
 
 compile_mx8m() {
     bbnote 8MQ/8MM/8MN/8MP boot binary build
@@ -101,22 +108,19 @@ compile_mx8m() {
 
     if [ "x${UBOOT_SIGN_ENABLE}" = "x1" ] ; then
         # Use DTB binary patched with signature node
-        cp ${DEPLOY_DIR_IMAGE}/${UBOOT_DTB_BINARY}           ${BOOT_STAGING}/${UBOOT_DTB_NAME_EXTRA}
+        cp ${DEPLOY_DIR_IMAGE}/${UBOOT_DTB_BINARY} ${BOOT_STAGING}/${UBOOT_DTB_NAME_EXTRA}
     else
-        cp ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}/${UBOOT_DTB_NAME_EXTRA} \
-                                                             ${BOOT_STAGING}
+        cp ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}/${UBOOT_DTB_NAME_EXTRA}   ${BOOT_STAGING}
     fi
-    ln -sf ${UBOOT_DTB_NAME_EXTRA}                           ${BOOT_STAGING}/${UBOOT_DTB_NAME}
 
     cp ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}/u-boot-nodtb.bin-${MACHINE}-${UBOOT_CONFIG_EXTRA} \
                                                              ${BOOT_STAGING}/u-boot-nodtb.bin
 
     cp ${DEPLOY_DIR_IMAGE}/${ATF_MACHINE_NAME}               ${BOOT_STAGING}/bl31.bin
 
-    cp ${DEPLOY_DIR_IMAGE}/${UBOOT_NAME_EXTRA}               ${BOOT_STAGING}/u-boot.bin
+    cp ${DEPLOY_DIR_IMAGE}/${UBOOT_NAME_EXTRA}                     ${BOOT_STAGING}/u-boot.bin
 
 }
-
 compile_mx8() {
     bbnote 8QM boot binary build
     cp ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}/${SC_FIRMWARE_NAME} ${BOOT_STAGING}/scfw_tcm.bin
@@ -179,7 +183,7 @@ compile_mx95() {
     compile_mx93
 
     cp ${DEPLOY_DIR_IMAGE}/${SYSTEM_MANAGER_FIRMWARE_NAME}.bin \
-       ${BOOT_STAGING}/${SYSTEM_MANAGER_FIRMWARE_BASENAME}.bin
+                                                             ${BOOT_STAGING}/${SYSTEM_MANAGER_FIRMWARE_BASENAME}.bin
 }
 
 do_compile() {
@@ -194,9 +198,8 @@ do_compile() {
     fi
     # Copy OEI firmware to SoC target folder to mkimage
     if [ "${OEI_ENABLE}" = "YES" ]; then
-        cp ${DEPLOY_DIR_IMAGE}/${OEI_NAME} ${BOOT_STAGING}
+        cp ${DEPLOY_DIR_IMAGE}/${OEI_NAME}               ${BOOT_STAGING}
     fi
-
     for type in ${UBOOT_CONFIG}; do
         if [ "${@d.getVarFlags('UBOOT_DTB_NAME')}" = "None" ]; then
             UBOOT_DTB_NAME_FLAGS="${type}:${UBOOT_DTB_NAME}"
@@ -220,7 +223,7 @@ do_compile() {
                     UBOOT_DTB_NAME_EXTRA="${dtb_name}"
                 fi
                 UBOOT_NAME_EXTRA="u-boot-${MACHINE}.bin-${UBOOT_CONFIG_EXTRA}"
-                BOOT_CONFIG_MACHINE_EXTRA="imx-boot${BOOT_VARIANT}-${MACHINE}-${UBOOT_CONFIG_EXTRA}.bin"
+                BOOT_CONFIG_MACHINE_EXTRA="${BOOT_NAME}${BOOT_VARIANT}-${MACHINE}-${UBOOT_CONFIG_EXTRA}.bin"
 
                 for target in ${IMXBOOT_TARGETS}; do
                     compile_${SOC_FAMILY}
@@ -231,19 +234,16 @@ do_compile() {
                         make SOC=${IMX_BOOT_SOC_TARGET} ${REV_OPTION} V2X=NO dtbs=${UBOOT_DTB_NAME_EXTRA} flash_linux_m4
                         ;;
                     *stmm_capsule)
-                        # target for flash_evk_stmm_capsule or
-                        # flash_singleboot_stmm_capsule
-                        cp ${RECIPE_SYSROOT_NATIVE}/${bindir}/mkeficapsule ${BOOT_STAGING}
+                        cp ${RECIPE_SYSROOT_NATIVE}/${bindir}/mkeficapsule      ${BOOT_STAGING}
                         bbnote "building ${IMX_BOOT_SOC_TARGET} - TEE=tee.bin-stmm ${target}"
-                        cp ${DEPLOY_DIR_IMAGE}/CRT.* ${BOOT_STAGING}
-                        make SOC=${IMX_BOOT_SOC_TARGET} TEE=tee.bin-stmm dtbs=${UBOOT_DTB_NAME} ${REV_OPTION} ${target}
+                        cp ${DEPLOY_DIR_IMAGE}/CRT.*                 ${BOOT_STAGING}
+                        make SOC=${IMX_BOOT_SOC_TARGET} TEE=tee.bin-stmm dtbs=${UBOOT_DTB_NAME_EXTRA} ${REV_OPTION} ${target}
                         ;;
                     *)
                         bbnote "building ${IMX_BOOT_SOC_TARGET} - ${REV_OPTION} ${MKIMAGE_EXTRA_ARGS} ${target}"
-                        make SOC=${IMX_BOOT_SOC_TARGET} ${REV_OPTION} ${MKIMAGE_EXTRA_ARGS} dtbs=${UBOOT_DTB_NAME} ${target}
+                        make SOC=${IMX_BOOT_SOC_TARGET} ${REV_OPTION} ${MKIMAGE_EXTRA_ARGS} dtbs=${UBOOT_DTB_NAME_EXTRA} ${target}
                         ;;
                     esac
-
                     if [ -e "${BOOT_STAGING}/flash.bin" ]; then
                         cp ${BOOT_STAGING}/flash.bin ${S}/${BOOT_CONFIG_MACHINE_EXTRA}-${target}
                     fi
@@ -271,9 +271,9 @@ do_install () {
         bbnote "UBOOT_CONFIG = $type"
 
         UBOOT_CONFIG_EXTRA="$type"
-        BOOT_CONFIG_MACHINE_EXTRA="imx-boot${BOOT_VARIANT}-${MACHINE}-${UBOOT_CONFIG_EXTRA}.bin"
+        BOOT_CONFIG_MACHINE_EXTRA="${BOOT_NAME}${BOOT_VARIANT}-${MACHINE}-${UBOOT_CONFIG_EXTRA}.bin"
 
-        for target in ${IMXBOOT_TARGETS}; do
+    for target in ${IMXBOOT_TARGETS}; do
             install -m 0644 ${S}/${BOOT_CONFIG_MACHINE_EXTRA}-${target} ${D}/boot/
         done
 
@@ -348,7 +348,7 @@ deploy_mx93() {
 deploy_mx95() {
     deploy_mx93
     install -m 0644 ${BOOT_STAGING}/${SYSTEM_MANAGER_FIRMWARE_BASENAME}.bin \
-                ${DEPLOYDIR}/${BOOT_TOOLS}/${SYSTEM_MANAGER_FIRMWARE_NAME}.bin
+                                                             ${DEPLOYDIR}/${BOOT_TOOLS}/${SYSTEM_MANAGER_FIRMWARE_NAME}.bin
 }
 
 do_deploy() {
@@ -358,27 +358,17 @@ do_deploy() {
     if ${DEPLOY_OPTEE}; then
        install -m 0644 ${DEPLOY_DIR_IMAGE}/tee.bin ${DEPLOYDIR}/${BOOT_TOOLS}
     fi
-
     # copy oei to deploy path
     if [ "${OEI_ENABLE}" = "YES" ]; then
-        install -m 0644 ${BOOT_STAGING}/${OEI_NAME} ${DEPLOYDIR}/${BOOT_TOOLS}
+        install -m 0644 ${BOOT_STAGING}/${OEI_NAME}          ${DEPLOYDIR}/${BOOT_TOOLS}
     fi
-
     # copy makefile (soc.mak) for reference
     install -m 0644 ${BOOT_STAGING}/soc.mak                  ${DEPLOYDIR}/${BOOT_TOOLS}
-
-    # copy stmm files to deploy path
-    if ${DEPLOY_OPTEE_STMM}; then
-        install -m 0644 ${BOOT_STAGING}/tee.bin-stmm         ${DEPLOYDIR}/${BOOT_TOOLS}
-        install -m 0644 ${BOOT_STAGING}/capsule1.bin         ${DEPLOYDIR}/${BOOT_TOOLS}
-        install -m 0644 ${BOOT_STAGING}/CRT.*                ${DEPLOYDIR}/${BOOT_TOOLS}
-        install -m 0755 ${BOOT_STAGING}/mkeficapsule         ${DEPLOYDIR}/${BOOT_TOOLS}
-    fi
 
     for type in ${UBOOT_CONFIG}; do
         UBOOT_CONFIG_EXTRA="$type"
         UBOOT_NAME_EXTRA="u-boot-${MACHINE}.bin-${UBOOT_CONFIG_EXTRA}"
-        BOOT_CONFIG_MACHINE_EXTRA="imx-boot${BOOT_VARIANT}-${MACHINE}-${UBOOT_CONFIG_EXTRA}.bin"
+        BOOT_CONFIG_MACHINE_EXTRA="${BOOT_NAME}${BOOT_VARIANT}-${MACHINE}-${UBOOT_CONFIG_EXTRA}.bin"
 
         if [ -e ${DEPLOY_DIR_IMAGE}/u-boot-spl.bin-${MACHINE}-${UBOOT_CONFIG_EXTRA} ] ; then
             install -m 0644 ${DEPLOY_DIR_IMAGE}/u-boot-spl.bin-${MACHINE}-${UBOOT_CONFIG_EXTRA} \
@@ -397,9 +387,9 @@ do_deploy() {
             install -m 0644 ${S}/${BOOT_CONFIG_MACHINE_EXTRA}-${target} ${DEPLOYDIR}
         done
 
-        # The first UBOOT_CONFIG listed will be the imx-boot binary
-        if [ ! -f "${DEPLOYDIR}/imx-boot" ]; then
-            ln -sf ${BOOT_CONFIG_MACHINE_EXTRA}-${IMAGE_IMXBOOT_TARGET} ${DEPLOYDIR}/imx-boot
+        # The first UBOOT_CONFIG listed will be the ${BOOT_NAME} binary
+        if [ ! -f "${DEPLOYDIR}/${UUU_BOOTLOADER}" ]; then
+            ln -sf ${BOOT_CONFIG_MACHINE_EXTRA}-${IMAGE_IMXBOOT_TARGET} ${DEPLOYDIR}/${BOOT_NAME}
         else
             bbwarn "Use custom wks.in for $UBOOT_CONFIG = $type"
         fi

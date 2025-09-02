@@ -177,19 +177,7 @@ python () {
 
     addtask_deltask = """
 addtask do_patch after do_foo after do_unpack before do_configure before do_compile
-addtask do_fetch2 do_patch2
-
-addtask do_myplaintask
-addtask do_myplaintask2
-deltask do_myplaintask2
-addtask do_mytask# comment
-addtask do_mytask2 # comment2
-addtask do_mytask3
-deltask do_mytask3# comment
-deltask do_mytask4 # comment2
-
-# Ensure a missing task prefix on after works
-addtask do_mytask5 after mytask
+addtask do_fetch do_patch
 
 MYVAR = "do_patch"
 EMPTYVAR = ""
@@ -197,12 +185,17 @@ deltask do_fetch ${MYVAR} ${EMPTYVAR}
 deltask ${EMPTYVAR}
 """
     def test_parse_addtask_deltask(self):
+        import sys
 
-        f = self.parsehelper(self.addtask_deltask)
-        d = bb.parse.handle(f.name, self.d)['']
+        with self.assertLogs() as logs:
+            f = self.parsehelper(self.addtask_deltask)
+            d = bb.parse.handle(f.name, self.d)['']
 
-        self.assertEqual(['do_fetch2', 'do_patch2', 'do_myplaintask', 'do_mytask', 'do_mytask2', 'do_mytask5'], d.getVar("__BBTASKS"))
-        self.assertEqual(['do_mytask'], d.getVarFlag("do_mytask5", "deps"))
+        output = "".join(logs.output)
+        self.assertTrue("addtask contained multiple 'before' keywords" in output)
+        self.assertTrue("addtask contained multiple 'after' keywords" in output)
+        self.assertTrue('addtask ignored: " do_patch"' in output)
+        #self.assertTrue('dependent task do_foo for do_patch does not exist' in output)
 
     broken_multiline_comment = """
 # First line of comment \\

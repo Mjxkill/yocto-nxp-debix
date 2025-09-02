@@ -14,10 +14,7 @@ import scriptpath
 import copy
 import urllib.request
 import posixpath
-import logging
 scriptpath.add_oe_lib_path()
-
-logger = logging.getLogger('resulttool')
 
 flatten_map = {
     "oeselftest": [],
@@ -34,17 +31,11 @@ regression_map = {
     "manual": ['TEST_TYPE', 'TEST_MODULE', 'IMAGE_BASENAME', 'MACHINE']
 }
 store_map = {
-    "oeselftest": ['TEST_TYPE', 'TESTSERIES', 'MACHINE'],
+    "oeselftest": ['TEST_TYPE'],
     "runtime": ['TEST_TYPE', 'DISTRO', 'MACHINE', 'IMAGE_BASENAME'],
     "sdk": ['TEST_TYPE', 'MACHINE', 'SDKMACHINE', 'IMAGE_BASENAME'],
     "sdkext": ['TEST_TYPE', 'MACHINE', 'SDKMACHINE', 'IMAGE_BASENAME'],
     "manual": ['TEST_TYPE', 'TEST_MODULE', 'MACHINE', 'IMAGE_BASENAME']
-}
-
-rawlog_sections = {
-    "ptestresult.rawlogs": "ptest",
-    "ltpresult.rawlogs": "ltp",
-    "ltpposixresult.rawlogs": "ltpposix"
 }
 
 def is_url(p):
@@ -117,56 +108,20 @@ def filter_resultsdata(results, resultid):
                  newresults[r][i] = results[r][i]
     return newresults
 
-def strip_logs(results):
+def strip_ptestresults(results):
     newresults = copy.deepcopy(results)
+    #for a in newresults2:
+    #  newresults = newresults2[a]
     for res in newresults:
         if 'result' not in newresults[res]:
             continue
-        for logtype in rawlog_sections:
-            if logtype in newresults[res]['result']:
-                del newresults[res]['result'][logtype]
+        if 'ptestresult.rawlogs' in newresults[res]['result']:
+            del newresults[res]['result']['ptestresult.rawlogs']
         if 'ptestresult.sections' in newresults[res]['result']:
             for i in newresults[res]['result']['ptestresult.sections']:
                 if 'log' in newresults[res]['result']['ptestresult.sections'][i]:
                     del newresults[res]['result']['ptestresult.sections'][i]['log']
     return newresults
-
-# For timing numbers, crazy amounts of precision don't make sense and just confuse
-# the logs. For numbers over 1, trim to 3 decimal places, for numbers less than 1,
-# trim to 4 significant digits
-def trim_durations(results):
-    for res in results:
-        if 'result' not in results[res]:
-            continue
-        for entry in results[res]['result']:
-            if 'duration' in results[res]['result'][entry]:
-                duration = results[res]['result'][entry]['duration']
-                if duration > 1:
-                    results[res]['result'][entry]['duration'] = float("%.3f" % duration)
-                elif duration < 1:
-                    results[res]['result'][entry]['duration'] = float("%.4g" % duration)
-    return results
-
-def handle_cleanups(results):
-    # Remove pointless path duplication from old format reproducibility results
-    for res2 in results:
-        try:
-            section = results[res2]['result']['reproducible']['files']
-            for pkgtype in section:
-                for filelist in section[pkgtype].copy():
-                    if section[pkgtype][filelist] and type(section[pkgtype][filelist][0]) == dict:
-                        newlist = []
-                        for entry in section[pkgtype][filelist]:
-                            newlist.append(entry["reference"].split("/./")[1])
-                        section[pkgtype][filelist] = newlist
-
-        except KeyError:
-            pass
-    # Remove pointless duplicate rawlogs data
-    try:
-        del results[res2]['result']['reproducible.rawlogs']
-    except KeyError:
-        pass
 
 def decode_log(logdata):
     if isinstance(logdata, str):
@@ -200,6 +155,9 @@ def generic_get_rawlogs(sectname, results):
         return None
     return decode_log(results[sectname]['log'])
 
+def ptestresult_get_rawlogs(results):
+    return generic_get_rawlogs('ptestresult.rawlogs', results)
+
 def save_resultsdata(results, destdir, fn="testresults.json", ptestjson=False, ptestlogs=False):
     for res in results:
         if res:
@@ -209,20 +167,16 @@ def save_resultsdata(results, destdir, fn="testresults.json", ptestjson=False, p
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         resultsout = results[res]
         if not ptestjson:
-            resultsout = strip_logs(results[res])
-        trim_durations(resultsout)
-        handle_cleanups(resultsout)
+            resultsout = strip_ptestresults(results[res])
         with open(dst, 'w') as f:
-            f.write(json.dumps(resultsout, sort_keys=True, indent=1))
+            f.write(json.dumps(resultsout, sort_keys=True, indent=4))
         for res2 in results[res]:
             if ptestlogs and 'result' in results[res][res2]:
                 seriesresults = results[res][res2]['result']
-                for logtype in rawlog_sections:
-                    logdata = generic_get_rawlogs(logtype, seriesresults)
-                    if logdata is not None:
-                        logger.info("Extracting " + rawlog_sections[logtype] + "-raw.log")
-                        with open(dst.replace(fn, rawlog_sections[logtype] + "-raw.log"), "w+") as f:
-                            f.write(logdata)
+                rawlogs = ptestresult_get_rawlogs(seriesresults)
+                if rawlogs is not None:
+                    with open(dst.replace(fn, "ptest-raw.log"), "w+") as f:
+                        f.write(rawlogs)
                 if 'ptestresult.sections' in seriesresults:
                     for i in seriesresults['ptestresult.sections']:
                         sectionlog = ptestresult_get_log(seriesresults, i)

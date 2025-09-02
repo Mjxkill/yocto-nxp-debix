@@ -11,7 +11,6 @@ PV = "1.8.0"
 
 SRC_URI = "\
     git://github.com/oetiker/rrdtool-1.x.git;protocol=https;branch=master \
-    file://b76e3c578f1e9f582e9c28f50d82b1f569602075.patch \
 "
 
 S = "${WORKDIR}/git"
@@ -60,7 +59,7 @@ export STAGING_LIBDIR
 export STAGING_INCDIR
 
 # emulate cpan_do_configure
-EXTRA_OEMAKE = ' CC="${CC} -Wno-incompatible-pointer-types" PERL5LIB="${PERL_ARCHLIB}" '
+EXTRA_OEMAKE = ' PERL5LIB="${PERL_ARCHLIB}" '
 # Avoid do_configure error on some hosts
 
 do_configure() {
@@ -135,7 +134,3 @@ RDEPENDS:${PN}-python = "python3"
 
 FILES:${PN}-dbg += "${libdir}/perl/vendor_perl/*/auto/RRDs/.debug \
     ${PYTHON_SITEPACKAGES_DIR}/.debug"
-
-# http://errors.yoctoproject.org/Errors/Details/766911/
-# rrd_tune.c:239:35: error: passing argument 3 of 'optparse_init' from incompatible pointer type [-Wincompatible-pointer-types]
-CFLAGS += "-Wno-error=incompatible-pointer-types"

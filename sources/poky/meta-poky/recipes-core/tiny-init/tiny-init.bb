@@ -11,8 +11,7 @@ SRC_URI = "file://init \
 	   file://rc.local.sample \
 	  "
 
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
+S = "${WORKDIR}"
 
 do_configure() {
 	:
@@ -24,8 +23,8 @@ do_compile() {
 
 do_install() {
 	install -d ${D}${sysconfdir}
-	install -m 0755 ${S}/init ${D}
-	install -m 0755 ${S}/rc.local.sample ${D}${sysconfdir}
+	install -m 0755 ${WORKDIR}/init ${D}
+	install -m 0755 ${WORKDIR}/rc.local.sample ${D}${sysconfdir}
 }
 
 FILES:${PN} = "/init ${sysconfdir}/rc.local.sample"

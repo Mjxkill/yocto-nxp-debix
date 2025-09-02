@@ -70,7 +70,6 @@ class Crate(Wget):
             host = 'crates.io/api/v1/crates'
 
         ud.url = "https://%s/%s/%s/download" % (host, name, version)
-        ud.versionsurl = "https://%s/%s/versions" % (host, name)
         ud.parm['downloadfilename'] = "%s-%s.crate" % (name, version)
         if 'name' not in ud.parm:
             ud.parm['name'] = '%s-%s' % (name, version)
@@ -140,11 +139,3 @@ class Crate(Wget):
             mdpath = os.path.join(bbpath, cratepath, mdfile)
             with open(mdpath, "w") as f:
                 json.dump(metadata, f)
-
-    def latest_versionstring(self, ud, d):
-        from functools import cmp_to_key
-        json_data = json.loads(self._fetch_index(ud.versionsurl, ud, d))
-        versions = [(0, i["num"], "") for i in json_data["versions"]]
-        versions = sorted(versions, key=cmp_to_key(bb.utils.vercmp))
-
-        return (versions[-1][1], "")

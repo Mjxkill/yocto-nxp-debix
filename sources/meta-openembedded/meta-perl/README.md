@@ -52,7 +52,7 @@ Dependencies
 This layer depends on:
 
   URI: git://git.openembedded.org/openembedded-core
-  branch: styhead 
+  branch: scarthgap 
 
 Adding the meta-perl layer to your build
 ---------------------------------------
@@ -73,10 +73,10 @@ Maintenance
 -----------
 
 Send patches / pull requests to openembedded-devel@lists.openembedded.org with
-'[meta-perl][styhead]' in the subject.
+'[meta-perl][scarthgap]' in the subject.
 
 When sending single patches, please using something like:
-git send-email -M -1 --to openembedded-devel@lists.openembedded.org --subject-prefix='meta-perl][styhead][PATCH'
+git send-email -M -1 --to openembedded-devel@lists.openembedded.org --subject-prefix='meta-perl][scarthgap][PATCH'
 
 Layer maintainers: Armin Kuster <akuster808@gmail.com>
     

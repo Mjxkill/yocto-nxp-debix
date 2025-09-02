@@ -97,7 +97,7 @@ class NpmShrinkWrap(FetchMethod):
 
             integrity = params.get("integrity", None)
             resolved = params.get("resolved", None)
-            version = params.get("version", resolved)
+            version = params.get("version", None)
 
             # Handle registry sources
             if is_semver(version) and integrity:
@@ -184,7 +184,6 @@ class NpmShrinkWrap(FetchMethod):
                 uri = URI("git://" + str(groups["url"]))
                 uri.params["protocol"] = str(groups["protocol"])
                 uri.params["rev"] = str(groups["rev"])
-                uri.params["nobranch"] = "1"
                 uri.params["destsuffix"] = destsuffix
 
                 url = str(uri)
@@ -269,7 +268,7 @@ class NpmShrinkWrap(FetchMethod):
 
     def unpack(self, ud, rootdir, d):
         """Unpack the downloaded dependencies"""
-        destdir = rootdir
+        destdir = d.getVar("S")
         destsuffix = ud.parm.get("destsuffix")
         if destsuffix:
             destdir = os.path.join(rootdir, destsuffix)

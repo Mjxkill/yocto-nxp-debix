@@ -16,5 +16,3 @@ include recipes-qt/qt6/qt6.inc
 DEPENDS += "qtbase"
 
 BBCLASSEXTEND = "native nativesdk"
-
-INSANE_SKIP:${PN}-ptest += "buildpaths"

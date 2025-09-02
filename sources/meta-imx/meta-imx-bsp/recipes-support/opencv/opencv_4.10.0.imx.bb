@@ -1,10 +1,9 @@
-# This recipe is modified for i.MX.
-# For ease of maintenance, the top section is a verbatim copy
-# of an OE-core recipe, and the second section customizes the
-# recipe for i.MX.
+# This recipe is for the i.MX fork of opencv. For ease of
+# maintenance, the top section is a verbatim copy of an OE-core
+# recipe. The second section customizes the recipe for i.MX.
 
 ########## meta-openembedded copy ###########
-# Upstream hash: f8342855a440fa5c4194fc57285e8db9e034fcaa
+# Upstream hash: b149b1e6a1de2bdea10b0a6de34d5a5bbba4a657
 
 SUMMARY = "Opencv : The Open Computer Vision Library"
 HOMEPAGE = "http://opencv.org/"
@@ -18,7 +17,7 @@ ARM_INSTRUCTION_SET:armv5 = "arm"
 
 DEPENDS = "libtool swig-native bzip2 zlib glib-2.0 libwebp"
 
-SRCREV_opencv = "1ebbfb4aeeb558d03a76f3efa5bd9020f3e4397c"
+SRCREV_opencv = "93bb210db7cb5ae3dcd80dd6e3f8e5cfb42aa5fa"
 SRCREV_contrib = "c7602a8f74205e44389bd6a4e8d727d32e7e27b4"
 SRCREV_boostdesc = "34e4206aef44d50e6bbcd0ab06354b52e7466d26"
 SRCREV_vgg = "fccf7cd6a4b12079f73bbfb21745f9babcd4eb1d"
@@ -94,7 +93,7 @@ EXTRA_OECMAKE:append:x86 = " -DX86=ON"
 EXTRA_OECMAKE:remove:x86 = " -DENABLE_SSE41=1 -DENABLE_SSE42=1"
 
 PACKAGECONFIG ??= "gapi python3 eigen jpeg png tiff v4l libv4l gstreamer samples tbb gphoto2 \
-    ${@bb.utils.contains_any('DISTRO_FEATURES', '${GTK3DISTROFEATURES}', 'gtk', '', d)} \
+    ${@bb.utils.contains("DISTRO_FEATURES", "x11", "gtk", "", d)} \
     ${@bb.utils.contains_any("LICENSE_FLAGS_ACCEPTED", "commercial_ffmpeg commercial", "libav", "", d)}"
 
 # TBB does not build for powerpc so disable that package config
@@ -225,21 +224,18 @@ SUMMARY = "Opencv : The Open Computer Vision Library, i.MX Fork"
 
 LIC_FILES_CHKSUM = "file://LICENSE;md5=3b83ef96387f14655fc854ddc3c6bd57"
 
-# i.MX patches
-SRC_URI += " \
-    file://0101-MGS-6470-ccc-Modify-host-ptr-alignment-size-in-UMAT.patch \
-    file://0102-MGS-6470-ccc-Add-configuration-parameter-to-force-en.patch \
-    file://0103-MGS-6470-ccc-Change-configuration-to-enable-hostptr-.patch \
-    file://0104-MGS-8011-ccc-Fix-the-problem-of-syntax-error-at-doub.patch \
-"
-
-SRCREV_opencv = "71d3237a093b60a27601c20e9ee6c3e52154e8b1"
+# Replace the opencv URL with the fork
+SRC_URI:remove = "git://github.com/opencv/opencv.git;name=opencv;branch=4.x;protocol=https"
+SRC_URI =+ "${OPENCV_SRC};branch=${SRCBRANCH_opencv};name=opencv"
+OPENCV_SRC ?= "git://github.com/nxp-imx/opencv-imx.git;protocol=https;branch=master"
+SRCBRANCH_opencv = "4.10.0_imx"
+SRCREV_opencv = "93bb210db7cb5ae3dcd80dd6e3f8e5cfb42aa5fa"
 SRCREV_contrib = "1ed3dd2c53888e3289afdb22ec4e9ebbff3dba87"
 
 # Add opencv_extra
 SRC_URI += " \
     git://github.com/opencv/opencv_extra.git;destsuffix=extra;name=extra;branch=4.x;protocol=https \
-    file://0001-Add-smaller-version-of-download_models.py.patch;patchdir=${UNPACKDIR}/extra \
+    file://0001-Add-smaller-version-of-download_models.py.patch;patchdir=../extra \
 "
 SRCREV_FORMAT:append = "_extra"
 SRCREV_extra = "dd1fbd0717ef4d83f86899b4144fdd9bc0364a5f"
@@ -270,7 +266,7 @@ PACKAGECONFIG_OPENCL:mx95-nxp-bsp       = "opencl"
 PACKAGECONFIG[openvx] = "-DWITH_OPENVX=ON -DOPENVX_ROOT=${STAGING_LIBDIR} -DOPENVX_LIB_CANDIDATES='OpenVX;OpenVXU',-DWITH_OPENVX=OFF,virtual/libopenvx,"
 PACKAGECONFIG[qt5] = "-DWITH_QT=ON -DOE_QMAKE_PATH_EXTERNAL_HOST_BINS=${STAGING_BINDIR_NATIVE} -DCMAKE_PREFIX_PATH=${STAGING_BINDIR_NATIVE}/cmake,-DWITH_QT=OFF,qtbase qtbase-native,"
 PACKAGECONFIG[qt6] = "-DWITH_QT=ON -DQT_HOST_PATH=${RECIPE_SYSROOT_NATIVE}${prefix_native},-DWITH_QT=OFF,qtbase qtbase-native qt5compat,"
-PACKAGECONFIG[tests-imx] = "-DINSTALL_TESTS=ON -DOPENCV_TEST_DATA_PATH=${UNPACKDIR}/extra/testdata, -DINSTALL_TESTS=OFF,"
+PACKAGECONFIG[tests-imx] = "-DINSTALL_TESTS=ON -DOPENCV_TEST_DATA_PATH=${S}/../extra/testdata, -DINSTALL_TESTS=OFF,"
 PACKAGECONFIG[tim-vx] = "-DWITH_TIMVX=ON -DTIMVX_INSTALL_DIR=${STAGING_DIR_HOST}${libdir},-DWITH_TIMVX=OFF,tim-vx"
 
 do_install:append() {

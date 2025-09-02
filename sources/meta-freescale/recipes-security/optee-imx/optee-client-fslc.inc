@@ -1,4 +1,4 @@
-# Copyright 2017-2024 NXP
+# Copyright (C) 2017-2021 NXP
 
 SUMMARY = "OPTEE Client libs"
 HOMEPAGE = "http://www.optee.org/"
@@ -25,9 +25,9 @@ EXTRA_OEMAKE = " \
 do_install () {
 	oe_runmake -C ${S} install
 
-	install -D -p -m0644 ${B}/export/usr/lib/libteec.so.2.0.0 ${D}${libdir}/libteec.so.2.0.0
-	ln -sf libteec.so.2.0.0 ${D}${libdir}/libteec.so.2
-	ln -sf libteec.so.2.0.0 ${D}${libdir}/libteec.so
+	install -D -p -m0644 ${B}/export/usr/lib/libteec.so.1.0.0 ${D}${libdir}/libteec.so.1.0.0
+	ln -sf libteec.so.1.0.0 ${D}${libdir}/libteec.so.1
+	ln -sf libteec.so.1.0.0 ${D}${libdir}/libteec.so
 
 	install -D -p -m0644 ${B}/export/usr/lib/libckteec.so.0.1.0 ${D}${libdir}/libckteec.so.0.1.0
 	ln -sf libckteec.so.0.1.0 ${D}${libdir}/libckteec.so.0
@@ -37,6 +37,6 @@ do_install () {
 
 	cp -a ${B}/export/usr/include ${D}${includedir}
 
-	sed -i -e s:/etc:${sysconfdir}:g -e s:/usr/bin:${bindir}:g ${UNPACKDIR}/tee-supplicant.service
-	install -D -p -m0644 ${UNPACKDIR}/tee-supplicant.service ${D}${systemd_system_unitdir}/tee-supplicant.service
+	sed -i -e s:/etc:${sysconfdir}:g -e s:/usr/bin:${bindir}:g ${WORKDIR}/tee-supplicant.service
+	install -D -p -m0644 ${WORKDIR}/tee-supplicant.service ${D}${systemd_system_unitdir}/tee-supplicant.service
 }

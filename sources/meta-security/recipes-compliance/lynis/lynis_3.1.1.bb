@@ -12,7 +12,7 @@ SRC_URI[sha256sum] = "d72f4ee7325816bb8dbfcf31eb104207b9fe58a2493c2a875373746a71
 
 #UPSTREAM_CHECK = "https://downloads.cisofy.com/lynis"
 
-S = "${UNPACKDIR}/${BPN}"
+S = "${WORKDIR}/${BPN}"
 
 inherit autotools-brokensep
 

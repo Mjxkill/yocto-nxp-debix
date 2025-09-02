@@ -12,7 +12,7 @@ GO_IMPORT = "import"
 
 inherit go
 
-S = "${UNPACKDIR}/git"
+S = "${WORKDIR}/git"
 
 do_compile() {
     export GOARCH="${TARGET_GOARCH}"

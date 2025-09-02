@@ -13,7 +13,6 @@ SRC_URI = "${DEBIAN_MIRROR}/main/c/${BPN}/${BPN}_${PV}.orig.tar.gz \
            file://0001-genisoimage-Add-missing-extern-definition.patch \
            file://0001-add-new-option-eltorito-platform.patch \
            file://0001-genisoimage-Add-checksum.h-and-md5.h-for-function-pr.patch \
-           file://fix-incompatible-pointer-type-error.patch \
            "
 SRC_URI:append:class-nativesdk = " \
            file://0001-install-netscsid-to-bin-for-nativesdk.patch \
@@ -63,8 +62,3 @@ do_install:append() {
 }
 
 BBCLASSEXTEND = "native nativesdk"
-
-# http://errors.yoctoproject.org/Errors/Details/766905/
-# cdrkit/1.1.11/cdrkit-1.1.11/genisoimage/eltorito.c:399:41: error: passing argument 1 of 'set_721' from incompatible pointer type [-Wincompatible-pointer-types]
-# cdrkit/1.1.11/cdrkit-1.1.11/genisoimage/eltorito.c:422:25: error: passing argument 1 of 'set_721' from incompatible pointer type [-Wincompatible-pointer-types]
-CFLAGS += "-Wno-error=incompatible-pointer-types"

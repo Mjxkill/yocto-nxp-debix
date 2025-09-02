@@ -18,8 +18,7 @@ class Systemdboot(OESelftestTestCase):
 
         # Set EFI_PROVIDER = "systemdboot" and MACHINE = "genericx86-64" in conf/local.conf
         features = 'EFI_PROVIDER = "systemd-boot"\n'
-        features += 'MACHINE = "genericx86-64"\n'
-        features += 'COMPATIBLE_MACHINE:pn-ssh-pregen-hostkeys:genericx86-64 = "genericx86-64"\n'
+        features += 'MACHINE = "genericx86-64"'
         self.append_config(features)
 
         image = 'core-image-minimal'

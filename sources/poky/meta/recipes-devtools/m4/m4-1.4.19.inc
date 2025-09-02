@@ -62,3 +62,6 @@ RDEPENDS:${PN}-ptest:append:libc-glibc = "\
      glibc-gconv-iso8859-1 \
 "
 
+INSANE_SKIP:${PN}-ptest += "ldflags"
+INSANE_SKIP:${PN}-ptest += "rpaths"
+

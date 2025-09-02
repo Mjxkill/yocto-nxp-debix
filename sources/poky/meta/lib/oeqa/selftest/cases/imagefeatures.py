@@ -250,7 +250,12 @@ USERADD_GID_TABLES += "files/static-group"
 DISTRO_FEATURES:append = " pam opengl wayland"
 
 # Switch to systemd
-INIT_MANAGER = "systemd"
+DISTRO_FEATURES:append = " systemd usrmerge"
+VIRTUAL-RUNTIME_init_manager = "systemd"
+VIRTUAL-RUNTIME_initscripts = ""
+VIRTUAL-RUNTIME_syslog = ""
+VIRTUAL-RUNTIME_login_manager = "shadow-base"
+DISTRO_FEATURES_BACKFILL_CONSIDERED = "sysvinit"
 
 # Replace busybox
 PREFERRED_PROVIDER_virtual/base-utils = "packagegroup-core-base-utils"
@@ -314,7 +319,7 @@ SKIP_RECIPE[busybox] = "Don't build this"
         """
         config = """
 DISTRO_FEATURES:append = " api-documentation"
-CORE_IMAGE_EXTRA_INSTALL = "man-pages"
+CORE_IMAGE_EXTRA_INSTALL = "man-pages kmod-doc"
 """
         self.write_config(config)
         bitbake("core-image-minimal")
@@ -325,7 +330,7 @@ CORE_IMAGE_EXTRA_INSTALL = "man-pages"
             self.assertEqual(status, 1, 'Failed to run apropos: %s' % (output))
             self.assertIn("iso_8859_15", output)
 
-            # This manpage is provided by man-pages
-            status, output = qemu.run_serial("man --pager=cat intro")
+            # This manpage is provided by kmod
+            status, output = qemu.run_serial("man --pager=cat modprobe")
             self.assertEqual(status, 1, 'Failed to run man: %s' % (output))
-            self.assertIn("introduction to user commands", output)
+            self.assertIn("force-modversion", output)

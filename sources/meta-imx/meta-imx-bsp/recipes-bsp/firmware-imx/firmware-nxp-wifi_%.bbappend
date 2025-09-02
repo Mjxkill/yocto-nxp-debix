@@ -1,11 +1,11 @@
 # Use the latest revision
 
-LIC_FILES_CHKSUM = "file://LICENSE.txt;md5=c0fb372b5d7f12181de23ef480f225f3"
+LIC_FILES_CHKSUM = "file://LICENSE.txt;md5=ca53281cc0caa7e320d4945a896fb837"
 
 IMX_FIRMWARE_SRC ?= "git://github.com/nxp-imx/imx-firmware.git;protocol=https"
 SRC_URI = "${IMX_FIRMWARE_SRC};branch=${SRCBRANCH}"
-SRCBRANCH = "lf-6.12.3_1.0.0"
-SRCREV = "eef7ef94bc44cacd3b068f66658ef33391547daa"
+SRCBRANCH = "lf-6.6.36_2.1.0"
+SRCREV = "1b26d19284d202b1531837ce37a05afc49ad1d98"
 
 do_install() {
     install -d ${D}${nonarch_base_libdir}/firmware/nxp
@@ -18,32 +18,17 @@ FILES:${PN}-nxp8997-common = " \
     ${nonarch_base_libdir}/firmware/nxp/uart8997_bt_v4.bin \
 "
 
-FILES:${PN}-nxp8997-sdio = " \
-    ${nonarch_base_libdir}/firmware/nxp/sd*8997* \
-"
-
 FILES:${PN}-nxp9098-common = " \
     ${nonarch_base_libdir}/firmware/nxp/ed_mac_ctrl_V3_909x.conf \
     ${nonarch_base_libdir}/firmware/nxp/txpwrlimit_cfg_9098.conf \
     ${nonarch_base_libdir}/firmware/nxp/uart9098_bt_v1.bin \
 "
 
-FILES:${PN}-nxp9098-sdio = " \
-    ${nonarch_base_libdir}/firmware/nxp/sd*9098* \
-"
-
-FILES:${PN}-nxpiw610-sdio += " \
-    ${nonarch_base_libdir}/firmware/nxp/sd_iw610.bin.se \
-    ${nonarch_base_libdir}/firmware/nxp/sduart_iw610.bin.se \
-    ${nonarch_base_libdir}/firmware/nxp/uart_iw610_bt.bin.se \
-    ${nonarch_base_libdir}/firmware/nxp/uartspi_iw610.bin.se \
-"
-
 FILES:${PN}-nxpiw612-sdio += " \
     ${nonarch_base_libdir}/firmware/nxp/uartuart_n61x_v1.bin.se \
 "
 
-PACKAGES += "${PN}-nxpiw610-sdio ${PN}-all-sdio ${PN}-all-pcie"
+PACKAGES += "${PN}-all-sdio ${PN}-all-pcie"
 
 RDEPENDS:${PN}-all-sdio = " \
     ${PN}-nxp8801-sdio \
@@ -51,7 +36,6 @@ RDEPENDS:${PN}-all-sdio = " \
     ${PN}-nxp8997-sdio \
     ${PN}-nxp9098-sdio \
     ${PN}-nxpiw416-sdio \
-    ${PN}-nxpiw610-sdio \
     ${PN}-nxpiw612-sdio \
 "
 

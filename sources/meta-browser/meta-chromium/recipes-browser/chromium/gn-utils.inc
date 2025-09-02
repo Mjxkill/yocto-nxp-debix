@@ -35,8 +35,7 @@ GN_TARGET_ARCH_NAME:x86-64 = "x64"
 
 def clang_install_path(d):
     """Return clang compiler install path."""
-    import os
-    return os.path.join(d.getVar("STAGING_DIR_NATIVE"), "usr")
+    return d.getVar("STAGING_BINDIR_NATIVE")
 
 def gn_target_arch_name(d):
     """Returns a GN architecture name corresponding to the target machine's

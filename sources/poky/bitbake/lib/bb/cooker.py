@@ -17,7 +17,7 @@ import threading
 from io import StringIO, UnsupportedOperation
 from contextlib import closing
 from collections import defaultdict, namedtuple
-import bb, bb.command
+import bb, bb.exceptions, bb.command
 from bb import utils, data, parse, event, cache, providers, taskdata, runqueue, build
 import queue
 import signal
@@ -281,6 +281,7 @@ class BBCooker:
         self.databuilder = bb.cookerdata.CookerDataBuilder(self.configuration, False)
         self.databuilder.parseBaseConfiguration()
         self.data = self.databuilder.data
+        self.data_hash = self.databuilder.data_hash
         self.extraconfigdata = {}
 
         eventlog = self.data.getVar("BB_DEFAULT_EVENTLOG")
@@ -368,11 +369,6 @@ class BBCooker:
 
         if not clean:
             bb.parse.BBHandler.cached_statements = {}
-
-        # If writes were made to any of the data stores, we need to recalculate the data
-        # store cache
-        if hasattr(self, "databuilder"):
-            self.databuilder.calc_datastore_hashes()
 
     def parseConfiguration(self):
         self.updateCacheSync()
@@ -684,14 +680,14 @@ class BBCooker:
         bb.event.fire(bb.event.TreeDataPreparationCompleted(len(fulltargetlist)), self.data)
         return taskdata, runlist
 
-    def prepareTreeData(self, pkgs_to_build, task, halt=False):
+    def prepareTreeData(self, pkgs_to_build, task):
         """
         Prepare a runqueue and taskdata object for iteration over pkgs_to_build
         """
 
         # We set halt to False here to prevent unbuildable targets raising
         # an exception when we're just generating data
-        taskdata, runlist = self.buildTaskData(pkgs_to_build, task, halt, allowincomplete=True)
+        taskdata, runlist = self.buildTaskData(pkgs_to_build, task, False, allowincomplete=True)
 
         return runlist, taskdata
 
@@ -705,7 +701,7 @@ class BBCooker:
         if not task.startswith("do_"):
             task = "do_%s" % task
 
-        runlist, taskdata = self.prepareTreeData(pkgs_to_build, task, halt=True)
+        runlist, taskdata = self.prepareTreeData(pkgs_to_build, task)
         rq = bb.runqueue.RunQueue(self, self.data, self.recipecaches, taskdata, runlist)
         rq.rqdata.prepare()
         return self.buildDependTree(rq, taskdata)
@@ -1342,7 +1338,7 @@ class BBCooker:
         self.buildSetVars()
         self.reset_mtime_caches()
 
-        bb_caches = bb.cache.MulticonfigCache(self.databuilder, self.databuilder.data_hash, self.caches_array)
+        bb_caches = bb.cache.MulticonfigCache(self.databuilder, self.data_hash, self.caches_array)
 
         layername = self.collections[mc].calc_bbfile_priority(fn)[2]
         infos = bb_caches[mc].parse(fn, self.collections[mc].get_file_appends(fn), layername)
@@ -1816,8 +1812,8 @@ class CookerCollectFiles(object):
             bb.event.fire(CookerExit(), eventdata)
 
         # We need to track where we look so that we can know when the cache is invalid. There
-        # is no nice way to do this, this is horrid. We intercept the os.listdir() and os.scandir()
-        # calls while we run glob().
+        # is no nice way to do this, this is horrid. We intercept the os.listdir()
+        # (or os.scandir() for python 3.6+) calls while we run glob().
         origlistdir = os.listdir
         if hasattr(os, 'scandir'):
             origscandir = os.scandir
@@ -2101,6 +2097,7 @@ class Parser(multiprocessing.Process):
         except Exception as exc:
             tb = sys.exc_info()[2]
             exc.recipe = filename
+            exc.traceback = list(bb.exceptions.extract_traceback(tb, context=3))
             return True, None, exc
         # Need to turn BaseExceptions into Exceptions here so we gracefully shutdown
         # and for example a worker thread doesn't just exit on its own in response to
@@ -2115,7 +2112,7 @@ class CookerParser(object):
         self.mcfilelist = mcfilelist
         self.cooker = cooker
         self.cfgdata = cooker.data
-        self.cfghash = cooker.databuilder.data_hash
+        self.cfghash = cooker.data_hash
         self.cfgbuilder = cooker.databuilder
 
         # Accounting statistics
@@ -2227,8 +2224,9 @@ class CookerParser(object):
 
         for process in self.processes:
             process.join()
-            # clean up zombies
-            process.close()
+            # Added in 3.7, cleans up zombies
+            if hasattr(process, "close"):
+                process.close()
 
         bb.codeparser.parser_cache_save()
         bb.codeparser.parser_cache_savemerge()
@@ -2238,13 +2236,12 @@ class CookerParser(object):
             profiles = []
             for i in self.process_names:
                 logfile = "profile-parse-%s.log" % i
-                if os.path.exists(logfile) and os.path.getsize(logfile):
+                if os.path.exists(logfile):
                     profiles.append(logfile)
 
-            if profiles:
-                pout = "profile-parse.log.processed"
-                bb.utils.process_profilelog(profiles, pout = pout)
-                print("Processed parsing statistics saved to %s" % (pout))
+            pout = "profile-parse.log.processed"
+            bb.utils.process_profilelog(profiles, pout = pout)
+            print("Processed parsing statistics saved to %s" % (pout))
 
     def final_cleanup(self):
         if self.syncthread:
@@ -2301,12 +2298,8 @@ class CookerParser(object):
             return False
         except ParsingFailure as exc:
             self.error += 1
-
-            exc_desc = str(exc)
-            if isinstance(exc, SystemExit) and not isinstance(exc.code, str):
-                exc_desc = 'Exited with "%d"' % exc.code
-
-            logger.error('Unable to parse %s: %s' % (exc.recipe, exc_desc))
+            logger.error('Unable to parse %s: %s' %
+                     (exc.recipe, bb.exceptions.to_string(exc.realexception)))
             self.shutdown(clean=False)
             return False
         except bb.parse.ParseError as exc:
@@ -2315,33 +2308,20 @@ class CookerParser(object):
             self.shutdown(clean=False, eventmsg=str(exc))
             return False
         except bb.data_smart.ExpansionError as exc:
-            def skip_frames(f, fn_prefix):
-                while f and f.tb_frame.f_code.co_filename.startswith(fn_prefix):
-                    f = f.tb_next
-                return f
-
             self.error += 1
             bbdir = os.path.dirname(__file__) + os.sep
-            etype, value, tb = sys.exc_info()
-
-            # Remove any frames where the code comes from bitbake. This
-            # prevents deep (and pretty useless) backtraces for expansion error
-            tb = skip_frames(tb, bbdir)
-            cur = tb
-            while cur:
-                cur.tb_next = skip_frames(cur.tb_next, bbdir)
-                cur = cur.tb_next
-
+            etype, value, _ = sys.exc_info()
+            tb = list(itertools.dropwhile(lambda e: e.filename.startswith(bbdir), exc.traceback))
             logger.error('ExpansionError during parsing %s', value.recipe,
                          exc_info=(etype, value, tb))
             self.shutdown(clean=False)
             return False
         except Exception as exc:
             self.error += 1
-            _, value, _ = sys.exc_info()
+            etype, value, tb = sys.exc_info()
             if hasattr(value, "recipe"):
                 logger.error('Unable to parse %s' % value.recipe,
-                            exc_info=sys.exc_info())
+                            exc_info=(etype, value, exc.traceback))
             else:
                 # Most likely, an exception occurred during raising an exception
                 import traceback

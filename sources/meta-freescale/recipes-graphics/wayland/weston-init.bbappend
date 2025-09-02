@@ -58,11 +58,8 @@ PACKAGECONFIG[use-g2d] = ",,"
 PACKAGECONFIG[xwayland] = ",,"
 
 do_install:append() {
-    # Replace the template variables
-    sed -i -e 's,@bindir@,${bindir},g' ${D}${sysconfdir}/xdg/weston/weston.ini
-
-    if [ -f "${UNPACKDIR}/weston.config" ]; then
-        install -Dm0755 ${UNPACKDIR}/weston.config ${D}${sysconfdir}/default/weston
+    if [ -f "${WORKDIR}/weston.config" ]; then
+        install -Dm0755 ${WORKDIR}/weston.config ${D}${sysconfdir}/default/weston
     fi
 
     if [ "${@bb.utils.contains('PACKAGECONFIG', 'gbm-format', 'yes', 'no', d)}" = "yes" ]; then
@@ -91,4 +88,6 @@ do_install:append() {
     if [ "${@bb.utils.contains('PACKAGECONFIG', 'xwayland', 'yes', 'no', d)}" = "no" ]; then
         sed -i -e "s/^xwayland=true/#xwayland=true/g" ${D}${sysconfdir}/xdg/weston/weston.ini
     fi
+
+    sed -i -e 's,@bindir@,${bindir},g' ${D}${sysconfdir}/xdg/weston/weston.ini
 }

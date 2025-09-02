@@ -9,8 +9,7 @@ SRC_URI = "file://pxaregs.c \
            file://serial.patch \
            file://usb.patch "
 
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
+S = "${WORKDIR}"
 
 do_compile() {
     ${CC} pxaregs.c -o pxaregs ${CFLAGS} ${LDFLAGS}

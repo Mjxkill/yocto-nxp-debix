@@ -6,8 +6,4 @@ SRC_URI[sha256sum] = "8951a53662ae9cfd812685facdba693fc950ffc1c1fd1a8a2d3cf4c346
 
 PYPI_PACKAGE = "json2html"
 
-inherit pypi python_setuptools_build_meta
-
-DEPENDS += " \
-    python3-setuptools-scm-native \
-"
+inherit pypi setuptools3

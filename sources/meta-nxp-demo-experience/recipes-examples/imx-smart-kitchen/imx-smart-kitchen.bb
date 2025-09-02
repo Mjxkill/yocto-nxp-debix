@@ -10,10 +10,7 @@ DEMODIR = "${GPNT_APPS_FOLDER}/scripts/multimedia/smart-kitchen"
 
 
 SRC_URI = "${NXP_SMART_KITCHEN_SRC};branch=${SRCBRANCH} \
-			file://0001-Added-custom_tick_get-function.patch \
-      file://0001-Update-lv_anim_set_exec_cb-with-correct-function-typ.patch  \
-      "
-
+			file://0001-Added-custom_tick_get-function.patch"
 
 SRCREV = "1f42aceae2e79f4b5c7cd29c169cc3ebd1fce78a"
 
@@ -26,12 +23,10 @@ DEPENDS = "wayland libxkbcommon libxdg-shell wayland-protocols xdg-utils"
 RDEPENDS:${PN}+= " bash voiceui-smart-kitchen python3-posix-ipc libxdg-shell wayland-protocols xdg-utils"
 
 do_patch() {
-	cp ${UNPACKDIR}/0001-Added-custom_tick_get-function.patch ${WORKDIR}/git/lvgl
-	cp ${UNPACKDIR}/0001-Update-lv_anim_set_exec_cb-with-correct-function-typ.patch ${WORKDIR}/git/
+	cp ${WORKDIR}/0001-Added-custom_tick_get-function.patch ${WORKDIR}/git/lvgl
 	cd ${WORKDIR}/git/lvgl/ && git apply 0001-Added-custom_tick_get-function.patch
 	cd ${WORKDIR}/git/
 	cp -r wayland-client/* lv_drivers/wayland/
-  git apply 0001-Update-lv_anim_set_exec_cb-with-correct-function-typ.patch
 }
 
 do_compile() {

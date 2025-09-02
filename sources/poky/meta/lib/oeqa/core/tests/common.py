@@ -9,6 +9,7 @@ import os
 
 import unittest
 import logging
+import os
 
 logger = logging.getLogger("oeqa")
 logger.setLevel(logging.INFO)

@@ -7,7 +7,6 @@ DEPENDS = " \
     audit \
     dconf-native \
     gtk+3 \
-    json-glib \
     keyutils \
     libcanberra \
     libgudev \

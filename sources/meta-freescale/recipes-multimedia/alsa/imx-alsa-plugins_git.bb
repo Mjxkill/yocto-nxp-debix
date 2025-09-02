@@ -20,12 +20,14 @@ inherit autotools pkgconfig use-imx-headers
 PV = "1.0.26+${SRCPV}"
 
 SRC_URI = "git://github.com/nxp-imx/imx-alsa-plugins.git;protocol=https;branch=${SRCBRANCH}"
-SRCBRANCH = "MM_04.09.01_2408_L6.6.y"
+SRCBRANCH = "MM_04.08.03_2312_L6.6.y"
 SRCREV = "b2ba082e70333f187972ee4e85f63f9d2f608331"
 
 S = "${WORKDIR}/git"
 
-CFLAGS:append = " -I${STAGING_INCDIR_IMX}"
+INCLUDE_DIR = "-I${STAGING_INCDIR_IMX}"
+
+EXTRA_OECONF = "CFLAGS="${INCLUDE_DIR}""
 
 PACKAGECONFIG ??= "${PACKAGECONFIG_SWPDM}"
 PACKAGECONFIG_SWPDM             = ""

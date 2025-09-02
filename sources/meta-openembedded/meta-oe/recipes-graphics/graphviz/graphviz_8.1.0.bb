@@ -30,9 +30,6 @@ SRC_URI:append:class-nativesdk = "\
 "
 SRC_URI[sha256sum] = "d593695fdaa8a19297523b679ad13d3ef2027b0b7f14cc2bc23e77969ed81565"
 
-UPSTREAM_CHECK_URI = "https://graphviz.org/download/"
-UPSTREAM_CHECK_REGEX = "(?P<pver>\d+(\.\d+)+)"
-
 PACKAGECONFIG ??= "librsvg"
 PACKAGECONFIG[librsvg] = "--with-librsvg,--without-librsvg,librsvg"
 
@@ -70,7 +67,7 @@ do_configure:prepend() {
 do_install:append:class-nativesdk() {
     # graphviz-setup.sh must be executed at SDK installation
     install -d ${D}${SDKPATHNATIVE}/post-relocate-setup.d
-    install -m 0755 ${UNPACKDIR}/graphviz-setup.sh ${D}${SDKPATHNATIVE}/post-relocate-setup.d
+    install -m 0755 ${WORKDIR}/graphviz-setup.sh ${D}${SDKPATHNATIVE}/post-relocate-setup.d
 }
 FILES:${PN}:class-nativesdk += "${SDKPATHNATIVE}"
 

@@ -3,8 +3,7 @@ HOMEPAGE = "https://git.yoctoproject.org/opkg/"
 LICENSE = "MIT"
 PACKAGE_ARCH = "${MACHINE_ARCH}"
 
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
+S = "${WORKDIR}"
 
 do_compile() {
 	mkdir -p ${S}/${sysconfdir}/opkg/

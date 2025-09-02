@@ -12,8 +12,6 @@ S = "${WORKDIR}/git/c++"
 
 inherit cmake
 
-CVE_PRODUCT = "capnproto capnp"
-
 CXXFLAGS:append:mips = " -latomic"
 CXXFLAGS:append:powerpc = " -latomic"
 CXXFLAGS:append:riscv32 = " -latomic"

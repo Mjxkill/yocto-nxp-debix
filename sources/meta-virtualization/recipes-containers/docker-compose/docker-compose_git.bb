@@ -9,9 +9,9 @@ DEPENDS = " \
 
 # Specify the first two important SRCREVs as the format
 SRCREV_FORMAT="compose_survey"
-SRCREV_compose = "f79c28168bf6a95ea0cbd1c298f4a0ff4c3ac36b"
+SRCREV_compose = "3371227794f5f3645f4f19829c60a741635ed329"
 
-SRC_URI = "git://github.com/docker/compose;name=compose;branch=main;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX}"
+SRC_URI = "git://github.com/docker/compose;name=compose;branch=main;protocol=https"
 
 include src_uri.inc
 
@@ -23,7 +23,7 @@ LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=175792518e4ac015ab6696d16c4f60
 
 GO_IMPORT = "import"
 
-PV = "v2.28.1"
+PV = "v2.26.0"
 
 COMPOSE_PKG = "github.com/docker/compose/v2"
 
@@ -55,7 +55,7 @@ do_compile() {
 	# our copied .go files are to be used for the build
 	ln -sf vendor.copy vendor
 	# inform go that we know what we are doing
-	cp ${UNPACKDIR}/modules.txt vendor/
+	cp ${WORKDIR}/modules.txt vendor/
 
 	GO_LDFLAGS="-s -w -X internal.Version=${PV} -X ${COMPOSE_PKG}/internal.Version=${PV}"
 	GO_BUILDTAGS=""

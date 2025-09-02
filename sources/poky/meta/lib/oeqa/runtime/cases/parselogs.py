@@ -34,7 +34,7 @@ class ParseLogsTest(OERuntimeTestCase):
     log_locations = ["/var/log/", "/var/log/dmesg", "/tmp/dmesg_output.log"]
 
     # The keywords that identify error messages in the log files
-    errors = ["error", "cannot", "can't", "failed", "---[ cut here ]---", "No irq handler for vector"]
+    errors = ["error", "cannot", "can't", "failed"]
 
     # A list of error messages that should be ignored
     ignore_errors = []

@@ -9,7 +9,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
 
-__version__ = "2.9.1"
+__version__ = "2.8.0"
 
 import sys
 if sys.version_info < (3, 8, 0):
@@ -103,6 +103,26 @@ class BBLoggerAdapter(logging.LoggerAdapter, BBLoggerMixin):
     def __init__(self, logger, *args, **kwargs):
         self.setup_bblogger(logger.name)
         super().__init__(logger, *args, **kwargs)
+
+    if sys.version_info < (3, 6):
+        # These properties were added in Python 3.6. Add them in older versions
+        # for compatibility
+        @property
+        def manager(self):
+            return self.logger.manager
+
+        @manager.setter
+        def manager(self, value):
+            self.logger.manager = value
+
+        @property
+        def name(self):
+            return self.logger.name
+
+        def __repr__(self):
+            logger = self.logger
+            level = logger.getLevelName(logger.getEffectiveLevel())
+            return '<%s %s (%s)>' % (self.__class__.__name__, logger.name, level)
 
 logging.LoggerAdapter = BBLoggerAdapter
 

@@ -30,9 +30,7 @@ COMPATIBLE_HOST = ".*-linux"
 
 
 SRC_URI = "file://COPYING.GPL"
-
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
+S = "${WORKDIR}"
 
 do_configure() {
 	:

@@ -9,7 +9,6 @@ import collections
 import parse_shortlog
 import parse_signed_off_by
 import pyparsing
-import re
 import subprocess
 from data import PatchTestInput
 
@@ -23,7 +22,7 @@ def headlog():
 
 class TestMbox(base.Base):
 
-    auh_email = 'auh@yoctoproject.org'
+    auh_email = 'auh@auh.yoctoproject.org'
 
     invalids = [pyparsing.Regex("^Upgrade Helper.+"),
                 pyparsing.Regex(auh_email),
@@ -32,6 +31,7 @@ class TestMbox(base.Base):
 
     rexp_detect = pyparsing.Regex('\[\s?YOCTO.*\]')
     rexp_validation = pyparsing.Regex('\[(\s?YOCTO\s?#\s?(\d+)\s?,?)+\]')
+    revert_shortlog_regex = pyparsing.Regex('Revert\s+".*"')
     signoff_prog = parse_signed_off_by.signed_off_by
     revert_shortlog_regex = pyparsing.Regex('Revert\s+".*"')
     maxlength = 90
@@ -83,7 +83,7 @@ class TestMbox(base.Base):
     def test_shortlog_length(self):
         for commit in TestMbox.commits:
             # no reason to re-check on revert shortlogs
-            shortlog = re.sub('^(\[.*?\])+ ', '', commit.shortlog)
+            shortlog = commit.shortlog
             if shortlog.startswith('Revert "'):
                 continue
             l = len(shortlog)
@@ -155,5 +155,5 @@ class TestMbox(base.Base):
 
     def test_non_auh_upgrade(self):
         for commit in self.commits:
-            if self.auh_email in commit.commit_message:
+            if self.auh_email in commit.payload:
                 self.fail('Invalid author %s. Resend the series with a valid patch author' % self.auh_email, commit=commit)

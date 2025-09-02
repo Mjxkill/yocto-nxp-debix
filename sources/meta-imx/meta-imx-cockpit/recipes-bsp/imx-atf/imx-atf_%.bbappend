@@ -24,8 +24,8 @@ do_deploy:imx8qm-cockpit () {
             flavors="$core optee-$core"
         fi
         for flavor in $flavors; do
-            install -Dm 0644 ${S}/$flavor/${ATF_PLATFORM}/${OUTPUT_FOLDER}/bl31.bin ${DEPLOYDIR}/bl31-${ATF_PLATFORM}-cockpit.bin-$flavor
-            install -Dm 0644 ${S}/$flavor/${ATF_PLATFORM}/${OUTPUT_FOLDER}/bl31.bin ${DEPLOYDIR}/${BOOT_TOOLS}/bl31-${ATF_PLATFORM}-cockpit.bin-$flavor
+            install -Dm 0644 ${S}/$flavor/${ATF_PLATFORM}/release/bl31.bin ${DEPLOYDIR}/bl31-${ATF_PLATFORM}-cockpit.bin-$flavor
+            install -Dm 0644 ${S}/$flavor/${ATF_PLATFORM}/release/bl31.bin ${DEPLOYDIR}/${BOOT_TOOLS}/bl31-${ATF_PLATFORM}-cockpit.bin-$flavor
         done
     done
 }

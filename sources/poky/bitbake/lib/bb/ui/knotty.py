@@ -577,8 +577,6 @@ def main(server, eventHandler, params, tf = TerminalFilter):
     else:
         log_exec_tty = False
 
-    should_print_hyperlinks = sys.stdout.isatty() and os.environ.get('NO_COLOR', '') == ''
-
     helper = uihelper.BBUIHelper()
 
     # Look for the specially designated handlers which need to be passed to the
@@ -642,7 +640,7 @@ def main(server, eventHandler, params, tf = TerminalFilter):
     return_value = 0
     errors = 0
     warnings = 0
-    taskfailures = {}
+    taskfailures = []
 
     printintervaldelta = 10 * 60 # 10 minutes
     printinterval = printintervaldelta
@@ -728,8 +726,6 @@ def main(server, eventHandler, params, tf = TerminalFilter):
             if isinstance(event, bb.build.TaskFailed):
                 return_value = 1
                 print_event_log(event, includelogs, loglines, termfilter)
-                k = "{}:{}".format(event._fn, event._task)
-                taskfailures[k] = event.logfile
             if isinstance(event, bb.build.TaskBase):
                 logger.info(event._message)
                 continue
@@ -825,7 +821,7 @@ def main(server, eventHandler, params, tf = TerminalFilter):
 
             if isinstance(event, bb.runqueue.runQueueTaskFailed):
                 return_value = 1
-                taskfailures.setdefault(event.taskstring)
+                taskfailures.append(event.taskstring)
                 logger.error(str(event))
                 continue
 
@@ -946,21 +942,11 @@ def main(server, eventHandler, params, tf = TerminalFilter):
     try:
         termfilter.clearFooter()
         summary = ""
-        def format_hyperlink(url, link_text):
-            if should_print_hyperlinks:
-                start = f'\033]8;;{url}\033\\'
-                end = '\033]8;;\033\\'
-                return f'{start}{link_text}{end}'
-            return link_text
-
         if taskfailures:
             summary += pluralise("\nSummary: %s task failed:",
                                  "\nSummary: %s tasks failed:", len(taskfailures))
-            for (failure, log_file) in taskfailures.items():
+            for failure in taskfailures:
                 summary += "\n  %s" % failure
-                if log_file:
-                    hyperlink = format_hyperlink(f"file://{log_file}", log_file)
-                    summary += "\n    log: {}".format(hyperlink)
         if warnings:
             summary += pluralise("\nSummary: There was %s WARNING message.",
                                  "\nSummary: There were %s WARNING messages.", warnings)

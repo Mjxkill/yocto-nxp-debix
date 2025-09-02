@@ -1,7 +1,7 @@
 DESCRIPTION = "A Python Mocking and Patching Library for Testing"
 HOMEPAGE = "https://pypi.python.org/pypi/mock"
 SECTION = "devel/python"
-LICENSE = "BSD-2-Clause"
+LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE.txt;md5=de9dfbf780446b18aab11f00baaf5b7e"
 
 inherit pypi setuptools3

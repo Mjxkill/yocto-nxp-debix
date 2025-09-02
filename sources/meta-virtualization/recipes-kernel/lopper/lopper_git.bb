@@ -4,7 +4,7 @@ LICENSE = "BSD-3-Clause"
 SECTION = "bootloader"
 
 SRC_URI = "git://github.com/devicetree-org/lopper.git;branch=master;protocol=https"
-SRCREV = "a2abe17bd3b95051d7ab00639b533a96ca0cd208"
+SRCREV = "9159040dab25e2f1e7b447fcbfcd5397b1d618e8"
 S = "${WORKDIR}/git"
 
 BASEVERSION = "1.0.2"

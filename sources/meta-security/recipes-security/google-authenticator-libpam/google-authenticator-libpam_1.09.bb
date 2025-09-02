@@ -8,7 +8,7 @@ SRCREV = "962f353aac6cfc7b804547319db40f8b804f0b6c"
 
 DEPENDS = "libpam"
 
-S = "${UNPACKDIR}/git"
+S = "${WORKDIR}/git"
 
 inherit autotools features_check
 

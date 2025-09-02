@@ -2,8 +2,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 SRC_URI:append:imxgpu = " \
     file://Replace-glWindowPos2iARB-calls-with-glWindowPos2i.patch \
-    file://fix-clear-build-break.patch \
-    file://0001-egl-clear-backgrounds-black.patch"
+    file://fix-clear-build-break.patch"
 
 REQUIRED_DISTRO_FEATURES:remove:imxgpu = "x11"
 

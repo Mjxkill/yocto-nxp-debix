@@ -519,6 +519,7 @@ class QemuRunner:
                 except Exception as e:
                     self.logger.warning('Extra log data exception %s' % repr(e))
                     data = None
+            self.thread.serial_lock.release()
             return False
 
         with self.thread.serial_lock:
@@ -821,12 +822,10 @@ class LoggingThread(threading.Thread):
                     self.logfunc(data, ".stdout")
                 elif self.serialsock and self.serialsock.fileno() == fd:
                     if self.serial_lock.acquire(blocking=False):
-                        try:
-                            data = self.recv(1024, self.serialsock)
-                            self.logger.debug("Data received serial thread %s" % data.decode('utf-8', 'replace'))
-                            self.logfunc(data, ".2")
-                        finally:
-                            self.serial_lock.release()
+                        data = self.recv(1024, self.serialsock)
+                        self.logger.debug("Data received serial thread %s" % data.decode('utf-8', 'replace'))
+                        self.logfunc(data, ".2")
+                        self.serial_lock.release()
                     else:
                         serial_registered = False
                         poll.unregister(self.serialsock.fileno())

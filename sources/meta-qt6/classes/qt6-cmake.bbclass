@@ -39,21 +39,10 @@ EXTRA_OECMAKE += "\
 
 do_install:append() {
     # Replace host paths with qmake built-in properties QTBUG-84725
-    # remove all references to TMPDIR that could not be replaced QTBUG-105877
     find ${D} \( -name "*.pri" -or -name "*.prl" \) -exec \
         sed -i -e 's|${STAGING_DIR_NATIVE}|$$[QT_HOST_PREFIX/get]|g' \
                -e 's|${STAGING_DIR_HOST}|$$[QT_SYSROOT]|g' \
-               -e '/QMAKE_PRL_BUILD_DIR/d' \
-               -e '\|${WORKDIR}|d' {} \;
-
-    # Remove buildpaths from SBOM files
-    # QTBUG-130557
-    if [ -e ${D}${QT6_INSTALL_LIBDIR}/sbom ]; then
-        sed -i ${D}${QT6_INSTALL_LIBDIR}/sbom/*.spdx \
-            -e 's|${STAGING_DIR_NATIVE}||' \
-            -e 's|${S}||g' \
-            -e 's|${B}||'
-    fi
+               -e '/QMAKE_PRL_BUILD_DIR/d' {} \;
 }
 
 export QT_DISABLE_SHADER_DISK_CACHE = "1"

@@ -10,7 +10,7 @@ PV .= "+git${SRCPV}"
 SRC_URI = "${ATF_SRC};branch=${SRCBRANCH}"
 ATF_SRC ?= "git://github.com/nxp-imx/imx-atf.git;protocol=https"
 SRCBRANCH = "lf_v2.10"
-SRCREV = "78a14c75a06dea39036c44ae0f9d23acc7bcaef2"
+SRCREV = "28affcae957cb8194917b5246276630f9e6343e1"
 
 S = "${WORKDIR}/git"
 
@@ -23,7 +23,7 @@ ATF_PLATFORM ??= "INVALID"
 ATF_BOOT_UART_BASE ?= ""
 
 EXTRA_OEMAKE += " \
-    CROSS_COMPILE=${TARGET_PREFIX} \
+    CROSS_COMPILE="${TARGET_PREFIX}" \
     PLAT=${ATF_PLATFORM} \
 "
 
@@ -49,9 +49,7 @@ def remove_options_tail (in_string):
     from itertools import takewhile
     return ' '.join(takewhile(lambda x: not x.startswith('-'), in_string.split(' ')))
 
-# LD can have linker suffix in its name e.g. aarch64-yoe-linux-ld.lld so we need to
-# drop .lld as well along with options from LD
-EXTRA_OEMAKE += 'LD="${HOST_PREFIX}ld.bfd"'
+EXTRA_OEMAKE += 'LD="${@remove_options_tail(d.getVar('LD'))}"'
 
 EXTRA_OEMAKE += 'CC="${@remove_options_tail(d.getVar('CC'))}"'
 

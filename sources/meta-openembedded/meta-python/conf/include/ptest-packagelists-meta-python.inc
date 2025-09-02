@@ -17,14 +17,11 @@ PTESTS_FAST_META_PYTHON = "\
     python3-cachetools \
     python3-cbor2 \
     python3-click \
-    python3-dasbus \
     python3-dominate \
     python3-execnet \
-    python3-flask \
     python3-flexcache \
     python3-flexparser \
     python3-freezegun \
-    python3-fsspec \
     python3-geojson \
     python3-google-auth-oauthlib \
     python3-gpiod \
@@ -75,7 +72,6 @@ PTESTS_FAST_META_PYTHON = "\
     python3-tomlkit \
     python3-trustme \
     python3-typeguard \
-    python3-tzdata \
     python3-ujson \
     python3-u-msgpack-python \
     python3-unidiff \
@@ -99,7 +95,6 @@ PTESTS_SLOW_META_PYTHON = "\
     python3-pytest-localserver \
     python3-scrypt \
     python3-traitlets \
-    python3-typer \
     python3-yappi \
 "
 

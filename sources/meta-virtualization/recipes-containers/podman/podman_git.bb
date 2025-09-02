@@ -17,9 +17,9 @@ DEPENDS = " \
     gettext-native \
 "
 
-SRCREV = "679276e13686182bfd3dc6d8bffd355f8b34f126"
+SRCREV = "bb81e85a430fa95d23a15b77c717fd68bf06ebf2"
 SRC_URI = " \
-    git://github.com/containers/libpod.git;branch=v5.2;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
+    git://github.com/containers/libpod.git;branch=v5.0;protocol=https \
     ${@bb.utils.contains('PACKAGECONFIG', 'rootless', 'file://50-podman-rootless.conf', '', d)} \
     file://run-ptest \
 "
@@ -31,7 +31,7 @@ GO_IMPORT = "import"
 
 S = "${WORKDIR}/git"
 
-PV = "v5.2.1"
+PV = "5.0.1+git"
 
 CVE_STATUS[CVE-2022-2989] = "fixed-version: fixed since v4.3.0"
 CVE_STATUS[CVE-2023-0778] = "fixed-version: fixed since v4.5.0"
@@ -55,7 +55,6 @@ TOOLCHAIN = "gcc"
 export BUILDFLAGS="${GOBUILDFLAGS}"
 
 inherit go goarch
-inherit container-host
 inherit systemd pkgconfig ptest
 
 do_configure[noexec] = "1"
@@ -117,12 +116,7 @@ do_install() {
 
 	if ${@bb.utils.contains('PACKAGECONFIG', 'rootless', 'true', 'false', d)}; then
 		install -d "${D}${sysconfdir}/sysctl.d"
-		install -m 0644 "${UNPACKDIR}/50-podman-rootless.conf" "${D}${sysconfdir}/sysctl.d"
-		install -d "${D}${sysconfdir}/containers"
-		cat <<-EOF >> "${D}${sysconfdir}/containers/containers.conf"
-		[NETWORK]
-		default_rootless_network_cmd="slirp4netns"
-		EOF
+		install -m 0644 "${WORKDIR}/50-podman-rootless.conf" "${D}${sysconfdir}/sysctl.d"
 	fi
 }
 
@@ -155,7 +149,7 @@ VIRTUAL-RUNTIME_base-utils-nsenter ?= "util-linux-nsenter"
 COMPATIBLE_HOST = "^(?!mips).*"
 
 RDEPENDS:${PN} += "\
-	catatonit conmon ${VIRTUAL-RUNTIME_container_runtime} iptables libdevmapper ${VIRTUAL-RUNTIME_container_networking} ${VIRTUAL-RUNTIME_base-utils-nsenter} \
+	conmon ${VIRTUAL-RUNTIME_container_runtime} iptables ${VIRTUAL-RUNTIME_container_networking} skopeo ${VIRTUAL-RUNTIME_base-utils-nsenter} \
 	${@bb.utils.contains('PACKAGECONFIG', 'rootless', 'fuse-overlayfs slirp4netns', '', d)} \
 "
 RRECOMMENDS:${PN} += "slirp4netns \
@@ -172,11 +166,11 @@ RDEPENDS:${PN}-ptest += " \
 	bash \
 	bats \
 	buildah \
+	catatonit \
 	coreutils \
 	file \
 	gnupg \
 	jq \
 	make \
-	skopeo \
 	tar \
 "

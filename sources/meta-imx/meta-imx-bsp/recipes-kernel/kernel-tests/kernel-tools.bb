@@ -22,7 +22,6 @@ PACKAGECONFIG_VSOCK               = "vsock"
 PACKAGECONFIG_VSOCK:mx6-nxp-bsp   = ""
 PACKAGECONFIG_VSOCK:mx7-nxp-bsp   = ""
 
-PACKAGECONFIG[virtio] = ",,"
 PACKAGECONFIG[vsock] = ",,liburing"
 
 KERNEL_PCITEST_SRC ?= " \
@@ -101,8 +100,5 @@ FILES:${PN}-pci = "${bindir}/pci*"
 FILES:${PN}-iio = "${bindir}/lsiio ${bindir}/iio*"
 FILES:${PN}-virtio = "${bindir}/virtio-ivshmem-*"
 FILES:${PN}-vsock = "${bindir}/vsock*"
-
-# Work around do_package_qa error
-INSANE_SKIP:${PN}-dbg += "buildpaths"
 
 PACKAGE_ARCH = "${MACHINE_ARCH}"

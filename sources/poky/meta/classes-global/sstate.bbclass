@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 #
 
-SSTATE_VERSION = "14"
+SSTATE_VERSION = "12"
 
 SSTATE_ZSTD_CLEVEL ??= "8"
 
@@ -103,6 +103,7 @@ SSTATECREATEFUNCS[vardeps] = "SSTATE_SCAN_FILES"
 SSTATEPOSTCREATEFUNCS = ""
 SSTATEPREINSTFUNCS = ""
 SSTATEPOSTUNPACKFUNCS = "sstate_hardcode_path_unpack"
+SSTATEPOSTINSTFUNCS = ""
 EXTRA_STAGING_FIXMES ?= "HOSTTOOLS_DIR"
 
 # Check whether sstate exists for tasks that support sstate and are in the
@@ -160,10 +161,7 @@ python () {
     d.setVar('SSTATETASKS', " ".join(unique_tasks))
     for task in unique_tasks:
         d.prependVarFlag(task, 'prefuncs', "sstate_task_prefunc ")
-        # Generally sstate should be last, execpt for buildhistory functions
-        postfuncs = (d.getVarFlag(task, 'postfuncs') or "").split()
-        newpostfuncs = [p for p in postfuncs if "buildhistory" not in p] + ["sstate_task_postfunc"] + [p for p in postfuncs if "buildhistory" in p]
-        d.setVarFlag(task, 'postfuncs', " ".join(newpostfuncs))
+        d.appendVarFlag(task, 'postfuncs', " sstate_task_postfunc")
         d.setVarFlag(task, 'network', '1')
         d.setVarFlag(task + "_setscene", 'network', '1')
 }
@@ -191,6 +189,7 @@ def sstate_state_fromvars(d, task = None):
     plaindirs = (d.getVarFlag("do_" + task, 'sstate-plaindirs') or "").split()
     lockfiles = (d.getVarFlag("do_" + task, 'sstate-lockfile') or "").split()
     lockfilesshared = (d.getVarFlag("do_" + task, 'sstate-lockfile-shared') or "").split()
+    interceptfuncs = (d.getVarFlag("do_" + task, 'sstate-interceptfuncs') or "").split()
     fixmedir = d.getVarFlag("do_" + task, 'sstate-fixmedir') or ""
     if not task or len(inputs) != len(outputs):
         bb.fatal("sstate variables not setup correctly?!")
@@ -206,6 +205,7 @@ def sstate_state_fromvars(d, task = None):
     ss['lockfiles'] = lockfiles
     ss['lockfiles-shared'] = lockfilesshared
     ss['plaindirs'] = plaindirs
+    ss['interceptfuncs'] = interceptfuncs
     ss['fixmedir'] = fixmedir
     return ss
 
@@ -225,22 +225,11 @@ def sstate_install(ss, d):
     import oe.sstatesig
     import subprocess
 
-    def prepdir(dir):
-        # remove dir if it exists, ensure any parent directories do exist
-        if os.path.exists(dir):
-            oe.path.remove(dir)
-        bb.utils.mkdirhier(dir)
-        oe.path.remove(dir)
-
-    sstateinst = d.getVar("SSTATE_INSTDIR")
-
-    for state in ss['dirs']:
-        prepdir(state[1])
-        bb.utils.rename(sstateinst + state[0], state[1])
-
     sharedfiles = []
     shareddirs = []
     bb.utils.mkdirhier(d.expand("${SSTATE_MANIFESTS}"))
+
+    sstateinst = d.expand("${WORKDIR}/sstate-install-%s/" % ss['task'])
 
     manifest, d2 = oe.sstatesig.sstate_get_manifest_filename(ss['task'], d)
 
@@ -340,21 +329,15 @@ def sstate_install(ss, d):
         if os.path.exists(state[1]):
             oe.path.copyhardlinktree(state[1], state[2])
 
-    for plain in ss['plaindirs']:
-        workdir = d.getVar('WORKDIR')
-        sharedworkdir = os.path.join(d.getVar('TMPDIR'), "work-shared")
-        src = sstateinst + "/" + plain.replace(workdir, '')
-        if sharedworkdir in plain:
-            src = sstateinst + "/" + plain.replace(sharedworkdir, '')
-        dest = plain
-        bb.utils.mkdirhier(src)
-        prepdir(dest)
-        bb.utils.rename(src, dest)
+    for postinst in (d.getVar('SSTATEPOSTINSTFUNCS') or '').split():
+        # All hooks should run in the SSTATE_INSTDIR
+        bb.build.exec_func(postinst, d, (sstateinst,))
 
     for lock in locks:
         bb.utils.unlockfile(lock)
 
-sstate_install[vardepsexclude] += "SSTATE_ALLOW_OVERLAP_FILES SSTATE_MANMACH SSTATE_MANFILEPREFIX STAMP"
+sstate_install[vardepsexclude] += "SSTATE_ALLOW_OVERLAP_FILES SSTATE_MANMACH SSTATE_MANFILEPREFIX"
+sstate_install[vardeps] += "${SSTATEPOSTINSTFUNCS}"
 
 def sstate_installpkg(ss, d):
     from oe.gpg_sign import get_signer
@@ -410,7 +393,28 @@ def sstate_installpkgdir(ss, d):
         # All hooks should run in the SSTATE_INSTDIR
         bb.build.exec_func(f, d, (sstateinst,))
 
+    def prepdir(dir):
+        # remove dir if it exists, ensure any parent directories do exist
+        if os.path.exists(dir):
+            oe.path.remove(dir)
+        bb.utils.mkdirhier(dir)
+        oe.path.remove(dir)
+
+    for state in ss['dirs']:
+        prepdir(state[1])
+        bb.utils.rename(sstateinst + state[0], state[1])
     sstate_install(ss, d)
+
+    for plain in ss['plaindirs']:
+        workdir = d.getVar('WORKDIR')
+        sharedworkdir = os.path.join(d.getVar('TMPDIR'), "work-shared")
+        src = sstateinst + "/" + plain.replace(workdir, '')
+        if sharedworkdir in plain:
+            src = sstateinst + "/" + plain.replace(sharedworkdir, '')
+        dest = plain
+        bb.utils.mkdirhier(src)
+        prepdir(dest)
+        bb.utils.rename(src, dest)
 
     return True
 
@@ -641,6 +645,15 @@ def sstate_package(ss, d):
 
     tmpdir = d.getVar('TMPDIR')
 
+    fixtime = False
+    if ss['task'] == "package":
+        fixtime = True
+
+    def fixtimestamp(root, path):
+        f = os.path.join(root, path)
+        if os.lstat(f).st_mtime > sde:
+            os.utime(f, (sde, sde), follow_symlinks=False)
+
     sstatebuild = d.expand("${WORKDIR}/sstate-build-%s/" % ss['task'])
     sde = int(d.getVar("SOURCE_DATE_EPOCH") or time.time())
     d.setVar("SSTATE_CURRTASK", ss['task'])
@@ -655,6 +668,8 @@ def sstate_package(ss, d):
         # to sstate tasks but there aren't many of these so better just avoid them entirely.
         for walkroot, dirs, files in os.walk(state[1]):
             for file in files + dirs:
+                if fixtime:
+                    fixtimestamp(walkroot, file)
                 srcpath = os.path.join(walkroot, file)
                 if not os.path.islink(srcpath):
                     continue
@@ -676,6 +691,11 @@ def sstate_package(ss, d):
         bb.utils.mkdirhier(plain)
         bb.utils.mkdirhier(pdir)
         bb.utils.rename(plain, pdir)
+        if fixtime:
+            fixtimestamp(pdir, "")
+            for walkroot, dirs, files in os.walk(pdir):
+                for file in files + dirs:
+                    fixtimestamp(walkroot, file)
 
     d.setVar('SSTATE_BUILDDIR', sstatebuild)
     d.setVar('SSTATE_INSTDIR', sstatebuild)
@@ -708,7 +728,7 @@ def sstate_package(ss, d):
 
     return
 
-sstate_package[vardepsexclude] += "SSTATE_SIG_KEY SSTATE_PKG"
+sstate_package[vardepsexclude] += "SSTATE_SIG_KEY"
 
 def pstaging_fetch(sstatefetch, d):
     import bb.fetch2
@@ -769,6 +789,9 @@ sstate_task_prefunc[dirs] = "${WORKDIR}"
 
 python sstate_task_postfunc () {
     shared_state = sstate_state_fromvars(d)
+
+    for intercept in shared_state['interceptfuncs']:
+        bb.build.exec_func(intercept, d, (d.getVar("WORKDIR"),))
 
     omask = os.umask(0o002)
     if omask != 0o002:

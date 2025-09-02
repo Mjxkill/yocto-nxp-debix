@@ -424,7 +424,7 @@ overview of their function and contents.
 
       Example usage::
 
-         BB_HASHSERVE_UPSTREAM = "hashserv.yoctoproject.org:8686"
+         BB_HASHSERVE_UPSTREAM = "hashserv.yocto.io:8687"
 
    :term:`BB_INVALIDCONF`
       Used in combination with the ``ConfigParsed`` event to trigger

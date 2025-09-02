@@ -14,7 +14,8 @@ SRC_URI = "http://netfilter.org/projects/iptables/files/iptables-${PV}.tar.xz \
            file://ip6tables.service \
            file://ip6tables.rules \
            file://0001-configure-Add-option-to-enable-disable-libnfnetlink.patch \
-           file://0002-nft-ruleparse-Add-missing-braces-around-ternary.patch \
+           file://0002-iptables-xshared.h-add-missing-sys.types.h-include.patch \
+           file://0004-configure.ac-only-check-conntrack-when-libnfnetlink-.patch \
            "
 SRC_URI[sha256sum] = "5cc255c189356e317d070755ce9371eb63a1b783c34498fb8c30264f3cc59c9c"
 
@@ -33,7 +34,7 @@ PACKAGECONFIG ?= "${@bb.utils.filter('DISTRO_FEATURES', 'ipv6', d)}"
 PACKAGECONFIG[ipv6] = "--enable-ipv6,--disable-ipv6,"
 
 # libnfnetlink recipe is in meta-networking layer
-PACKAGECONFIG[libnfnetlink] = "--enable-libnfnetlink --enable-connlabel,--disable-libnfnetlink --disable-connlabel,libnfnetlink libnetfilter-conntrack"
+PACKAGECONFIG[libnfnetlink] = "--enable-libnfnetlink,--disable-libnfnetlink,libnfnetlink libnetfilter-conntrack"
 
 # libnftnl recipe is in meta-networking layer(previously known as libnftables)
 PACKAGECONFIG[libnftnl] = "--enable-nftables,--disable-nftables,libnftnl"
@@ -51,10 +52,10 @@ IPTABLES_RULES_DIR ?= "${sysconfdir}/${BPN}"
 
 do_install:append() {
     install -d ${D}${IPTABLES_RULES_DIR}
-    install -m 0644 ${UNPACKDIR}/iptables.rules ${D}${IPTABLES_RULES_DIR}
+    install -m 0644 ${WORKDIR}/iptables.rules ${D}${IPTABLES_RULES_DIR}
 
     install -d ${D}${systemd_system_unitdir}
-    install -m 0644 ${UNPACKDIR}/iptables.service ${D}${systemd_system_unitdir}
+    install -m 0644 ${WORKDIR}/iptables.service ${D}${systemd_system_unitdir}
 
     sed -i \
         -e 's,@SBINDIR@,${sbindir},g' \
@@ -62,8 +63,8 @@ do_install:append() {
         ${D}${systemd_system_unitdir}/iptables.service
 
     if ${@bb.utils.contains('PACKAGECONFIG', 'ipv6', 'true', 'false', d)} ; then
-        install -m 0644 ${UNPACKDIR}/ip6tables.rules ${D}${IPTABLES_RULES_DIR}
-        install -m 0644 ${UNPACKDIR}/ip6tables.service ${D}${systemd_system_unitdir}
+        install -m 0644 ${WORKDIR}/ip6tables.rules ${D}${IPTABLES_RULES_DIR}
+        install -m 0644 ${WORKDIR}/ip6tables.service ${D}${systemd_system_unitdir}
 
         sed -i \
             -e 's,@SBINDIR@,${sbindir},g' \
@@ -76,8 +77,6 @@ do_install:append() {
         ln -sf ${sbindir}/xtables-nft-multi ${D}${sbindir}/iptables 
         ln -sf ${sbindir}/xtables-nft-multi ${D}${sbindir}/iptables-save
         ln -sf ${sbindir}/xtables-nft-multi ${D}${sbindir}/iptables-restore
-        # ethertypes is provided by the netbase package
-        rm -f ${D}${sysconfdir}/ethertypes
     fi
 }
 

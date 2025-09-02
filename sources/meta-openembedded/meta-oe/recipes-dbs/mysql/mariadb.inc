@@ -23,20 +23,22 @@ SRC_URI = "https://archive.mariadb.org/${BP}/source/${BP}.tar.gz \
            file://0001-sql-CMakeLists.txt-fix-gen_lex_hash-not-found.patch \
            file://lfs64.patch \
            file://0001-Add-missing-includes-cstdint-and-cstdio.patch \
+           file://0001-Remove-the-compile_time_assert-lines.patch \
+           file://0001-MDEV-33439-Fix-build-with-libxml2-2.12.patch \
           "
 SRC_URI:append:libc-musl = " file://ppc-remove-glibc-dep.patch"
-SRC_URI[sha256sum] = "0a00180864cd016187c986faab8010de23a117b9a75f91d6456421f894e48d20"
+SRC_URI[sha256sum] = "5239a245ed90517e96396605cd01ccd8f73cd7442d1b3076b6ffe258110e5157"
 
-UPSTREAM_CHECK_URI = "https://github.com/MariaDB/server/tags"
+UPSTREAM_CHECK_URI = "https://github.com/MariaDB/server/releases"
+
+S = "${WORKDIR}/mariadb-${PV}"
 
 BINCONFIG_GLOB = "mysql_config"
 
-inherit cmake gettext binconfig update-rc.d systemd multilib_script multilib_header pkgconfig
+inherit cmake gettext binconfig update-rc.d systemd multilib_script pkgconfig
 
 MULTILIB_SCRIPTS = "${PN}-server:${bindir}/mariadbd-safe \
-                    ${PN}-setupdb:${bindir}/mariadb-install-db \
-                    libmysqlclient-dev:${bindir}/mysql_config \
-                    "
+                    ${PN}-setupdb:${bindir}/mariadb-install-db"
 
 INITSCRIPT_PACKAGES = "${PN}-server ${PN}-setupdb"
 INITSCRIPT_NAME:${PN}-server = "mysqld"
@@ -78,7 +80,6 @@ BUILD_CFLAGS += "-fuse-ld=bfd"
 BUILD_CXXFLAGS += "-fuse-ld=bfd"
 
 LDFLAGS:x86:toolchain-clang = "-latomic"
-LDFLAGS:riscv32:toolchain-clang = "-latomic"
 
 EXTRA_OECMAKE = "-DWITH_EMBEDDED_SERVER=ON \
                  -DWITH_JEMALLOC=no \
@@ -160,21 +161,20 @@ mariadb_sysroot_preprocess () {
 
 do_install() {
     oe_runmake 'DESTDIR=${D}' install
-    oe_multilib_header mysql/mariadb_version.h mysql/server/my_config.h mysql/server/private/config.h
 
     install -d ${D}/${sysconfdir}/init.d
-    install -m 0644 ${UNPACKDIR}/my.cnf ${D}/${sysconfdir}/
-    install -m 0755 ${UNPACKDIR}/install_db ${D}/${sysconfdir}/init.d/
+    install -m 0644 ${WORKDIR}/my.cnf ${D}/${sysconfdir}/
+    install -m 0755 ${WORKDIR}/install_db ${D}/${sysconfdir}/init.d/
     mv ${D}/${sysconfdir}/init.d/mysql ${D}/${sysconfdir}/init.d/mysqld
 
     install -d ${D}${systemd_unitdir}/system
-    install -m 0644 ${UNPACKDIR}/mysqld.service ${D}${systemd_unitdir}/system
-    install -m 0644 ${UNPACKDIR}/install_db.service ${D}${systemd_unitdir}/system
+    install -m 0644 ${WORKDIR}/mysqld.service ${D}${systemd_unitdir}/system
+    install -m 0644 ${WORKDIR}/install_db.service ${D}${systemd_unitdir}/system
     sed -i -e 's,@BINDIR@,${bindir},g' -e 's,@PREFIX@,${prefix},g' ${D}${systemd_unitdir}/system/mysqld.service \
                                                                    ${D}${systemd_unitdir}/system/install_db.service
 
     install -d ${D}${bindir}
-    install -m 755 ${UNPACKDIR}/mysql-systemd-start ${D}${bindir}
+    install -m 755 ${WORKDIR}/mysql-systemd-start ${D}${bindir}
     install -d ${D}${datadir}/doc/${PN}
     if [ -f ${D}${datadir}/doc/README ]; then
         mv ${D}${datadir}/doc/README ${D}${datadir}/doc/${PN}/
@@ -216,7 +216,7 @@ RDEPENDS:${PN}-client = "perl perl-module-getopt-long perl-module-file-temp \
 RDEPENDS:${PN}-server = "perl perl-module-getopt-long perl-module-data-dumper \
     perl-module-file-basename perl-module-file-path perl-module-sys-hostname \
     perl-module-file-copy perl-module-file-temp perl-module-posix \
-    ${PN}-client ${PN}-setupdb libdbi-perl dbd-mariadb lzo"
+    ${PN}-client ${PN}-setupdb libdbi-perl libdbd-mysql-perl lzo"
 RDEPENDS:${PN}-leftovers = "perl perl-module-cwd perl-module-benchmark perl-module-getopt-long \
     perl-module-posix perl-module-data-dumper perl-module-sigtrap perl-module-threads \
     perl-module-threads-shared perl-module-io-socket perl-module-sys-hostname perl-module-file-copy \

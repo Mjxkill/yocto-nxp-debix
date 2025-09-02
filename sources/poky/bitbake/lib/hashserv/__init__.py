@@ -13,7 +13,6 @@ from bb.asyncrpc.client import parse_address, ADDR_TYPE_UNIX, ADDR_TYPE_WS
 
 User = namedtuple("User", ("username", "permissions"))
 
-
 def create_server(
     addr,
     dbname,
@@ -26,7 +25,6 @@ def create_server(
     anon_perms=None,
     admin_username=None,
     admin_password=None,
-    reuseport=False,
 ):
     def sqlite_engine():
         from .sqlite import DatabaseEngine
@@ -62,9 +60,9 @@ def create_server(
         s.start_unix_server(*a)
     elif typ == ADDR_TYPE_WS:
         url = urlparse(a[0])
-        s.start_websocket_server(url.hostname, url.port, reuseport=reuseport)
+        s.start_websocket_server(url.hostname, url.port)
     else:
-        s.start_tcp_server(*a, reuseport=reuseport)
+        s.start_tcp_server(*a)
 
     return s
 

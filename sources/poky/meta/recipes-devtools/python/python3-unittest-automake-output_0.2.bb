@@ -10,6 +10,4 @@ S = "${WORKDIR}/git"
 
 inherit python_flit_core
 
-RDEPENDS:${PN} += "python3-unittest"
-
 BBCLASSEXTEND = "native nativesdk"

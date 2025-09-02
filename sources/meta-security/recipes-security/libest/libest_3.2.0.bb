@@ -20,7 +20,7 @@ EXTRA_OECONF = "--disable-pthreads --with-ssl-dir=${STAGING_LIBDIR}"
 CFLAGS += "-fcommon"
 LDFLAGS:append:libc-musl = " -lexecinfo"
 
-S = "${UNPACKDIR}/git"
+S = "${WORKDIR}/git"
 
 PACKAGES = "${PN} ${PN}-dbg ${PN}-dev"
 

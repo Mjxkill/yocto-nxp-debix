@@ -32,9 +32,3 @@ COMPATIBLE_HOST:riscv32 = "null"
 B = "${WORKDIR}/build"
 
 do_configure[cleandirs] = "${B}"
-
-python () {
-    multilibs = d.getVar("MULTILIBS")
-    if multilibs:
-        raise bb.parse.SkipRecipe("musl is not compatible with multilibs")
-}

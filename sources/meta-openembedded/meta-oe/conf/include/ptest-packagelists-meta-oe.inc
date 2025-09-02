@@ -17,6 +17,7 @@ PTESTS_FAST_META_OE = "\
     jq \
     leveldb \
     libcereal \
+    libee \
     libgpiod \
     libio-pty-perl \
     libmanette \
@@ -33,10 +34,8 @@ PTESTS_FAST_META_OE = "\
     nodejs \
     onig \
     oprofile \
-    pegtl \
     protobuf \
     pv \
-    python3-pefile \
     sdbus-c++ \
     uthash \
     xmlsec1 \

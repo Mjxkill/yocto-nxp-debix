@@ -87,7 +87,7 @@ class Wget(FetchMethod):
         if not ud.localfile:
             ud.localfile = d.expand(urllib.parse.unquote(ud.host + ud.path).replace("/", "."))
 
-        self.basecmd = d.getVar("FETCHCMD_wget") or "/usr/bin/env wget -t 2 -T 100"
+        self.basecmd = d.getVar("FETCHCMD_wget") or "/usr/bin/env wget -t 2 -T 30"
 
         if ud.type == 'ftp' or ud.type == 'ftps':
             self.basecmd += " --passive-ftp"
@@ -244,12 +244,7 @@ class Wget(FetchMethod):
                         fetch.connection_cache.remove_connection(h.host, h.port)
                     raise urllib.error.URLError(err)
                 else:
-                    try:
-                        r = h.getresponse()
-                    except TimeoutError as e:
-                        if fetch.connection_cache:
-                            fetch.connection_cache.remove_connection(h.host, h.port)
-                        raise TimeoutError(e)
+                    r = h.getresponse()
 
                 # Pick apart the HTTPResponse object to get the addinfourl
                 # object initialized properly.
@@ -376,7 +371,7 @@ class Wget(FetchMethod):
                 except (FileNotFoundError, netrc.NetrcParseError):
                     pass
 
-                with opener.open(r, timeout=100) as response:
+                with opener.open(r, timeout=30) as response:
                     pass
             except (urllib.error.URLError, ConnectionResetError, TimeoutError) as e:
                 if try_again:

@@ -7,11 +7,7 @@ SRC_URI[sha256sum] = "6425963d91054cfcc185807141c7314a9c5ad46325911bd24dcb489bd0
 
 PYPI_PACKAGE = "Flask-Script"
 
-inherit pypi python_setuptools_build_meta
-
-DEPENDS += " \
-    python3-setuptools-scm-native \
-"
+inherit pypi setuptools3
 
 RDEPENDS:${PN} += "\
     python3-flask \

@@ -24,5 +24,10 @@ S = "${WORKDIR}/git"
 require lv-conf.inc
 
 do_install:append() {
-    install -m 0644 "${S}/lv_conf.h" "${D}${includedir}/${BPN}/lv_conf.h"
+    install -d "${D}${includedir}/${PN}"
+    install -m 0644 "${S}/lv_conf.h" "${D}${includedir}/${PN}/lv_conf.h"
 }
+
+FILES:${PN}-dev += "\
+    ${includedir}/${PN}/ \
+    "

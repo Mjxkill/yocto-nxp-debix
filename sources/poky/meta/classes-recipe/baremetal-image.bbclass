@@ -16,8 +16,8 @@
 # See meta-skeleton for a working example.
 
 
-# Toolchain should be baremetal or newlib/picolibc based.
-# TCLIBC="baremetal" or TCLIBC="newlib" or TCLIBC="picolibc"
+# Toolchain should be baremetal or newlib based.
+# TCLIBC="baremetal" or TCLIBC="newlib"
 COMPATIBLE_HOST:libc-musl:class-target = "null"
 COMPATIBLE_HOST:libc-glibc:class-target = "null"
 
@@ -30,9 +30,6 @@ BAREMETAL_BINNAME ?= "hello_baremetal_${MACHINE}"
 IMAGE_LINK_NAME ?= "baremetal-helloworld-image-${MACHINE}"
 IMAGE_NAME_SUFFIX ?= ""
 
-IMAGE_OUTPUT_MANIFEST_DIR = "${WORKDIR}/deploy-image-output-manifest"
-IMAGE_OUTPUT_MANIFEST = "${IMAGE_OUTPUT_MANIFEST_DIR}/manifest.json"
-
 do_rootfs[dirs] = "${IMGDEPLOYDIR} ${DEPLOY_DIR_IMAGE}"
 
 do_image(){
@@ -40,28 +37,8 @@ do_image(){
     install ${D}/${base_libdir}/firmware/${BAREMETAL_BINNAME}.elf ${IMGDEPLOYDIR}/${IMAGE_LINK_NAME}.elf
 }
 
-python do_image_complete(){
-    from pathlib import Path
-    import json
-
-    data = {
-        "taskname": "do_image",
-        "imagetype": "baremetal-image",
-        "images": []
-    }
-
-    img_deploy_dir = Path(d.getVar("IMGDEPLOYDIR"))
-
-    for child in img_deploy_dir.iterdir():
-        if not child.is_file() or child.is_symlink():
-            continue
-
-        data["images"].append({
-            "filename": child.name,
-        })
-
-    with open(d.getVar("IMAGE_OUTPUT_MANIFEST"), "w") as f:
-        json.dump([data], f)
+do_image_complete(){
+    :
 }
 
 python do_rootfs(){
@@ -85,7 +62,6 @@ python do_rootfs(){
     bb.utils.mkdirhier(sysconfdir)
 
     execute_pre_post_process(d, d.getVar('ROOTFS_POSTPROCESS_COMMAND'))
-    execute_pre_post_process(d, d.getVar("ROOTFS_POSTUNINSTALL_COMMAND"))
 }
 
 
@@ -96,8 +72,6 @@ SSTATE_SKIP_CREATION:task-image-complete = '1'
 do_image_complete[sstate-inputdirs] = "${IMGDEPLOYDIR}"
 do_image_complete[sstate-outputdirs] = "${DEPLOY_DIR_IMAGE}"
 do_image_complete[stamp-extra-info] = "${MACHINE_ARCH}"
-do_image_complete[sstate-plaindirs] += "${IMAGE_OUTPUT_MANIFEST_DIR}"
-do_image_complete[dirs] += "${IMAGE_OUTPUT_MANIFEST_DIR}"
 addtask do_image_complete after do_image before do_build
 
 python do_image_complete_setscene () {
@@ -129,7 +103,7 @@ QB_OPT_APPEND:append:qemuriscv32 = " -bios none"
 # since medlow can only access addresses below 0x80000000 and RAM
 # starts at 0x80000000 on RISC-V 64
 # Keep RISC-V 32 using -mcmodel=medlow (symbols lie between -2GB:2GB)
-TARGET_CFLAGS:append:qemuriscv64 = " -mcmodel=medany"
+CFLAGS:append:qemuriscv64 = " -mcmodel=medany"
 
 
 ## Emulate image.bbclass
@@ -166,5 +140,5 @@ python(){
                 else:
                     deps += " %s:%s" % (dep, task)
         return deps
-    d.appendVarFlag('do_image', 'depends', extraimage_getdepends('do_populate_sysroot'))
+    d.appendVarFlag('do_image', 'depends', extraimage_getdepends('do_populate_sysroot')) 
 }

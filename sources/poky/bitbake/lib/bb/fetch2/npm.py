@@ -42,12 +42,11 @@ from bb.utils import is_semver
 
 def npm_package(package):
     """Convert the npm package name to remove unsupported character"""
-    # For scoped package names ('@user/package') the '/' is replaced by a '-'.
-    # This is similar to what 'npm pack' does, but 'npm pack' also strips the
-    # leading '@', which can lead to ambiguous package names.
+    # Scoped package names (with the @) use the same naming convention
+    # as the 'npm pack' command.
     name = re.sub("/", "-", package)
     name = name.lower()
-    name = re.sub(r"[^\-a-z0-9@]", "", name)
+    name = re.sub(r"[^\-a-z0-9]", "", name)
     name = name.strip("-")
     return name
 

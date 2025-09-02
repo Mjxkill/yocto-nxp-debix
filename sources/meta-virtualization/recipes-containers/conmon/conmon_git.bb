@@ -9,12 +9,12 @@ REQUIRED_DISTRO_FEATURES ?= "seccomp"
 
 DEPENDS = "glib-2.0 go-md2man-native libseccomp"
 
-SRCREV = "a500cbd327a91849b74ff8fd16648faa5fa927f1"
+SRCREV = "affab49967eb62f75d2a47398344ab053326289f"
 SRC_URI = "\
     git://github.com/containers/conmon.git;branch=main;protocol=https \
 "
 
-PV = "2.1.12+git"
+PV = "2.1.10+git"
 
 S = "${WORKDIR}/git"
 

@@ -7,7 +7,7 @@ LICENSE = "Apache-2.0-with-LLVM-exception"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/Apache-2.0-with-LLVM-exception;md5=0bcd48c3bdfef0c9d9fd17726e4b7dab"
 SECTION = "devel"
 
-inherit_defer nativesdk
+inherit nativesdk
 DEPENDS += "nativesdk-clang"
 
 do_install() {
@@ -32,5 +32,4 @@ deltask do_patch
 deltask do_fetch
 deltask do_unpack
 deltask do_create_spdx
-deltask do_create_package_spdx
 deltask do_create_runtime_spdx

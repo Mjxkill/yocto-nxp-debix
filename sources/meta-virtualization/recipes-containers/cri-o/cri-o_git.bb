@@ -14,9 +14,9 @@ At a high level, we expect the scope of cri-o to be restricted to the following 
  - Resource isolation as required by the CRI \
  "
 
-SRCREV_cri-o = "20c06a19cb395445620c31730c0f1a0a1922eaae"
+SRCREV_cri-o = "5aff11c7c1afdc785adafd7da3c3f2a6ac51b88d"
 SRC_URI = "\
-	git://github.com/kubernetes-sigs/cri-o.git;branch=release-1.31;name=cri-o;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
+	git://github.com/kubernetes-sigs/cri-o.git;branch=release-1.30;name=cri-o;protocol=https \
         file://crio.conf \
 	"
 
@@ -26,7 +26,7 @@ LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=e3fc50a88d0a364313df4b21ef20c2
 
 GO_IMPORT = "import"
 
-PV = "1.31.0+git${SRCREV_cri-o}"
+PV = "1.30.0+git${SRCREV_cri-o}"
 
 inherit features_check
 REQUIRED_DISTRO_FEATURES ?= "seccomp"
@@ -83,7 +83,7 @@ do_install() {
     install -d ${D}${systemd_unitdir}/system/
     install -d ${D}/usr/share/containers/oci/hooks.d
 
-    install ${UNPACKDIR}/crio.conf ${D}/${sysconfdir}/crio/crio.conf
+    install ${WORKDIR}/crio.conf ${D}/${sysconfdir}/crio/crio.conf
 
     # sample config files, they'll go in the ${PN}-config below
     install -d ${D}/${sysconfdir}/crio/config/

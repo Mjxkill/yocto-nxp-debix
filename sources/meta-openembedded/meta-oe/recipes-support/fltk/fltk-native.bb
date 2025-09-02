@@ -4,8 +4,6 @@ DEPENDS = "zlib-native jpeg-native libpng-native libxext-native libxft-native"
 
 SRC_URI += "file://fltk-native-link-libdl.patch"
 
-UPSTREAM_CHECK_URI = "https://www.fltk.org/software.php"
-
 inherit native
 
 EXTRA_OECMAKE += " \

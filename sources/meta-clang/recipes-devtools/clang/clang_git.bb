@@ -15,9 +15,6 @@ BUILD_CXX:class-nativesdk = "clang++"
 BUILD_AR:class-nativesdk = "llvm-ar"
 BUILD_RANLIB:class-nativesdk = "llvm-ranlib"
 BUILD_NM:class-nativesdk = "llvm-nm"
-
-BUILDSDK_CPPFLAGS:append:class-nativesdk = "${@oe.utils.vartrue('DEBUG_BUILD', ' -Wno-error=unused-command-line-argument', '', d)}"
-
 LDFLAGS:remove:class-nativesdk = "-fuse-ld=lld"
 
 LDFLAGS:append:class-target:riscv32 = " -Wl,--no-as-needed -latomic -Wl,--as-needed"
@@ -27,9 +24,14 @@ inherit cmake cmake-native pkgconfig python3native python3targetconfig
 
 OECMAKE_FIND_ROOT_PATH_MODE_PROGRAM = "BOTH"
 
+def get_clang_experimental_arch(bb, d, arch_var):
+    import re
+    a = d.getVar(arch_var, True)
+    return ""
+
 def get_clang_arch(bb, d, arch_var):
     import re
-    a = d.getVar(arch_var)
+    a = d.getVar(arch_var, True)
     if   re.match('(i.86|athlon|x86.64)$', a):         return 'X86'
     elif re.match('arm$', a):                          return 'ARM'
     elif re.match('armeb$', a):                        return 'ARM'
@@ -49,6 +51,9 @@ def get_clang_host_arch(bb, d):
 
 def get_clang_target_arch(bb, d):
     return get_clang_arch(bb, d, 'TARGET_ARCH')
+
+def get_clang_experimental_target_arch(bb, d):
+    return get_clang_experimental_arch(bb, d, 'TARGET_ARCH')
 
 PACKAGECONFIG_CLANG_COMMON = "build-id eh libedit rtti shared-libs \
                               ${@bb.utils.contains('TC_CXX_RUNTIME', 'llvm', 'compiler-rt libcplusplus libomp unwindlib', '', d)} \
@@ -113,6 +118,7 @@ LLVM_BUILD_TOOLS;LLVM_USE_HOST_TOOLS;LLVM_CONFIG_PATH;\
 LLVM_TARGETS_TO_BUILD ?= "AMDGPU;AArch64;ARM;BPF;Mips;PowerPC;RISCV;X86;LoongArch"
 
 LLVM_EXPERIMENTAL_TARGETS_TO_BUILD ?= ""
+LLVM_EXPERIMENTAL_TARGETS_TO_BUILD:append = ";${@get_clang_experimental_target_arch(bb, d)}"
 
 HF = ""
 HF:class-target = "${@ bb.utils.contains('TUNE_CCARGS_MFLOAT', 'hard', 'hf', '', d)}"
@@ -120,8 +126,9 @@ HF[vardepvalue] = "${HF}"
 
 LLVM_PROJECTS ?= "clang;clang-tools-extra;lld${LLDB}"
 LLDB ?= ";lldb"
-# LLDB support for RISCV32/Mips32 does not work yet
+# LLDB support for RISCV/Mips32 does not work yet
 LLDB:riscv32 = ""
+LLDB:riscv64 = ""
 LLDB:mips = ""
 LLDB:mipsel = ""
 LLDB:powerpc = ""
@@ -132,7 +139,6 @@ SOLIBSDEV:mingw32 = ".pyd"
 #CMAKE_VERBOSE = "VERBOSE=1"
 
 EXTRA_OECMAKE += "-DLLVM_ENABLE_ASSERTIONS=OFF \
-                  -DLLVM_APPEND_VC_REV=OFF \
                   -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
                   -DLLVM_ENABLE_EXPENSIVE_CHECKS=OFF \
                   -DLLVM_ENABLE_PIC=ON \
@@ -161,7 +167,7 @@ EXTRA_OECMAKE:append:class-native = "\
 "
 EXTRA_OECMAKE:append:class-nativesdk = "\
                   -DCROSS_TOOLCHAIN_FLAGS_NATIVE='-DLLDB_PYTHON_RELATIVE_PATH=${PYTHON_SITEPACKAGES_DIR} \
-                                                  -DLLDB_PYTHON_EXE_RELATIVE_PATH=${PYTHON_PN} \
+                                                  -DLLDB_PYTHON_EXE_RELATIVE_PATH=${PYTHON} \
                                                   -DLLDB_PYTHON_EXT_SUFFIX=${SOLIBSDEV} \
                                                   -DCMAKE_TOOLCHAIN_FILE=${WORKDIR}/toolchain-native.cmake' \
                   -DCMAKE_RANLIB=${STAGING_BINDIR_TOOLCHAIN}/${TARGET_PREFIX}llvm-ranlib \
@@ -172,7 +178,7 @@ EXTRA_OECMAKE:append:class-nativesdk = "\
                   -DLLVM_HEADERS_TABLEGEN=${STAGING_BINDIR_NATIVE}/llvm-min-tblgen \
                   -DPYTHON_LIBRARY=${STAGING_LIBDIR}/lib${PYTHON_DIR}${PYTHON_ABI}.so \
                   -DLLDB_PYTHON_RELATIVE_PATH=${PYTHON_SITEPACKAGES_DIR} \
-                  -DLLDB_PYTHON_EXE_RELATIVE_PATH=${PYTHON_PN} \
+                  -DLLDB_PYTHON_EXE_RELATIVE_PATH=${PYTHON} \
                   -DLLDB_PYTHON_EXT_SUFFIX=${SOLIBSDEV} \
                   -DPYTHON_INCLUDE_DIR=${STAGING_INCDIR}/${PYTHON_DIR}${PYTHON_ABI} \
                   -DPYTHON_EXECUTABLE='${PYTHON}' \
@@ -203,30 +209,16 @@ RRECOMMENDS:${PN} = "binutils"
 RRECOMMENDS:${PN}:append:class-target = " libcxx-dev"
 
 # patch out build host paths for reproducibility
-reproducible_build_variables() {
-    sed -i -e "s,${DEBUG_PREFIX_MAP},,g" \
-        -e "s,--sysroot=${RECIPE_SYSROOT},,g" \
-        -e "s,${STAGING_DIR_HOST},,g" \
-        -e "s,${S}/llvm,,g"  \
+do_compile:prepend:class-target() {
+    sed -i -e "s,${STAGING_DIR_NATIVE},,g" \
+        -e "s,${STAGING_DIR_TARGET},,g" \
+        -e "s,${S},,g"  \
         -e "s,${B},,g" \
         ${B}/tools/llvm-config/BuildVariables.inc
 }
 
-do_configure:append:class-target() {
-    reproducible_build_variables
-}
-
-do_configure:append:class-nativesdk() {
-    reproducible_build_variables
-}
-
 do_install:append() {
     rm -rf ${D}${libdir}/python*/site-packages/six.py
-    for t in clang-pseudo clang-pseudo-gen clang-rename; do
-        if [ -e ${B}${BINPATHPREFIX}/bin/$t ]; then
-            install -Dm 0755 ${B}${BINPATHPREFIX}/bin/$t ${D}${bindir}/$t
-        fi
-    done
 }
 
 do_install:append:class-target () {
@@ -260,6 +252,7 @@ do_install:append:class-native () {
     if ${@bb.utils.contains('PACKAGECONFIG', 'clangd', 'true', 'false', d)}; then
         install -Dm 0755 ${B}${BINPATHPREFIX}/bin/clangd-indexer ${D}${bindir}/clangd-indexer
     fi
+    install -Dm 0755 ${B}${BINPATHPREFIX}/bin/clang-pseudo-gen ${D}${bindir}/clang-pseudo-gen
     install -Dm 0755 ${B}${BINPATHPREFIX}/bin/clang-tidy-confusable-chars-gen ${D}${bindir}/clang-tidy-confusable-chars-gen
     install -Dm 0755 ${B}${BINPATHPREFIX}/bin/clang-tblgen ${D}${bindir}/clang-tblgen
     install -Dm 0755 ${B}${BINPATHPREFIX}/bin/lldb-tblgen ${D}${bindir}/lldb-tblgen
@@ -279,6 +272,7 @@ do_install:append:class-nativesdk () {
         install -Dm 0755 ${B}${BINPATHPREFIX}/bin/clangd-indexer ${D}${bindir}/clangd-indexer
     fi
     install -Dm 0755 ${B}${BINPATHPREFIX}/bin/clang-tblgen ${D}${bindir}/clang-tblgen
+    install -Dm 0755 ${B}${BINPATHPREFIX}/bin/clang-pseudo-gen ${D}${bindir}/clang-pseudo-gen
     install -Dm 0755 ${B}${BINPATHPREFIX}/bin/clang-tidy-confusable-chars-gen ${D}${bindir}/clang-tidy-confusable-chars-gen
     for f in `find ${D}${bindir} -executable -type f -not -type l`; do
         test -n "`file -b $f|grep -i ELF`" && ${STRIP} $f
@@ -288,9 +282,6 @@ do_install:append:class-nativesdk () {
     ln -sf llvm-config ${D}${bindir}/llvm-config${PV}
     rm -rf ${D}${datadir}/llvm/cmake
     rm -rf ${D}${datadir}/llvm
-
-    #reproducibility
-    sed -i -e 's,${B},,g' ${D}${libdir}/cmake/llvm/LLVMConfig.cmake
 }
 
 PACKAGES =+ "${PN}-libllvm ${PN}-lldb-python ${PN}-libclang-cpp ${PN}-tidy ${PN}-format ${PN}-tools \
@@ -336,10 +327,10 @@ FILES:${PN}-tools = "${bindir}/analyze-build \
   ${bindir}/clang-nvlink-wrapper \
   ${bindir}/clang-offload-bundler \
   ${bindir}/clang-offload-packager \
-  ${bindir}/clang-pseudo* \
+  ${bindir}/clang-pseudo \
   ${bindir}/clang-query \
   ${bindir}/clang-refactor \
-  ${bindir}/clang-rename* \
+  ${bindir}/clang-rename \
   ${bindir}/clang-reorder-fields \
   ${bindir}/clang-repl \
   ${bindir}/clang-scan-deps \
@@ -410,7 +401,6 @@ FILES:${PN}-dev += "\
   ${nonarch_libdir}/libear \
   ${nonarch_libdir}/${BPN}/*.la \
 "
-FILES:${PN}-doc += "${datadir}/clang-doc"
 
 FILES:${PN}-staticdev += "${nonarch_libdir}/${BPN}/*.a"
 
@@ -440,16 +430,16 @@ SYSROOT_PREPROCESS_FUNCS:append:class-target = " clang_sysroot_preprocess"
 
 clang_sysroot_preprocess() {
 	install -d ${SYSROOT_DESTDIR}${bindir_crossscripts}/
-	install -m 0755 ${S}/llvm/tools/llvm-config/llvm-config ${SYSROOT_DESTDIR}${bindir_crossscripts}/
+	install -m 0755 ${S}/../llvm-config ${SYSROOT_DESTDIR}${bindir_crossscripts}/
 	ln -sf llvm-config ${SYSROOT_DESTDIR}${bindir_crossscripts}/llvm-config${PV}
 	# LLDTargets.cmake references the lld executable(!) that some modules/plugins link to
 	install -d ${SYSROOT_DESTDIR}${bindir}
 
 	binaries="lld diagtool clang-${MAJOR_VER} clang-format clang-offload-packager
 	                clang-offload-bundler clang-scan-deps clang-repl
-	                clang-refactor clang-check clang-extdef-mapping clang-apply-replacements
+	                clang-rename clang-refactor clang-check clang-extdef-mapping clang-apply-replacements
 	                clang-reorder-fields clang-tidy clang-change-namespace clang-doc clang-include-fixer
-	                find-all-symbols clang-move clang-query pp-trace modularize"
+	                find-all-symbols clang-move clang-query pp-trace clang-pseudo modularize"
 
 	if ${@bb.utils.contains('PACKAGECONFIG', 'clangd', 'true', 'false', d)}; then
 	        binaries="${binaries} clangd"

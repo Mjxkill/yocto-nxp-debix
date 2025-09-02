@@ -14,9 +14,7 @@ SRCREV = "366d30b9cdb20345c5d064af850d686da79b89eb"
 
 PV = "1.3.0+git"
 
-SRC_URI = "git://git.kernel.dk/blktrace.git;branch=master;protocol=https \
-           file://0001-bno_plot.py-btt_plot.py-Ask-for-python3-specifically.patch \
-          "
+SRC_URI = "git://git.kernel.dk/blktrace.git;branch=master;protocol=https"
 
 S = "${WORKDIR}/git"
 

@@ -116,7 +116,6 @@ PACKAGECONFIG[glib] = "-DFEATURE_glib=ON,-DFEATURE_glib=OFF,glib-2.0"
 PACKAGECONFIG[icu] = "-DFEATURE_icu=ON,-DFEATURE_icu=OFF,icu"
 PACKAGECONFIG[journald] = "-DFEATURE_journald=ON,-DFEATURE_journald=OFF,systemd"
 PACKAGECONFIG[lttng] = "-DFEATURE_lttng=ON,-DFEATURE_lttng=OFF,lttng-ust"
-PACKAGECONFIG[ctf] = "-DFEATURE_ctf=ON,-DFEATURE_ctf=OFF"
 
 # gui
 PACKAGECONFIG[gui] = "-DFEATURE_gui=ON,-DFEATURE_gui=OFF"
@@ -174,8 +173,6 @@ EXTRA_OECMAKE:append:class-target = "\
 
 EXTRA_OECMAKE:append:mingw32 = "\
     -DQT_GENERATE_WRAPPER_SCRIPTS_FOR_ALL_HOSTS=ON \
-    -DFEATURE_stack_protector=OFF \
-    -DFEATURE_dnslookup=OFF \
 "
 
 SYSROOT_DIRS += "${QT6_INSTALL_MKSPECSDIR}"
@@ -201,7 +198,7 @@ do_install:append() {
     install -d ${D}${datadir}/cmake/OEToolchainConfig.cmake.d
     RELPATH=${@os.path.relpath(d.getVar('prefix'), d.getVar('datadir') + '/cmake/OEToolchainConfig.cmake.d')}
     cat > ${D}${datadir}/cmake/OEToolchainConfig.cmake.d/OEQt6Toolchain.cmake <<EOF
-get_filename_component(QT_HOST_PATH "\${CMAKE_CURRENT_LIST_DIR}/$RELPATH" ABSOLUTE CACHE)
+get_filename_component(QT_HOST_PATH "\${CMAKE_CURRENT_LIST_DIR}/${RELPATH}" ABSOLUTE CACHE)
 set(QT_BUILD_INTERNALS_NO_FORCE_SET_INSTALL_PREFIX ON CACHE BOOL "")
 EOF
 

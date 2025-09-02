@@ -30,6 +30,7 @@ import bb.build
 import bb.command
 import bb.cooker
 import bb.event
+import bb.exceptions
 import bb.runqueue
 from bb.ui import uihelper
 
@@ -101,6 +102,10 @@ class TeamcityLogFormatter(logging.Formatter):
         details = ""
         if hasattr(record, 'bb_exc_formatted'):
             details = ''.join(record.bb_exc_formatted)
+        elif hasattr(record, 'bb_exc_info'):
+            etype, value, tb = record.bb_exc_info
+            formatted = bb.exceptions.format_exception(etype, value, tb, limit=5)
+            details = ''.join(formatted)
 
         if record.levelno in [bb.msg.BBLogFormatter.ERROR, bb.msg.BBLogFormatter.CRITICAL]:
             # ERROR gets a separate errorDetails field

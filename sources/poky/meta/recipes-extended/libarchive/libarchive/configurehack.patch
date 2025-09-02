@@ -7,7 +7,7 @@ Signed-off-by: Richard Purdie <richard.purdie@linuxfoundation.org>
  1 file changed, 13 insertions(+), 13 deletions(-)
 
 diff --git a/configure.ac b/configure.ac
-index 503bb75..e3101da 100644
+index 5668d41..7e65e49 100644
 --- a/configure.ac
 +++ b/configure.ac
 @@ -414,6 +414,19 @@ if test "x$with_bz2lib" != "xno"; then
@@ -50,6 +50,5 @@ index 503bb75..e3101da 100644
  # Check for tm_gmtoff in struct tm
  AC_CHECK_MEMBERS([struct tm.tm_gmtoff, struct tm.__tm_gmtoff],,,
  [
--- 
-2.34.1
-
+--
+2.40.0

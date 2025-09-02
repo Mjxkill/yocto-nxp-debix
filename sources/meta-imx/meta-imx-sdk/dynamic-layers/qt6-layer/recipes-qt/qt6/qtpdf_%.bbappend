@@ -1,1 +1,1 @@
-DEPENDS += "drm"
+DEPENDS += "cups libdrm"

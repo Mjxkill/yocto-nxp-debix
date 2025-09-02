@@ -1,4 +1,4 @@
-image: ${MIRROR_GHCR}/siemens/kas/kas:4.4
+image: ${MIRROR_GHCR}/siemens/kas/kas:4.3.2
 
 variables:
   # These are needed as the k8s executor doesn't respect the container
@@ -34,14 +34,13 @@ stages:
   interruptible: true
   variables:
     KAS_WORK_DIR: $CI_PROJECT_DIR/work
-    KAS_BUILD_DIR: $KAS_WORK_DIR/build
     KAS_REPO_REF_DIR: $CACHE_DIR/repos
     SSTATE_DIR: $CACHE_DIR/sstate
     DL_DIR: $CACHE_DIR/downloads
     BB_LOGCONFIG: $CI_PROJECT_DIR/ci/logging.yml
     TOOLCHAIN_DIR: $CACHE_DIR/toolchains
-    IMAGE_DIR: $KAS_BUILD_DIR/tmp/deploy/images
-    TOOLCHAIN_LINK_DIR: $KAS_BUILD_DIR/toolchains
+    IMAGE_DIR: $CI_PROJECT_DIR/work/build/tmp/deploy/images
+    TOOLCHAIN_LINK_DIR: $CI_PROJECT_DIR/work/build/toolchains
   before_script:
     - echo KAS_WORK_DIR = $KAS_WORK_DIR
     - echo SSTATE_DIR = $SSTATE_DIR
@@ -76,17 +75,13 @@ stages:
     - echo KASFILES=$KASFILES
     - kas dump --update --force-checkout --resolve-refs --resolve-env $KASFILES
     - kas build $KASFILES
-    - ./ci/check-warnings $KAS_BUILD_DIR/warnings.log
-    - kas shell ci/base.yml:lockfile.yml --command "$CI_PROJECT_DIR/ci/junit.sh $KAS_WORK_DIR/build"
-
+    - ./ci/check-warnings $KAS_WORK_DIR/build/warnings.log
   artifacts:
     name: "logs"
     when: always
     paths:
-      - $KAS_BUILD_DIR/tmp*/work*/**/temp/log.do_*.*
-      - $KAS_BUILD_DIR/tmp*/work*/**/testimage/*
-    reports:
-      junit: $KAS_BUILD_DIR/tmp/log/oeqa/junit.xml
+      - $CI_PROJECT_DIR/work/build/tmp*/work*/**/temp/log.do_*.*
+      - $CI_PROJECT_DIR/work/build/tmp*/work*/**/testimage/*
 
 #
 # Prep stage, update repositories once.
@@ -116,7 +111,7 @@ update-repos:
 # Build stage, the actual build jobs
 #
 # Available options for building are
-#  DISTRO: [poky, poky-altcfg, poky-tiny]
+#  DISTRO: [poky, poky-tiny]
 #  KERNEL: [linux-yocto, linux-yocto-dev, linux-yocto-rt]
 #  TOOLCHAINS: [gcc, clang, external-gccarm]
 #  TCLIBC: [glibc, musl]
@@ -124,7 +119,6 @@ update-repos:
 #  TS: [none, trusted-services]
 #  VIRT: [none, xen]
 #  TESTING: testimage
-#  SECUREDEBUG: [none, secure-debug]
 
 arm-systemready-ir-acs:
   extends: .build
@@ -134,7 +128,7 @@ arm-systemready-ir-acs:
       # arm-systemready-ir-acs must be specified after fvp-base for ordering
       # purposes for the jobs-to-kas output. It is not enough to just have it
       # in the job name because fvp-base.yml overwrites the target.
-      - PLATFORM: [fvp-base, corstone1000-fvp]
+      - PLATFORM: fvp-base
         ARM_SYSTEMREADY_IR_ACS: arm-systemready-ir-acs
   tags:
     - ${ACS_TAG}
@@ -166,7 +160,6 @@ corstone1000-mps3:
       - FIRMWARE: corstone1000-firmware-only
         TESTING: [none, tftf]
       - FIRMWARE: none
-        SECUREDEBUG: [none, secure-debug]
 
 documentation:
   extends: .setup
@@ -197,9 +190,21 @@ fvp-base:
     matrix:
       - TS: [none, fvp-base-ts]
         TESTING: testimage
-      - FIRMWARE: [u-boot, edk2]
-        TESTING: testimage
+      - FIRMWARE: edk2
       - SYSTEMREADY_FIRMWARE: arm-systemready-firmware
+
+arm-systemready-ir-acs:
+  extends: .build
+  timeout: 12h
+  parallel:
+    matrix:
+      # arm-systemready-ir-acs must be specified after fvp-base for ordering
+      # purposes for the jobs-to-kas output. It is not enough to just have it
+      # in the job name because fvp-base.yml overwrites the target.
+      - PLATFORM: [fvp-base, corstone1000-fvp]
+        ARM_SYSTEMREADY_IR_ACS: arm-systemready-ir-acs
+  tags:
+    - ${ACS_TAG}
 
 fvps:
   extends: .build
@@ -242,6 +247,12 @@ musca-b1:
 musca-s1:
   extends: .build
 
+n1sdp:
+  extends: .build
+  parallel:
+    matrix:
+      - TESTING: [none, n1sdp-ts, n1sdp-optee, tftf]
+
 pending-updates:
   extends: .setup
   artifacts:
@@ -264,10 +275,6 @@ qemuarm64-secureboot:
         TOOLCHAINS: [gcc, clang]
         TCLIBC: [glibc, musl]
         TS: [none, qemuarm64-secureboot-ts]
-        TESTING: testimage
-      - TOOLCHAINS: [gcc, clang]
-        TS: [none, qemuarm64-secureboot-ts]
-        UEFISB: [none, uefi-secureboot]
         TESTING: testimage
       - KERNEL: linux-yocto-dev
         TESTING: testimage
@@ -331,8 +338,6 @@ sbsa-ref:
     matrix:
       - KERNEL: [linux-yocto, linux-yocto-rt]
         TOOLCHAINS: [gcc, clang]
-        TESTING: testimage
-      - DISTRO: poky-altcfg
         TESTING: testimage
       - KERNEL: linux-yocto-dev
         TESTING: testimage

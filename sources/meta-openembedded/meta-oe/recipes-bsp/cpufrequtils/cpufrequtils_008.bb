@@ -14,9 +14,6 @@ SRC_URI = "git://github.com/emagii/cpufrequtils.git;branch=master;protocol=https
            file://0001-dont-unset-cflags.patch \
 "
 
-# Upstream repo does not tag
-UPSTREAM_CHECK_COMMITS = "1"
-
 EXTRA_OEMAKE:append = " ${@['', 'NLS=false']['${USE_NLS}' == 'no']} "
 
 

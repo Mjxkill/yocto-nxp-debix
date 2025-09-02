@@ -8,10 +8,9 @@ SRC_URI = " \
            file://smack_test_file_access.sh \
            file://test_privileged_change_self_label.sh \
            file://test_smack_onlycap.sh \
-"
+" 
 
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
+S = "${WORKDIR}"
 
 inherit features_check
 

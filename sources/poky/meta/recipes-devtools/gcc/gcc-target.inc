@@ -2,7 +2,6 @@ GCCMULTILIB = "--enable-multilib"
 require gcc-configure-common.inc
 
 EXTRA_OECONF_PATHS = "\
-    --with-gxx-libcxx-include-dir=${target_includedir}/c++/v1 \
     --with-build-sysroot=${STAGING_DIR_TARGET} \
 "
 
@@ -33,7 +32,8 @@ PACKAGES = "\
     ${PN} ${PN}-plugins ${PN}-symlinks \
     g++ g++-symlinks \
     cpp cpp-symlinks \
-    ${@bb.utils.contains('FORTRAN', ',fortran', 'gfortran gfortran-symlinks', '', d)} \
+    g77 g77-symlinks \
+    gfortran gfortran-symlinks \
     gcov gcov-symlinks \
     ${PN}-doc \
     ${PN}-dev \
@@ -60,7 +60,7 @@ RRECOMMENDS:${PN} += "\
     libssp \
     libssp-dev \
 "
-RDEPENDS:${PN} += "binutils cpp"
+RDEPENDS:${PN} += "cpp"
 
 FILES:${PN}-dev = "\
     ${gcclibdir}/${TARGET_SYS}/${BINV}/lib*${SOLIBSDEV} \
@@ -80,14 +80,22 @@ FILES:${PN}-plugins = "\
 "
 ALLOW_EMPTY:${PN}-plugins = "1"
 
-INSANE_SKIP:${MLPREFIX}gfortran += "dev-deps"
+FILES:g77 = "\
+    ${bindir}/${TARGET_PREFIX}g77 \
+    ${libexecdir}/gcc/${TARGET_SYS}/${BINV}/f771 \
+"
+FILES:g77-symlinks = "\
+    ${bindir}/g77 \
+    ${bindir}/f77 \
+"
+RRECOMMENDS:g77 = "\
+    libg2c \
+    libg2c-dev \
+"
+
 FILES:gfortran = "\
     ${bindir}/${TARGET_PREFIX}gfortran \
     ${libexecdir}/gcc/${TARGET_SYS}/${BINV}/f951 \
-"
-RDEPENDS:gfortran = "\
-    gcc \
-    libgfortran-dev \
 "
 RRECOMMENDS:gfortran = "\
     libquadmath \
@@ -132,8 +140,20 @@ FILES:${PN}-doc = "\
 "
 
 do_compile () {
-	remove_sysroot_paths_from_configargs '/'
-	remove_sysroot_paths_from_checksum_options '${STAGING_DIR_TARGET}' '/'
+	# Prevent full target sysroot path from being used in configargs.h header,
+	# as it will be rewritten when used by other sysroots preventing support
+	# for gcc plugins. Additionally the path is embeddeded into the output
+	# binary, this prevents building a reproducible binary.
+	oe_runmake configure-gcc
+	sed -i 's@${STAGING_DIR_TARGET}@/@g' ${B}/gcc/configargs.h
+	sed -i 's@${STAGING_DIR_HOST}@/@g' ${B}/gcc/configargs.h
+
+	# Prevent sysroot/workdir paths from being used in checksum-options.
+	# checksum-options is used to generate a checksum which is embedded into
+	# the output binary.
+	oe_runmake TARGET-gcc=checksum-options all-gcc
+	sed -i 's@${DEBUG_PREFIX_MAP}@@g' ${B}/gcc/checksum-options
+	sed -i 's@${STAGING_DIR_TARGET}@/@g' ${B}/gcc/checksum-options
 
 	oe_runmake all-host
 }
@@ -177,6 +197,11 @@ do_install () {
 	# Not sure why we end up with these but we don't want them...
 	rm -f ${TARGET_PREFIX}${TARGET_PREFIX}*
 
+	# Symlinks so we can use these trivially on the target
+	if [ -e ${TARGET_PREFIX}g77 ]; then
+		ln -sf ${TARGET_PREFIX}g77 g77 || true
+		ln -sf g77 f77 || true
+	fi
 	if [ -e ${TARGET_PREFIX}gfortran ]; then
 		ln -sf ${TARGET_PREFIX}gfortran gfortran || true
 		ln -sf gfortran f95 || true
@@ -193,8 +218,37 @@ do_install () {
 	install -d ${D}${libdir}/bfd-plugins
 	ln -sf ${libexecdir}/gcc/${TARGET_SYS}/${BINV}/liblto_plugin.so ${D}${libdir}/bfd-plugins/liblto_plugin.so
 	chown -R root:root ${D}
+}
 
-	cleanup_installed_include_fixed
+do_install:append () {
+        #
+        # Thefixinc.sh script, run on the gcc's compile phase, looks into sysroot header
+        # files and places the modified files into
+        # {D}${libdir}/gcc/${TARGET_SYS}/${BINV}/include-fixed folder. This makes the
+        # build not deterministic. The following code prunes all those headers
+        # except those under include-fixed/linux, *limits.h and README, yielding
+        # the same include-fixed folders no matter what sysroot
+
+        include_fixed="${D}${libdir}/gcc/${TARGET_SYS}/${BINV}/include-fixed"
+        for f in $(find ${include_fixed} -type f); do
+                case $f in
+                */include-fixed/linux/*)
+                    continue
+                    ;;
+                */include-fixed/*limits.h)
+                    continue
+                    ;;
+                */include-fixed/README)
+                    continue
+                    ;;
+                *)
+                    # remove file and directory if empty
+                    bbdebug 2 "Pruning $f"
+                    rm $f
+                    find $(dirname $f) -maxdepth 0 -empty -exec rmdir {} \;
+                    ;;
+                esac
+        done
 }
 
 # Installing /usr/lib/gcc/* means we'd have two copies, one from gcc-cross

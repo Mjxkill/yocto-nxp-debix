@@ -6,11 +6,9 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 SRC_URI = "file://udp_server.c \
            file://udp_client.c \
            file://test_smack_udp_sockets.sh \
-"
+" 
 
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
-
+S = "${WORKDIR}"
 do_compile() {
     ${CC} udp_client.c ${LDFLAGS} -o udp_client
     ${CC} udp_server.c ${LDFLAGS} -o udp_server

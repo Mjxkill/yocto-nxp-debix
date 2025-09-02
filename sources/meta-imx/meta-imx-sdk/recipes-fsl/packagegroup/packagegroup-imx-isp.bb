@@ -19,7 +19,6 @@ ISP_PKGS:mx8mp-nxp-bsp = " \
 ISP_PKGS:mx95-nxp-bsp = " \
     libcamera \
     libcamera-gst \
-    libcamera-pycamera \
 "
 RDEPENDS:${PN} = " \
     ${ISP_PKGS} \

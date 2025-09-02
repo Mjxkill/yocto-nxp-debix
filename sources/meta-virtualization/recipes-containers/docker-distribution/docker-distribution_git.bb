@@ -3,16 +3,16 @@ SUMMARY = "The Docker toolset to pack, ship, store, and deliver content"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=d2794c0df5b907fdace235a619d80314"
 
-SRCREV_distribution= "f22dd6186008ff9d35f92acc5bc5fd16ba7ef95a"
-SRC_URI = "git://github.com/docker/distribution.git;branch=main;name=distribution;destsuffix=git/src/github.com/distribution/distribution/v3;protocol=https \
+SRCREV_distribution= "d607c6ccb9372e05556624f973119a23d3a42987"
+SRC_URI = "git://github.com/docker/distribution.git;branch=release/2.8;name=distribution;destsuffix=git/src/github.com/docker/distribution;protocol=https \
            file://docker-registry.service \
            file://0001-build-use-to-use-cross-go-compiler.patch \
           "
 
 PACKAGES =+ "docker-registry"
 
-PV = "v3.0.0-beta.1"
-S = "${WORKDIR}/git/src/github.com/distribution/distribution/v3"
+PV = "v2.8.3+git"
+S = "${WORKDIR}/git/src/github.com/docker/distribution"
 
 GO_IMPORT = "import"
 
@@ -48,7 +48,7 @@ do_install() {
 
 	if ${@bb.utils.contains('DISTRO_FEATURES','systemd','true','false',d)}; then
 	    install -d ${D}${systemd_unitdir}/system
-	    install -m 644 ${UNPACKDIR}/docker-registry.service ${D}/${systemd_unitdir}/system
+	    install -m 644 ${WORKDIR}/docker-registry.service ${D}/${systemd_unitdir}/system
 	fi
 
 	install -d ${D}/${sysconfdir}/docker-distribution/registry/
@@ -73,3 +73,5 @@ SYSTEMD_AUTO_ENABLE:docker-registry = "enable"
 RDEPENDS:${PN}-ptest:remove = "${PN}"
 
 CVE_PRODUCT = "docker_registry"
+
+COMPATIBLE_HOST:riscv64 = "null"

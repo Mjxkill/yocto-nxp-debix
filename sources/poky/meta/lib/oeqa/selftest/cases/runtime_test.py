@@ -310,7 +310,10 @@ class Postinst(OESelftestTestCase):
                 features += 'IMAGE_FEATURES += "package-management empty-root-password"\n'
                 features += 'PACKAGE_CLASSES = "%s"\n' % classes
                 if init_manager == "systemd":
-                    features += 'INIT_MANAGER = "systemd"\n'
+                    features += 'DISTRO_FEATURES:append = " systemd usrmerge"\n'
+                    features += 'VIRTUAL-RUNTIME_init_manager = "systemd"\n'
+                    features += 'DISTRO_FEATURES_BACKFILL_CONSIDERED = "sysvinit"\n'
+                    features += 'VIRTUAL-RUNTIME_initscripts = ""\n'
                 self.write_config(features)
 
                 bitbake('core-image-minimal')

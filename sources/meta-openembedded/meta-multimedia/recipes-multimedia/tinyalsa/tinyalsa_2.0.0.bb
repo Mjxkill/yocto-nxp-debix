@@ -4,15 +4,16 @@ HOMEPAGE = "https://github.com/tinyalsa/tinyalsa"
 SECTION = "libs/multimedia"
 
 LICENSE = "BSD-3-Clause"
-LIC_FILES_CHKSUM = "file://NOTICE;md5=d2918795d9185efcbf430b9ad5cda46d"
+LIC_FILES_CHKSUM = "file://NOTICE;md5=e04cd6fa58488e016f7fb648ebea1db4"
 
-PV .= "+git"
-SRCREV = "f78ed25aced2dfea743867b8205a787bfb091340"
-SRC_URI = "git://github.com/tinyalsa/tinyalsa;branch=master;protocol=https"
+SRCREV = "1c5fb68ced57d838f2b7ecd0c00bc1fefc9ab60d"
+SRC_URI = "git://github.com/tinyalsa/tinyalsa;branch=master;protocol=https \
+	   	    file://0001-fixed-compilation-error-caused-by-strncpy.patch \
+          "
 
 S = "${WORKDIR}/git"
 
-inherit meson
+inherit cmake
 
 # tinyalsa is built as a static library. Enable PIC to avoid relocation
 # errors like these:

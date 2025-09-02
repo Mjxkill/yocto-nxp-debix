@@ -365,43 +365,45 @@ class PackageManager(object, metaclass=ABCMeta):
                 for complementary_linguas in (self.d.getVar('IMAGE_LINGUAS_COMPLEMENTARY') or "").split():
                     globs += (" " + complementary_linguas) % lang
 
-        if globs:
-            # we need to write the list of installed packages to a file because the
-            # oe-pkgdata-util reads it from a file
-            with tempfile.NamedTemporaryFile(mode="w+", prefix="installed-pkgs") as installed_pkgs:
-                pkgs = self.list_installed()
+        if globs is None:
+            return
 
-                provided_pkgs = set()
-                for pkg in pkgs.values():
-                    provided_pkgs |= set(pkg.get('provs', []))
+        # we need to write the list of installed packages to a file because the
+        # oe-pkgdata-util reads it from a file
+        with tempfile.NamedTemporaryFile(mode="w+", prefix="installed-pkgs") as installed_pkgs:
+            pkgs = self.list_installed()
 
-                output = oe.utils.format_pkg_list(pkgs, "arch")
-                installed_pkgs.write(output)
-                installed_pkgs.flush()
+            provided_pkgs = set()
+            for pkg in pkgs.values():
+                provided_pkgs |= set(pkg.get('provs', []))
 
-                cmd = ["oe-pkgdata-util",
-                    "-p", self.d.getVar('PKGDATA_DIR'), "glob", installed_pkgs.name,
-                    globs]
-                exclude = self.d.getVar('PACKAGE_EXCLUDE_COMPLEMENTARY')
-                if exclude:
-                    cmd.extend(['--exclude=' + '|'.join(exclude.split())])
-                try:
-                    bb.note('Running %s' % cmd)
-                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    stdout, stderr = proc.communicate()
-                    if stderr: bb.note(stderr.decode("utf-8"))
-                    complementary_pkgs = stdout.decode("utf-8")
-                    complementary_pkgs = set(complementary_pkgs.split())
-                    skip_pkgs = sorted(complementary_pkgs & provided_pkgs)
-                    install_pkgs = sorted(complementary_pkgs - provided_pkgs)
-                    bb.note("Installing complementary packages ... %s (skipped already provided packages %s)" % (
-                        ' '.join(install_pkgs),
-                        ' '.join(skip_pkgs)))
-                    self.install(install_pkgs, hard_depends_only=True)
-                except subprocess.CalledProcessError as e:
-                    bb.fatal("Could not compute complementary packages list. Command "
-                            "'%s' returned %d:\n%s" %
-                            (' '.join(cmd), e.returncode, e.output.decode("utf-8")))
+            output = oe.utils.format_pkg_list(pkgs, "arch")
+            installed_pkgs.write(output)
+            installed_pkgs.flush()
+
+            cmd = ["oe-pkgdata-util",
+                   "-p", self.d.getVar('PKGDATA_DIR'), "glob", installed_pkgs.name,
+                   globs]
+            exclude = self.d.getVar('PACKAGE_EXCLUDE_COMPLEMENTARY')
+            if exclude:
+                cmd.extend(['--exclude=' + '|'.join(exclude.split())])
+            try:
+                bb.note('Running %s' % cmd)
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                stdout, stderr = proc.communicate()
+                if stderr: bb.note(stderr.decode("utf-8"))
+                complementary_pkgs = stdout.decode("utf-8")
+                complementary_pkgs = set(complementary_pkgs.split())
+                skip_pkgs = sorted(complementary_pkgs & provided_pkgs)
+                install_pkgs = sorted(complementary_pkgs - provided_pkgs)
+                bb.note("Installing complementary packages ... %s (skipped already provided packages %s)" % (
+                    ' '.join(install_pkgs),
+                    ' '.join(skip_pkgs)))
+                self.install(install_pkgs, hard_depends_only=True)
+            except subprocess.CalledProcessError as e:
+                bb.fatal("Could not compute complementary packages list. Command "
+                         "'%s' returned %d:\n%s" %
+                         (' '.join(cmd), e.returncode, e.output.decode("utf-8")))
 
         if self.d.getVar('IMAGE_LOCALES_ARCHIVE') == '1':
             target_arch = self.d.getVar('TARGET_ARCH')

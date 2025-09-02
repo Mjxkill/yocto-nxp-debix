@@ -14,7 +14,7 @@ PACKAGECONFIG ??= "compiler-rt exceptions ${@bb.utils.contains("TC_CXX_RUNTIME",
 PACKAGECONFIG:append:armv5 = " no-atomics"
 PACKAGECONFIG:remove:class-native = "compiler-rt"
 PACKAGECONFIG[unwind] = "-DLIBCXXABI_USE_LLVM_UNWINDER=ON -DLIBCXXABI_ENABLE_STATIC_UNWINDER=ON,-DLIBCXXABI_USE_LLVM_UNWINDER=OFF,,"
-PACKAGECONFIG[exceptions] = "-DLIBCXXABI_ENABLE_EXCEPTIONS=ON -DLIBCXX_ENABLE_EXCEPTIONS=ON,-DLIBCXXABI_ENABLE_EXCEPTIONS=OFF -DLIBCXX_ENABLE_EXCEPTIONS=OFF -DCMAKE_REQUIRED_FLAGS='-fno-exceptions',"
+PACKAGECONFIG[exceptions] = "-DLIBCXXABI_ENABLE_EXCEPTIONS=ON -DDLIBCXX_ENABLE_EXCEPTIONS=ON,-DLIBCXXABI_ENABLE_EXCEPTIONS=OFF -DLIBCXX_ENABLE_EXCEPTIONS=OFF -DCMAKE_REQUIRED_FLAGS='-fno-exceptions',"
 PACKAGECONFIG[no-atomics] = "-D_LIBCXXABI_HAS_ATOMIC_BUILTINS=OFF -DCMAKE_SHARED_LINKER_FLAGS='-latomic',,"
 PACKAGECONFIG[compiler-rt] = "-DLIBCXX_USE_COMPILER_RT=ON -DLIBCXXABI_USE_COMPILER_RT=ON -DLIBUNWIND_USE_COMPILER_RT=ON,,compiler-rt"
 PACKAGECONFIG[unwind-shared] = "-DLIBUNWIND_ENABLE_SHARED=ON,-DLIBUNWIND_ENABLE_SHARED=OFF,,"
@@ -41,6 +41,7 @@ BUILD_CXXFLAGS += "-stdlib=libstdc++"
 BUILD_LDFLAGS += "-unwindlib=libgcc -rtlib=libgcc -stdlib=libstdc++"
 BUILD_CPPFLAGS:remove = "-stdlib=libc++"
 BUILD_LDFLAGS:remove = "-stdlib=libc++ -lc++abi"
+TUNE_CCARGS:remove = "-mbranch-protection=standard"
 
 INHIBIT_DEFAULT_DEPS = "1"
 
@@ -71,7 +72,6 @@ EXTRA_OECMAKE += "\
                   -DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind' \
                   -DLLVM_RUNTIME_TARGETS=${HOST_SYS} \
                   -DLLVM_LIBDIR_SUFFIX=${LLVM_LIBDIR_SUFFIX} \
-                  -DLLVM_APPEND_VC_REV=OFF \
                   -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
 "
 
@@ -106,14 +106,12 @@ do_install:append() {
             install -Dm 0644 ${S}/libunwind/include/$f ${D}${includedir}/$f
         done
         install -d ${D}${libdir}/pkgconfig
-        sed -e 's,@LIBDIR@,${libdir},g;s,@VERSION@,${PV},g' ${S}/libunwind/libunwind.pc.in > ${D}${libdir}/pkgconfig/libunwind.pc
+        sed -e 's,@LIBDIR@,${libdir},g;s,@VERSION@,${PV},g' ${S}/../libunwind.pc.in > ${D}${libdir}/pkgconfig/libunwind.pc
     fi
 }
 
 PACKAGES:append:runtime-llvm = " libunwind"
 FILES:libunwind:runtime-llvm = "${libdir}/libunwind.so.*"
-# Package library module manifest path
-FILES:${PN}-dev += "${datadir}/libc++/v1/ ${libdir}/libc++.modules.json"
 
 BBCLASSEXTEND = "native nativesdk"
 TOOLCHAIN:forcevariable = "clang"

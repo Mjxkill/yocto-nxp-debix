@@ -27,5 +27,3 @@ do_compile () {
 do_install () {
 	oe_runmake install 'DESTDIR=${D}'
 }
-
-COMPATIBLE_HOST:riscv32 = "null"

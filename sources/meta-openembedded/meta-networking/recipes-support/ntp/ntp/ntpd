@@ -72,7 +72,7 @@ case "$1" in
 	startdaemon
 	;;
   status)
-	status ntpd;
+	status /usr/sbin/ntpd;
 	exit $?
 	;;
   *)

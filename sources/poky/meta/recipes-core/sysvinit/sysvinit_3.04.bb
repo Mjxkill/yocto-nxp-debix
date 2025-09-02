@@ -9,8 +9,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=751419260aa954499f7abaabaa882bbe \
 
 RDEPENDS:${PN} = "${PN}-inittab"
 
-GITHUB_BASE_URI = "https://github.com/slicer69/${BPN}/releases/"
-SRC_URI = "${GITHUB_BASE_URI}/download/${PV}/${BP}.tar.xz \
+SRC_URI = "${SAVANNAH_GNU_MIRROR}/sysvinit/sysvinit-${PV}.tar.xz \
            file://install.patch \
            file://crypt-lib.patch \
            file://pidof-add-m-option.patch \
@@ -28,7 +27,7 @@ SRC_URI[sha256sum] = "2a621fe6e4528bc91308b74867ddaaebbdf7753f02395c0c5bae817bd2
 
 S = "${WORKDIR}/sysvinit-${PV}"
 
-inherit update-alternatives features_check github-releases
+inherit update-alternatives features_check
 DEPENDS:append = " update-rc.d-native base-passwd virtual/crypt"
 do_package_setscene[depends] = "${MLPREFIX}base-passwd:do_populate_sysroot"
 
@@ -98,18 +97,18 @@ do_install () {
 
 	sed -e \
 		's:#PSPLASH_TEXT#:${@bb.utils.contains("PACKAGECONFIG","psplash-text-updates","yes","no", d)}:g' \
-		${UNPACKDIR}/rcS-default > ${D}${sysconfdir}/default/rcS
+		${WORKDIR}/rcS-default > ${D}${sysconfdir}/default/rcS
 	chmod 0644 ${D}${sysconfdir}/default/rcS
-	install -m 0755    ${UNPACKDIR}/rc		${D}${sysconfdir}/init.d
-	install -m 0755    ${UNPACKDIR}/rcS		${D}${sysconfdir}/init.d
-	install -m 0755    ${UNPACKDIR}/bootlogd.init     ${D}${sysconfdir}/init.d/bootlogd
+	install -m 0755    ${WORKDIR}/rc		${D}${sysconfdir}/init.d
+	install -m 0755    ${WORKDIR}/rcS		${D}${sysconfdir}/init.d
+	install -m 0755    ${WORKDIR}/bootlogd.init     ${D}${sysconfdir}/init.d/bootlogd
 	ln -sf bootlogd ${D}${sysconfdir}/init.d/stop-bootlogd
 
 	update-rc.d -r ${D} bootlogd start 07 S .
 	update-rc.d -r ${D} stop-bootlogd start 99 2 3 4 5 .
 
 	install -d ${D}${sysconfdir}/default/volatiles
-	install -m 0644 ${UNPACKDIR}/01_bootlogd ${D}${sysconfdir}/default/volatiles
+	install -m 0644 ${WORKDIR}/01_bootlogd ${D}${sysconfdir}/default/volatiles
 
 	chown root:shutdown ${D}${base_sbindir}/halt ${D}${base_sbindir}/shutdown
 	chmod o-x,u+s ${D}${base_sbindir}/halt ${D}${base_sbindir}/shutdown

@@ -37,9 +37,6 @@ SOC_TOOLS_TEST_VIVANTE:mx8-nxp-bsp = "imx-gpu-viv-demos"
 RDEPENDS:${PN} += " \
     bridge-utils \
     can-utils \
-    can-utils-access \
-    can-utils-cantest \
-    can-utils-slcan \
     coreutils \
     cpufrequtils \
     cryptodev-module \
@@ -73,10 +70,6 @@ RDEPENDS:${PN} += " \
     ${@bb.utils.contains('DISTRO_FEATURES', 'wifi', 'hostapd sigma-dut', '', d)} \
 "
 
-RDEPENDS_DPDK ?= "dpdk ${RDEPENDS_DPDK_FPR} ${RDEPENDS_MTCP_DPDK}"
+RDEPENDS_DPDK ?= "dpdk ${RDEPENDS_DPDK_FPR}"
 RDEPENDS_DPDK_FPR = ""
-RDEPENDS_DPDK_FPR:mx93-nxp-bsp = "dpdk-fpr"
 RDEPENDS_DPDK_FPR:mx95-nxp-bsp = "dpdk-fpr"
-
-RDEPENDS_MTCP_DPDK = ""
-RDEPENDS_MTCP_DPDK:mx95-nxp-bsp = "mtcp-dpdk"

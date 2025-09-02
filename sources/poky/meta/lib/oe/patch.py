@@ -882,7 +882,7 @@ class UserResolver(Resolver):
             os.chdir(olddir)
 
 
-def patch_path(url, fetch, unpackdir, expand=True):
+def patch_path(url, fetch, workdir, expand=True):
     """Return the local path of a patch, or return nothing if this isn't a patch"""
 
     local = fetch.localpath(url)
@@ -891,7 +891,7 @@ def patch_path(url, fetch, unpackdir, expand=True):
     base, ext = os.path.splitext(os.path.basename(local))
     if ext in ('.gz', '.bz2', '.xz', '.Z'):
         if expand:
-            local = os.path.join(unpackdir, base)
+            local = os.path.join(workdir, base)
         ext = os.path.splitext(base)[1]
 
     urldata = fetch.ud[url]
@@ -905,12 +905,12 @@ def patch_path(url, fetch, unpackdir, expand=True):
     return local
 
 def src_patches(d, all=False, expand=True):
-    unpackdir = d.getVar('UNPACKDIR')
+    workdir = d.getVar('WORKDIR')
     fetch = bb.fetch2.Fetch([], d)
     patches = []
     sources = []
     for url in fetch.urls:
-        local = patch_path(url, fetch, unpackdir, expand)
+        local = patch_path(url, fetch, workdir, expand)
         if not local:
             if all:
                 local = fetch.localpath(url)

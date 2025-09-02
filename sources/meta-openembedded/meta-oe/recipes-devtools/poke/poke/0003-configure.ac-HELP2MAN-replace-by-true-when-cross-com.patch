@@ -11,16 +11,18 @@ Avoid:
       ./../poke/poke -o ./poke.1
 ../run: line 51: exec: :: not found
 
-Upstream-Status: Pending
 Signed-off-by: Romain Naour <romain.naour@gmail.com>
 ---
+Upstream-Status: Pending
 
  configure.ac | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
+diff --git a/configure.ac b/configure.ac
+index c2f0760a..93769ef9 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -148,7 +148,7 @@ gl_LIBTEXTSTYLE_OPTIONAL([0.20.5])
+@@ -74,7 +74,7 @@ gl_LIBTEXTSTYLE_OPTIONAL([0.20.5])
  if test $cross_compiling = no; then
    AM_MISSING_PROG(HELP2MAN, help2man)
  else
@@ -28,4 +30,7 @@ Signed-off-by: Romain Naour <romain.naour@gmail.com>
 +  HELP2MAN=true
  fi
  
- dnl The following Automake conditional is used in some Makefile.am files
+ dnl recfix is part of the GNU recutils suite, and is used in cfg.mk to
+-- 
+2.30.2
+

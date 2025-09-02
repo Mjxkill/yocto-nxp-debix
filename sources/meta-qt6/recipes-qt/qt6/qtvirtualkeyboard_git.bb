@@ -121,4 +121,3 @@ FILES:${PN}-dictionaries = "${QT6_INSTALL_DATADIR}/qtvirtualkeyboard/*/*.dat"
 
 DEPENDS += "qtbase qtdeclarative qtsvg qtdeclarative-native"
 
-INSANE_SKIP:${PN}-ptest += "buildpaths"

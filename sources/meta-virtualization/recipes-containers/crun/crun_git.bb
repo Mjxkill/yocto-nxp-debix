@@ -3,10 +3,10 @@ LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=b234ee4d69f5fce4486a80fdaf4a4263"
 PRIORITY = "optional"
 
-SRCREV_crun = "4b75c7cb574d642481c9346eb3d54e91c33ebaf2"
-SRCREV_libocispec = "68211ccc41201c45ad276b04c7f67d61e80b1f7a"
-SRCREV_ispec = "da92727e9c8761ec087890466b8756b755aefd37"
-SRCREV_rspec = "2d3f72ecad9e97c898e1eb04b899a51241f1cabd"
+SRCREV_crun = "89d44467e3b410b73f2065756a12789be45b855b"
+SRCREV_libocispec = "19c05670c37a42c217caa7b141bcaada7867cc15"
+SRCREV_ispec = "9615142d016838b5dfe7453f80af0be74feb5c7c"
+SRCREV_rspec = "720792f25ae6e9ee6b1332db698f37659e69ce8d"
 SRCREV_yajl = "f344d21280c3e4094919fd318bc5ce75da91fc06"
 
 SRCREV_FORMAT = "crun_rspec"
@@ -17,25 +17,19 @@ SRC_URI = "git://github.com/containers/crun.git;branch=main;name=crun;protocol=h
            git://github.com/containers/yajl.git;branch=main;name=yajl;destsuffix=git/libocispec/yajl;protocol=https \
           "
 
-PV = "v1.17+git${SRCREV_crun}"
+PV = "v1.14.3+git${SRCREV_crun}"
 S = "${WORKDIR}/git"
 
-inherit autotools-brokensep pkgconfig
+REQUIRED_DISTRO_FEATURES ?= "systemd seccomp"
 
-PACKAGECONFIG ??= " \
-    caps external-yajl man \
-    ${@bb.utils.contains('DISTRO_FEATURES', 'seccomp', 'seccomp', '', d)} \
-    ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'systemd', '', d)} \
-"
+inherit autotools-brokensep pkgconfig features_check
 
-PACKAGECONFIG[caps] = "--enable-caps,--disable-caps,libcap"
-PACKAGECONFIG[external-yajl] = "--disable-embedded-yajl,--enable-embedded-yajl,yajl"
-# whether to regenerate manpages that are already present in the repo
-PACKAGECONFIG[man] = ",,go-md2man-native"
-PACKAGECONFIG[seccomp] = "--enable-seccomp,--disable-seccomp,libseccomp"
-PACKAGECONFIG[systemd] = "--enable-systemd,--disable-systemd,systemd"
+PACKAGECONFIG ??= ""
 
-DEPENDS = "m4-native"
+DEPENDS = "yajl libcap go-md2man-native m4-native"
+# TODO: is there a packageconfig to turn this off ?
+DEPENDS += "libseccomp"
+DEPENDS += "systemd"
 DEPENDS:append:libc-musl = " argp-standalone"
 
 do_configure:prepend () {

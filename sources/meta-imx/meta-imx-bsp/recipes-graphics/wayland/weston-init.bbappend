@@ -3,6 +3,9 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 GBM_FORMAT_VALUE = "argb8888"
 
 update_file() {
+    if ! grep -q "$1" $3; then
+        bbfatal $1 not found in $3
+    fi
     sed -i -e "s,$1,$2," $3
 }
 
@@ -23,12 +26,9 @@ do_install:append() {
     if ! [ "${@bb.utils.contains('PACKAGECONFIG', 'gbm-format', 'yes', 'no', d)}" = "yes" ]; then
         sed -i -e "/^\[core\]/a #gbm-format=${GBM_FORMAT_VALUE}" ${D}${sysconfdir}/xdg/weston/weston.ini
     fi
-}
 
-do_install:append:mx6-nxp-bsp() {
-    update_file "--no-resizeable" "--no-clients-resize" ${D}${sysconfdir}/xdg/weston/weston.ini
-}
-
-do_install:append:mx7-nxp-bsp() {
-    update_file "--no-resizeable" "--no-clients-resize" ${D}${sysconfdir}/xdg/weston/weston.ini
+    if [ "${@bb.utils.contains('PACKAGECONFIG', 'rdp', 'yes', 'no', d)}" = "yes" ]; then
+        sed -i -e "s|^command=${bindir}/weston .*|& --rdp-tls-cert=${sysconfdir}/freerdp/keys/server.crt --rdp-tls-key=${sysconfdir}/freerdp/keys/server.key|" ${D}${sysconfdir}/xdg/weston/weston.ini
+        sed -i -e "/^\[core\]/a modules=screen-share.so" ${D}${sysconfdir}/xdg/weston/weston.ini
+    fi
 }

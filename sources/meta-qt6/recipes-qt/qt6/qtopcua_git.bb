@@ -31,5 +31,3 @@ SECURITY_STRINGFORMAT = ""
 DEPENDS += "qtbase qtopcua-native"
 
 BBCLASSEXTEND = "native nativesdk"
-
-INSANE_SKIP:${PN}-ptest += "buildpaths"

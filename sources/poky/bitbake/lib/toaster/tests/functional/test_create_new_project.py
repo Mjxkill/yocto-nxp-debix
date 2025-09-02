@@ -88,29 +88,13 @@ class TestCreateNewProject(SeleniumFunctionalTestCase):
             False,
         )
 
-    def test_create_new_project_scarthgap(self):
-        """ Test create new project using:
-          - Project Name: Any string
-          - Release: Yocto Project 5.0 "Scarthgap" (option value: 1)
-          - Merge Toaster settings: True
-        """
-        release = '1'
-        release_title = 'Yocto Project 5.0 "Scarthgap"'
-        project_name = 'projectscarthgap'
-        self._create_test_new_project(
-            project_name,
-            release,
-            release_title,
-            True,
-        )
-
     def test_create_new_project_kirkstone(self):
         """ Test create new project using:
           - Project Name: Any string
-          - Release: Yocto Project 4.0 "Kirkstone" (option value: 4)
+          - Release: Yocto Project 4.0 "Kirkstone" (option value: 1)
           - Merge Toaster settings: True
         """
-        release = '4'
+        release = '1'
         release_title = 'Yocto Project 4.0 "Kirkstone"'
         project_name = 'projectkirkstone'
         self._create_test_new_project(
@@ -118,6 +102,22 @@ class TestCreateNewProject(SeleniumFunctionalTestCase):
             release,
             release_title,
             True,
+        )
+
+    def test_create_new_project_dunfell(self):
+        """ Test create new project using:
+          - Project Name: Any string
+          - Release: Yocto Project 3.1 "Dunfell" (option value: 5)
+          - Merge Toaster settings: False
+        """
+        release = '5'
+        release_title = 'Yocto Project 3.1 "Dunfell"'
+        project_name = 'projectdunfell'
+        self._create_test_new_project(
+            project_name,
+            release,
+            release_title,
+            False,
         )
 
     def test_create_new_project_local(self):

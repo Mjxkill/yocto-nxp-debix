@@ -26,35 +26,39 @@
 
 # Elect whether a given type of error is a warning or error, they may
 # have been set by other files.
-WARN_QA ?= "32bit-time native-last pep517-backend"
-ERROR_QA ?= "dev-so debug-deps dev-deps debug-files arch pkgconfig la \
+WARN_QA ?= " libdir xorg-driver-abi buildpaths \
             textrel incompatible-license files-invalid \
             infodir build-deps src-uri-bad symlink-to-sysroot multilib \
             invalid-packageconfig host-user-contaminated uppercase-pn \
             mime mime-xdg unlisted-pkg-lics unhandled-features-check \
-            missing-update-alternatives missing-ptest \
+            missing-update-alternatives native-last missing-ptest \
             license-exists license-no-generic license-syntax license-format \
-            license-exception license-file-missing obsolete-license \
-            libdir xorg-driver-abi buildpaths \
-            dep-cmp pkgvarcheck perm-config perm-line perm-link \
-            packages-list pkgv-undefined var-undefined \
+            license-incompatible license-file-missing obsolete-license \
+            32bit-time virtual-slash \
+            "
+ERROR_QA ?= "dev-so debug-deps dev-deps debug-files arch pkgconfig la \
+            perms dep-cmp pkgvarcheck perm-config perm-line perm-link \
+            split-strip packages-list pkgv-undefined var-undefined \
             version-going-backwards expanded-d invalid-chars \
             license-checksum dev-elf file-rdeps configure-unsafe \
             configure-gettext perllocalpod shebang-size \
-            already-stripped installed-vs-shipped ldflags \
-            pn-overrides unknown-configure-option \
+            already-stripped installed-vs-shipped ldflags compile-host-path \
+            install-host-path pn-overrides unknown-configure-option \
             useless-rpaths rpaths staticdev empty-dirs \
-            patch-fuzz patch-status virtual-slash \
+            patch-fuzz \
             "
 # Add usrmerge QA check based on distro feature
 ERROR_QA:append = "${@bb.utils.contains('DISTRO_FEATURES', 'usrmerge', ' usrmerge', '', d)}"
+ERROR_QA:append:layer-core = " patch-status"
 WARN_QA:append:layer-core = " missing-metadata missing-maintainer"
 
 FAKEROOT_QA = "host-user-contaminated"
 FAKEROOT_QA[doc] = "QA tests which need to run under fakeroot. If any \
 enabled tests are listed here, the do_package_qa task will run under fakeroot."
 
-UNKNOWN_CONFIGURE_OPT_IGNORE ?= "--enable-nls --disable-nls --disable-silent-rules --disable-dependency-tracking --disable-static"
+ALL_QA = "${WARN_QA} ${ERROR_QA}"
+
+UNKNOWN_CONFIGURE_OPT_IGNORE ?= "--enable-nls --disable-nls --disable-silent-rules --disable-dependency-tracking --with-libtool-sysroot --disable-static"
 
 # This is a list of directories that are expected to be empty.
 QA_EMPTY_DIRS ?= " \
@@ -81,7 +85,7 @@ def package_qa_clean_path(path, d, pkg=None):
     return path.replace(d.getVar("TMPDIR"), "/").replace("//", "/")
 
 QAPATHTEST[shebang-size] = "package_qa_check_shebang_size"
-def package_qa_check_shebang_size(path, name, d, elf):
+def package_qa_check_shebang_size(path, name, d, elf, messages):
     import stat
     if os.path.islink(path) or stat.S_ISFIFO(os.stat(path).st_mode) or elf:
         return
@@ -100,22 +104,25 @@ def package_qa_check_shebang_size(path, name, d, elf):
             return
 
         if len(stanza) > 129:
-            oe.qa.handle_error("shebang-size", "%s: %s maximum shebang size exceeded, the maximum size is 128." % (name, package_qa_clean_path(path, d, name)), d)
+            oe.qa.add_message(messages, "shebang-size", "%s: %s maximum shebang size exceeded, the maximum size is 128." % (name, package_qa_clean_path(path, d, name)))
             return
 
 QAPATHTEST[libexec] = "package_qa_check_libexec"
-def package_qa_check_libexec(path,name, d, elf):
+def package_qa_check_libexec(path,name, d, elf, messages):
 
     # Skip the case where the default is explicitly /usr/libexec
     libexec = d.getVar('libexecdir')
     if libexec == "/usr/libexec":
-        return
+        return True
 
     if 'libexec' in path.split(os.path.sep):
-        oe.qa.handle_error("libexec", "%s: %s is using libexec please relocate to %s" % (name, package_qa_clean_path(path, d, name), libexec), d)
+        oe.qa.add_message(messages, "libexec", "%s: %s is using libexec please relocate to %s" % (name, package_qa_clean_path(path, d, name), libexec))
+        return False
+
+    return True
 
 QAPATHTEST[rpaths] = "package_qa_check_rpath"
-def package_qa_check_rpath(file,name, d, elf):
+def package_qa_check_rpath(file,name, d, elf, messages):
     """
     Check for dangerous RPATHs
     """
@@ -137,10 +144,10 @@ def package_qa_check_rpath(file,name, d, elf):
             rpath = m.group(1)
             for dir in bad_dirs:
                 if dir in rpath:
-                    oe.qa.handle_error("rpaths", "package %s contains bad RPATH %s in file %s" % (name, rpath, file), d)
+                    oe.qa.add_message(messages, "rpaths", "package %s contains bad RPATH %s in file %s" % (name, rpath, file))
 
 QAPATHTEST[useless-rpaths] = "package_qa_check_useless_rpaths"
-def package_qa_check_useless_rpaths(file, name, d, elf):
+def package_qa_check_useless_rpaths(file, name, d, elf, messages):
     """
     Check for RPATHs that are useless but not dangerous
     """
@@ -167,31 +174,31 @@ def package_qa_check_useless_rpaths(file, name, d, elf):
             if rpath_eq(rpath, libdir) or rpath_eq(rpath, base_libdir):
                 # The dynamic linker searches both these places anyway.  There is no point in
                 # looking there again.
-                oe.qa.handle_error("useless-rpaths", "%s: %s contains probably-redundant RPATH %s" % (name, package_qa_clean_path(file, d, name), rpath), d)
+                oe.qa.add_message(messages, "useless-rpaths", "%s: %s contains probably-redundant RPATH %s" % (name, package_qa_clean_path(file, d, name), rpath))
 
 QAPATHTEST[dev-so] = "package_qa_check_dev"
-def package_qa_check_dev(path, name, d, elf):
+def package_qa_check_dev(path, name, d, elf, messages):
     """
     Check for ".so" library symlinks in non-dev packages
     """
 
     if not name.endswith("-dev") and not name.endswith("-dbg") and not name.endswith("-ptest") and not name.startswith("nativesdk-") and path.endswith(".so") and os.path.islink(path):
-        oe.qa.handle_error("dev-so", "non -dev/-dbg/nativesdk- package %s contains symlink .so '%s'" % \
-                 (name, package_qa_clean_path(path, d, name)), d)
+        oe.qa.add_message(messages, "dev-so", "non -dev/-dbg/nativesdk- package %s contains symlink .so '%s'" % \
+                 (name, package_qa_clean_path(path, d, name)))
 
 QAPATHTEST[dev-elf] = "package_qa_check_dev_elf"
-def package_qa_check_dev_elf(path, name, d, elf):
+def package_qa_check_dev_elf(path, name, d, elf, messages):
     """
     Check that -dev doesn't contain real shared libraries.  The test has to
     check that the file is not a link and is an ELF object as some recipes
     install link-time .so files that are linker scripts.
     """
     if name.endswith("-dev") and path.endswith(".so") and not os.path.islink(path) and elf:
-        oe.qa.handle_error("dev-elf", "-dev package %s contains non-symlink .so '%s'" % \
-                 (name, package_qa_clean_path(path, d, name)), d)
+        oe.qa.add_message(messages, "dev-elf", "-dev package %s contains non-symlink .so '%s'" % \
+                 (name, package_qa_clean_path(path, d, name)))
 
 QAPATHTEST[staticdev] = "package_qa_check_staticdev"
-def package_qa_check_staticdev(path, name, d, elf):
+def package_qa_check_staticdev(path, name, d, elf, messages):
     """
     Check for ".a" library in non-staticdev packages
     There are a number of exceptions to this rule, -pic packages can contain
@@ -200,22 +207,22 @@ def package_qa_check_staticdev(path, name, d, elf):
     """
 
     if not name.endswith("-pic") and not name.endswith("-staticdev") and not name.endswith("-ptest") and path.endswith(".a") and not path.endswith("_nonshared.a") and not '/usr/lib/debug-static/' in path and not '/.debug-static/' in path:
-        oe.qa.handle_error("staticdev", "non -staticdev package contains static .a library: %s path '%s'" % \
-                 (name, package_qa_clean_path(path, d, name)), d)
+        oe.qa.add_message(messages, "staticdev", "non -staticdev package contains static .a library: %s path '%s'" % \
+                 (name, package_qa_clean_path(path, d, name)))
 
 QAPATHTEST[mime] = "package_qa_check_mime"
-def package_qa_check_mime(path, name, d, elf):
+def package_qa_check_mime(path, name, d, elf, messages):
     """
     Check if package installs mime types to /usr/share/mime/packages
     while no inheriting mime.bbclass
     """
 
     if d.getVar("datadir") + "/mime/packages" in path and path.endswith('.xml') and not bb.data.inherits_class("mime", d):
-        oe.qa.handle_error("mime", "package contains mime types but does not inherit mime: %s path '%s'" % \
-                 (name, package_qa_clean_path(path, d, name)), d)
+        oe.qa.add_message(messages, "mime", "package contains mime types but does not inherit mime: %s path '%s'" % \
+                 (name, package_qa_clean_path(path, d, name)))
 
 QAPATHTEST[mime-xdg] = "package_qa_check_mime_xdg"
-def package_qa_check_mime_xdg(path, name, d, elf):
+def package_qa_check_mime_xdg(path, name, d, elf, messages):
     """
     Check if package installs desktop file containing MimeType and requires
     mime-types.bbclass to create /usr/share/applications/mimeinfo.cache
@@ -238,10 +245,10 @@ def package_qa_check_mime_xdg(path, name, d, elf):
             if name == d.getVar('PN'):
                 pkgname = '${PN}'
             wstr += "If yes: add \'inhert mime-xdg\' and \'MIME_XDG_PACKAGES += \"%s\"\' / if no add \'INSANE_SKIP:%s += \"mime-xdg\"\' to recipe." % (pkgname, pkgname)
-            oe.qa.handle_error("mime-xdg", wstr, d)
+            oe.qa.add_message(messages, "mime-xdg", wstr)
         if mime_type_found:
-            oe.qa.handle_error("mime-xdg", "%s: contains desktop file with key 'MimeType' but does not inhert mime-xdg: %s" % \
-                    (name, package_qa_clean_path(path, d, name)), d)
+            oe.qa.add_message(messages, "mime-xdg", "%s: contains desktop file with key 'MimeType' but does not inhert mime-xdg: %s" % \
+                    (name, package_qa_clean_path(path, d, name)))
 
 def package_qa_check_libdir(d):
     """
@@ -307,18 +314,18 @@ def package_qa_check_libdir(d):
         oe.qa.handle_error("libdir", "\n".join(messages), d)
 
 QAPATHTEST[debug-files] = "package_qa_check_dbg"
-def package_qa_check_dbg(path, name, d, elf):
+def package_qa_check_dbg(path, name, d, elf, messages):
     """
     Check for ".debug" files or directories outside of the dbg package
     """
 
     if not "-dbg" in name and not "-ptest" in name:
         if '.debug' in path.split(os.path.sep):
-            oe.qa.handle_error("debug-files", "%s: non debug package contains .debug directory %s" % \
-                     (name, package_qa_clean_path(path, d, name)), d)
+            oe.qa.add_message(messages, "debug-files", "%s: non debug package contains .debug directory %s" % \
+                     (name, package_qa_clean_path(path, d, name)))
 
 QAPATHTEST[arch] = "package_qa_check_arch"
-def package_qa_check_arch(path,name,d, elf):
+def package_qa_check_arch(path,name,d, elf, messages):
     """
     Check if archs are compatible
     """
@@ -334,7 +341,7 @@ def package_qa_check_arch(path,name,d, elf):
 
     if host_arch == "allarch":
         pn = d.getVar('PN')
-        oe.qa.handle_error("arch", pn + ": Recipe inherits the allarch class, but has packaged architecture-specific binaries", d)
+        oe.qa.add_message(messages, "arch", pn + ": Recipe inherits the allarch class, but has packaged architecture-specific binaries")
         return
 
     # avoid following links to /usr/bin (e.g. on udev builds)
@@ -352,18 +359,17 @@ def package_qa_check_arch(path,name,d, elf):
             host_os == "linux-gnu_ilp32" or re.match(r'mips64.*32', d.getVar('DEFAULTTUNE')))
     is_bpf = (oe.qa.elf_machine_to_string(elf.machine()) == "BPF")
     if not ((machine == elf.machine()) or is_32 or is_bpf):
-        oe.qa.handle_error("arch", "Architecture did not match (%s, expected %s) in %s" % \
-                 (oe.qa.elf_machine_to_string(elf.machine()), oe.qa.elf_machine_to_string(machine), package_qa_clean_path(path, d, name)), d)
+        oe.qa.add_message(messages, "arch", "Architecture did not match (%s, expected %s) in %s" % \
+                 (oe.qa.elf_machine_to_string(elf.machine()), oe.qa.elf_machine_to_string(machine), package_qa_clean_path(path, d, name)))
     elif not ((bits == elf.abiSize()) or is_32 or is_bpf):
-        oe.qa.handle_error("arch", "Bit size did not match (%d, expected %d) in %s" % \
-                 (elf.abiSize(), bits, package_qa_clean_path(path, d, name)), d)
+        oe.qa.add_message(messages, "arch", "Bit size did not match (%d, expected %d) in %s" % \
+                 (elf.abiSize(), bits, package_qa_clean_path(path, d, name)))
     elif not ((littleendian == elf.isLittleEndian()) or is_bpf):
-        oe.qa.handle_error("arch", "Endiannes did not match (%d, expected %d) in %s" % \
-                 (elf.isLittleEndian(), littleendian, package_qa_clean_path(path, d, name)), d)
-package_qa_check_arch[vardepsexclude] = "DEFAULTTUNE"
+        oe.qa.add_message(messages, "arch", "Endiannes did not match (%d, expected %d) in %s" % \
+                 (elf.isLittleEndian(), littleendian, package_qa_clean_path(path, d, name)))
 
 QAPATHTEST[desktop] = "package_qa_check_desktop"
-def package_qa_check_desktop(path, name, d, elf):
+def package_qa_check_desktop(path, name, d, elf, messages):
     """
     Run all desktop files through desktop-file-validate.
     """
@@ -372,10 +378,10 @@ def package_qa_check_desktop(path, name, d, elf):
         output = os.popen("%s %s" % (desktop_file_validate, path))
         # This only produces output on errors
         for l in output:
-            oe.qa.handle_error("desktop", "Desktop file issue: " + l.strip(), d)
+            oe.qa.add_message(messages, "desktop", "Desktop file issue: " + l.strip())
 
 QAPATHTEST[textrel] = "package_qa_textrel"
-def package_qa_textrel(path, name, d, elf):
+def package_qa_textrel(path, name, d, elf, messages):
     """
     Check if the binary contains relocations in .text
     """
@@ -387,17 +393,21 @@ def package_qa_textrel(path, name, d, elf):
         return
 
     phdrs = elf.run_objdump("-p", d)
+    sane = True
 
     import re
     textrel_re = re.compile(r"\s+TEXTREL\s+")
     for line in phdrs.split("\n"):
         if textrel_re.match(line):
-            path = package_qa_clean_path(path, d, name)
-            oe.qa.handle_error("textrel", "%s: ELF binary %s has relocations in .text" % (name, path), d)
-            return
+            sane = False
+            break
+
+    if not sane:
+        path = package_qa_clean_path(path, d, name)
+        oe.qa.add_message(messages, "textrel", "%s: ELF binary %s has relocations in .text" % (name, path))
 
 QAPATHTEST[ldflags] = "package_qa_hash_style"
-def package_qa_hash_style(path, name, d, elf):
+def package_qa_hash_style(path, name, d, elf, messages):
     """
     Check if the binary has the right hash style...
     """
@@ -429,12 +439,11 @@ def package_qa_hash_style(path, name, d, elf):
             sane = True
     if has_syms and not sane:
         path = package_qa_clean_path(path, d, name)
-        oe.qa.handle_error("ldflags", "File %s in package %s doesn't have GNU_HASH (didn't pass LDFLAGS?)" % (path, name), d)
-package_qa_hash_style[vardepsexclude] = "TCLIBC"
+        oe.qa.add_message(messages, "ldflags", "File %s in package %s doesn't have GNU_HASH (didn't pass LDFLAGS?)" % (path, name))
 
 
 QAPATHTEST[buildpaths] = "package_qa_check_buildpaths"
-def package_qa_check_buildpaths(path, name, d, elf):
+def package_qa_check_buildpaths(path, name, d, elf, messages):
     """
     Check for build paths inside target files and error if paths are not
     explicitly ignored.
@@ -450,12 +459,12 @@ def package_qa_check_buildpaths(path, name, d, elf):
     with open(path, 'rb') as f:
         file_content = f.read()
         if tmpdir in file_content:
-            path = package_qa_clean_path(path, d, name)
-            oe.qa.handle_error("buildpaths", "File %s in package %s contains reference to TMPDIR" % (path, name), d)
+            trimmed = path.replace(os.path.join (d.getVar("PKGDEST"), name), "")
+            oe.qa.add_message(messages, "buildpaths", "File %s in package %s contains reference to TMPDIR" % (trimmed, name))
 
 
 QAPATHTEST[xorg-driver-abi] = "package_qa_check_xorg_driver_abi"
-def package_qa_check_xorg_driver_abi(path, name, d, elf):
+def package_qa_check_xorg_driver_abi(path, name, d, elf, messages):
     """
     Check that all packages containing Xorg drivers have ABI dependencies
     """
@@ -470,20 +479,20 @@ def package_qa_check_xorg_driver_abi(path, name, d, elf):
         for rdep in bb.utils.explode_deps(d.getVar('RDEPENDS:' + name) or ""):
             if rdep.startswith("%sxorg-abi-" % mlprefix):
                 return
-        oe.qa.handle_error("xorg-driver-abi", "Package %s contains Xorg driver (%s) but no xorg-abi- dependencies" % (name, os.path.basename(path)), d)
+        oe.qa.add_message(messages, "xorg-driver-abi", "Package %s contains Xorg driver (%s) but no xorg-abi- dependencies" % (name, os.path.basename(path)))
 
 QAPATHTEST[infodir] = "package_qa_check_infodir"
-def package_qa_check_infodir(path, name, d, elf):
+def package_qa_check_infodir(path, name, d, elf, messages):
     """
     Check that /usr/share/info/dir isn't shipped in a particular package
     """
     infodir = d.expand("${infodir}/dir")
 
     if infodir in path:
-        oe.qa.handle_error("infodir", "The %s file is not meant to be shipped in a particular package." % infodir, d)
+        oe.qa.add_message(messages, "infodir", "The /usr/share/info/dir file is not meant to be shipped in a particular package.")
 
 QAPATHTEST[symlink-to-sysroot] = "package_qa_check_symlink_to_sysroot"
-def package_qa_check_symlink_to_sysroot(path, name, d, elf):
+def package_qa_check_symlink_to_sysroot(path, name, d, elf, messages):
     """
     Check that the package doesn't contain any absolute symlinks to the sysroot.
     """
@@ -492,11 +501,11 @@ def package_qa_check_symlink_to_sysroot(path, name, d, elf):
         if os.path.isabs(target):
             tmpdir = d.getVar('TMPDIR')
             if target.startswith(tmpdir):
-                path = package_qa_clean_path(path, d, name)
-                oe.qa.handle_error("symlink-to-sysroot", "Symlink %s in %s points to TMPDIR" % (path, name), d)
+                trimmed = path.replace(os.path.join (d.getVar("PKGDEST"), name), "")
+                oe.qa.add_message(messages, "symlink-to-sysroot", "Symlink %s in %s points to TMPDIR" % (trimmed, name))
 
 QAPATHTEST[32bit-time] = "check_32bit_symbols"
-def check_32bit_symbols(path, packagename, d, elf):
+def check_32bit_symbols(path, packagename, d, elf, messages):
     """
     Check that ELF files do not use any 32 bit time APIs from glibc.
     """
@@ -615,9 +624,11 @@ def check_32bit_symbols(path, packagename, d, elf):
             if not allowed:
                 msgformat = elfpath + " uses 32-bit api '%s'"
                 for sym in usedapis:
-                    oe.qa.handle_error('32bit-time', msgformat % sym, d)
-                oe.qa.handle_error('32bit-time', 'Suppress with INSANE_SKIP = "32bit-time"', d)
-check_32bit_symbols[vardepsexclude] = "OVERRIDES"
+                    oe.qa.add_message(messages, '32bit-time', msgformat % sym)
+                oe.qa.add_message(
+                    messages, '32bit-time',
+                    'Suppress with INSANE_SKIP = "32bit-time"'
+                )
 
 # Check license variables
 do_populate_lic[postfuncs] += "populate_lic_qa_checksum"
@@ -778,14 +789,54 @@ def qa_check_staged(path,d):
                         oe.qa.handle_error("pkgconfig", error_msg, d)
 
             if not skip_shebang_size:
-                package_qa_check_shebang_size(path, "", d, None)
+                errors = {}
+                package_qa_check_shebang_size(path, "", d, None, errors)
+                for e in errors:
+                    oe.qa.handle_error(e, errors[e], d)
+
+
+# Run all package-wide warnfuncs and errorfuncs
+def package_qa_package(warnfuncs, errorfuncs, package, d):
+    warnings = {}
+    errors = {}
+
+    for func in warnfuncs:
+        func(package, d, warnings)
+    for func in errorfuncs:
+        func(package, d, errors)
+
+    for w in warnings:
+        oe.qa.handle_error(w, warnings[w], d)
+    for e in errors:
+        oe.qa.handle_error(e, errors[e], d)
+
+    return len(errors) == 0
+
+# Run all recipe-wide warnfuncs and errorfuncs
+def package_qa_recipe(warnfuncs, errorfuncs, pn, d):
+    warnings = {}
+    errors = {}
+
+    for func in warnfuncs:
+        func(pn, d, warnings)
+    for func in errorfuncs:
+        func(pn, d, errors)
+
+    for w in warnings:
+        oe.qa.handle_error(w, warnings[w], d)
+    for e in errors:
+        oe.qa.handle_error(e, errors[e], d)
+
+    return len(errors) == 0
 
 def prepopulate_objdump_p(elf, d):
     output = elf.run_objdump("-p", d)
     return (elf.name, output)
 
 # Walk over all files in a directory and call func
-def package_qa_walk(checkfuncs, package, d):
+def package_qa_walk(warnfuncs, errorfuncs, package, d):
+    warnings = {}
+    errors = {}
     elves = {}
     for path in pkgfiles[package]:
             elf = None
@@ -806,10 +857,17 @@ def package_qa_walk(checkfuncs, package, d):
     for path in pkgfiles[package]:
             if path in elves:
                 elves[path].open()
-            for func in checkfuncs:
-                func(path, package, d, elves.get(path))
+            for func in warnfuncs:
+                func(path, package, d, elves.get(path), warnings)
+            for func in errorfuncs:
+                func(path, package, d, elves.get(path), errors)
             if path in elves:
                 elves[path].close()
+
+    for w in warnings:
+        oe.qa.handle_error(w, warnings[w], d)
+    for e in errors:
+        oe.qa.handle_error(e, errors[e], d)
 
 def package_qa_check_rdepends(pkg, pkgdest, skip, taskdeps, packages, d):
     # Don't do this check for kernel/module recipes, there aren't too many debug/development
@@ -931,18 +989,20 @@ def package_qa_check_deps(pkg, pkgdest, d):
     check_valid_deps('RCONFLICTS')
 
 QAPKGTEST[usrmerge] = "package_qa_check_usrmerge"
-def package_qa_check_usrmerge(pkg, d):
+def package_qa_check_usrmerge(pkg, d, messages):
+
     pkgdest = d.getVar('PKGDEST')
     pkg_dir = pkgdest + os.sep + pkg + os.sep
     merged_dirs = ['bin', 'sbin', 'lib'] + d.getVar('MULTILIB_VARIANTS').split()
     for f in merged_dirs:
         if os.path.exists(pkg_dir + f) and not os.path.islink(pkg_dir + f):
             msg = "%s package is not obeying usrmerge distro feature. /%s should be relocated to /usr." % (pkg, f)
-            oe.qa.handle_error("usrmerge", msg, d)
-            return
+            oe.qa.add_message(messages, "usrmerge", msg)
+            return False
+    return True
 
 QAPKGTEST[perllocalpod] = "package_qa_check_perllocalpod"
-def package_qa_check_perllocalpod(pkg, d):
+def package_qa_check_perllocalpod(pkg, d, messages):
     """
     Check that the recipe didn't ship a perlocal.pod file, which shouldn't be
     installed in a distribution package.  cpan.bbclass sets NO_PERLLOCAL=1 to
@@ -956,47 +1016,54 @@ def package_qa_check_perllocalpod(pkg, d):
     if matches:
         matches = [package_qa_clean_path(path, d, pkg) for path in matches]
         msg = "%s contains perllocal.pod (%s), should not be installed" % (pkg, " ".join(matches))
-        oe.qa.handle_error("perllocalpod", msg, d)
+        oe.qa.add_message(messages, "perllocalpod", msg)
 
 QAPKGTEST[expanded-d] = "package_qa_check_expanded_d"
-def package_qa_check_expanded_d(package, d):
+def package_qa_check_expanded_d(package, d, messages):
     """
     Check for the expanded D (${D}) value in pkg_* and FILES
     variables, warn the user to use it correctly.
     """
+    sane = True
     expanded_d = d.getVar('D')
 
     for var in 'FILES','pkg_preinst', 'pkg_postinst', 'pkg_prerm', 'pkg_postrm':
         bbvar = d.getVar(var + ":" + package) or ""
         if expanded_d in bbvar:
             if var == 'FILES':
-                oe.qa.handle_error("expanded-d", "FILES in %s recipe should not contain the ${D} variable as it references the local build directory not the target filesystem, best solution is to remove the ${D} reference" % package, d)
+                oe.qa.add_message(messages, "expanded-d", "FILES in %s recipe should not contain the ${D} variable as it references the local build directory not the target filesystem, best solution is to remove the ${D} reference" % package)
+                sane = False
             else:
-                oe.qa.handle_error("expanded-d", "%s in %s recipe contains ${D}, it should be replaced by $D instead" % (var, package), d)
+                oe.qa.add_message(messages, "expanded-d", "%s in %s recipe contains ${D}, it should be replaced by $D instead" % (var, package))
+                sane = False
+    return sane
 
 QAPKGTEST[unlisted-pkg-lics] = "package_qa_check_unlisted_pkg_lics"
-def package_qa_check_unlisted_pkg_lics(package, d):
+def package_qa_check_unlisted_pkg_lics(package, d, messages):
     """
     Check that all licenses for a package are among the licenses for the recipe.
     """
     pkg_lics = d.getVar('LICENSE:' + package)
     if not pkg_lics:
-        return
+        return True
 
     recipe_lics_set = oe.license.list_licenses(d.getVar('LICENSE'))
     package_lics = oe.license.list_licenses(pkg_lics)
     unlisted = package_lics - recipe_lics_set
     if unlisted:
-        oe.qa.handle_error("unlisted-pkg-lics",
+        oe.qa.add_message(messages, "unlisted-pkg-lics",
                                "LICENSE:%s includes licenses (%s) that are not "
-                               "listed in LICENSE" % (package, ' '.join(unlisted)), d)
+                               "listed in LICENSE" % (package, ' '.join(unlisted)))
+        return False
     obsolete = set(oe.license.obsolete_license_list()) & package_lics - recipe_lics_set
     if obsolete:
-        oe.qa.handle_error("obsolete-license",
-                               "LICENSE:%s includes obsolete licenses %s" % (package, ' '.join(obsolete)), d)
+        oe.qa.add_message(messages, "obsolete-license",
+                               "LICENSE:%s includes obsolete licenses %s" % (package, ' '.join(obsolete)))
+        return False
+    return True
 
 QAPKGTEST[empty-dirs] = "package_qa_check_empty_dirs"
-def package_qa_check_empty_dirs(pkg, d):
+def package_qa_check_empty_dirs(pkg, d, messages):
     """
     Check for the existence of files in directories that are expected to be
     empty.
@@ -1009,7 +1076,7 @@ def package_qa_check_empty_dirs(pkg, d):
             recommendation = (d.getVar('QA_EMPTY_DIRS_RECOMMENDATION:' + dir) or
                               "but it is expected to be empty")
             msg = "%s installs files in %s, %s" % (pkg, dir, recommendation)
-            oe.qa.handle_error("empty-dirs", msg, d)
+            oe.qa.add_message(messages, "empty-dirs", msg)
 
 def package_qa_check_encoding(keys, encode, d):
     def check_encoding(key, enc):
@@ -1033,7 +1100,7 @@ HOST_USER_UID := "${@os.getuid()}"
 HOST_USER_GID := "${@os.getgid()}"
 
 QAPATHTEST[host-user-contaminated] = "package_qa_check_host_user"
-def package_qa_check_host_user(path, name, d, elf):
+def package_qa_check_host_user(path, name, d, elf, messages):
     """Check for paths outside of /home which are owned by the user running bitbake."""
 
     if not os.path.lexists(path):
@@ -1054,14 +1121,17 @@ def package_qa_check_host_user(path, name, d, elf):
     else:
         check_uid = int(d.getVar('HOST_USER_UID'))
         if stat.st_uid == check_uid:
-            oe.qa.handle_error("host-user-contaminated", "%s: %s is owned by uid %d, which is the same as the user running bitbake. This may be due to host contamination" % (pn, package_qa_clean_path(path, d, name), check_uid), d)
+            oe.qa.add_message(messages, "host-user-contaminated", "%s: %s is owned by uid %d, which is the same as the user running bitbake. This may be due to host contamination" % (pn, package_qa_clean_path(path, d, name), check_uid))
+            return False
 
         check_gid = int(d.getVar('HOST_USER_GID'))
         if stat.st_gid == check_gid:
-            oe.qa.handle_error("host-user-contaminated", "%s: %s is owned by gid %d, which is the same as the user running bitbake. This may be due to host contamination" % (pn, package_qa_clean_path(path, d, name), check_gid), d)
+            oe.qa.add_message(messages, "host-user-contaminated", "%s: %s is owned by gid %d, which is the same as the user running bitbake. This may be due to host contamination" % (pn, package_qa_clean_path(path, d, name), check_gid))
+            return False
+    return True
 
 QARECIPETEST[unhandled-features-check] = "package_qa_check_unhandled_features_check"
-def package_qa_check_unhandled_features_check(pn, d):
+def package_qa_check_unhandled_features_check(pn, d, messages):
     if not bb.data.inherits_class('features_check', d):
         var_set = False
         for kind in ['DISTRO', 'MACHINE', 'COMBINED']:
@@ -1072,31 +1142,12 @@ def package_qa_check_unhandled_features_check(pn, d):
             oe.qa.handle_error("unhandled-features-check", "%s: recipe doesn't inherit features_check" % pn, d)
 
 QARECIPETEST[missing-update-alternatives] = "package_qa_check_missing_update_alternatives"
-def package_qa_check_missing_update_alternatives(pn, d):
+def package_qa_check_missing_update_alternatives(pn, d, messages):
     # Look at all packages and find out if any of those sets ALTERNATIVE variable
     # without inheriting update-alternatives class
     for pkg in (d.getVar('PACKAGES') or '').split():
         if d.getVar('ALTERNATIVE:%s' % pkg) and not bb.data.inherits_class('update-alternatives', d):
             oe.qa.handle_error("missing-update-alternatives", "%s: recipe defines ALTERNATIVE:%s but doesn't inherit update-alternatives. This might fail during do_rootfs later!" % (pn, pkg), d)
-
-def parse_test_matrix(matrix_name, skip, d):
-        testmatrix = d.getVarFlags(matrix_name) or {}
-        g = globals()
-        checks = []
-        for w in (d.getVar("WARN_QA") or "").split():
-            if w in skip:
-               continue
-            if w in testmatrix and testmatrix[w] in g:
-                checks.append(g[testmatrix[w]])
-
-        for e in (d.getVar("ERROR_QA") or "").split():
-            if e in skip:
-               continue
-            if e in testmatrix and testmatrix[e] in g:
-                checks.append(g[testmatrix[e]])
-        return checks
-parse_test_matrix[vardepsexclude] = "ERROR_QA WARN_QA"
-
 
 # The PACKAGE FUNC to scan each package
 python do_package_qa () {
@@ -1153,6 +1204,24 @@ python do_package_qa () {
     for dep in taskdepdata:
         taskdeps.add(taskdepdata[dep][0])
 
+    def parse_test_matrix(matrix_name):
+        testmatrix = d.getVarFlags(matrix_name) or {}
+        g = globals()
+        warnchecks = []
+        for w in (d.getVar("WARN_QA") or "").split():
+            if w in skip:
+               continue
+            if w in testmatrix and testmatrix[w] in g:
+                warnchecks.append(g[testmatrix[w]])
+
+        errorchecks = []
+        for e in (d.getVar("ERROR_QA") or "").split():
+            if e in skip:
+               continue
+            if e in testmatrix and testmatrix[e] in g:
+                errorchecks.append(g[testmatrix[e]])
+        return warnchecks, errorchecks
+
     for package in packages:
         skip = set((d.getVar('INSANE_SKIP') or "").split() +
                    (d.getVar('INSANE_SKIP:' + package) or "").split())
@@ -1165,21 +1234,20 @@ python do_package_qa () {
             oe.qa.handle_error("pkgname",
                     "%s doesn't match the [a-z0-9.+-]+ regex" % package, d)
 
-        checks = parse_test_matrix("QAPATHTEST", skip, d)
-        package_qa_walk(checks, package, d)
+        warn_checks, error_checks = parse_test_matrix("QAPATHTEST")
+        package_qa_walk(warn_checks, error_checks, package, d)
 
-        checks = parse_test_matrix("QAPKGTEST", skip, d)
-        for func in checks:
-            func(package, d)
+        warn_checks, error_checks = parse_test_matrix("QAPKGTEST")
+        package_qa_package(warn_checks, error_checks, package, d)
 
         package_qa_check_rdepends(package, pkgdest, skip, taskdeps, packages, d)
         package_qa_check_deps(package, pkgdest, d)
 
-    checks = parse_test_matrix("QARECIPETEST", skip, d)
-    for func in checks:
-        func(pn, d)
+    warn_checks, error_checks = parse_test_matrix("QARECIPETEST")
+    package_qa_recipe(warn_checks, error_checks, pn, d)
 
-    package_qa_check_libdir(d)
+    if 'libdir' in d.getVar("ALL_QA").split():
+        package_qa_check_libdir(d)
 
     oe.qa.exit_if_errors(d)
 }
@@ -1197,10 +1265,6 @@ python() {
     pkgs = (d.getVar('PACKAGES') or '').split()
     for pkg in pkgs:
         d.appendVarFlag("do_package_qa", "vardeps", " INSANE_SKIP:{}".format(pkg))
-    funcs = d.getVarFlags("QAPATHTEST")
-    funcs.update(d.getVarFlags("QAPKGTEST"))
-    funcs.update(d.getVarFlags("QARECIPETEST"))
-    d.appendVarFlag("do_package_qa", "vardeps", " ".join(funcs.values()))
 }
 
 SSTATETASKS += "do_package_qa"
@@ -1300,10 +1364,10 @@ python do_qa_patch() {
     srcdir = d.getVar('S')
     if not bb.utils.contains('DISTRO_FEATURES', 'ptest', True, False, d):
         pass
-    elif not (bb.utils.contains('ERROR_QA', 'unimplemented-ptest', True, False, d) or bb.utils.contains('WARN_QA', 'unimplemented-ptest', True, False, d)):
-        pass
     elif bb.data.inherits_class('ptest', d):
         bb.note("Package %s QA: skipping unimplemented-ptest: ptest implementation detected" % d.getVar('PN'))
+    elif srcdir == d.getVar('WORKDIR'):
+        bb.note("Package %s QA: skipping unimplemented-ptest: This check is not supported for recipe with \"S = \"${WORKDIR}\"" % d.getVar('PN'))
 
     # Detect perl Test:: based tests
     elif os.path.exists(os.path.join(srcdir, "t")) and any(filename.endswith('.t') for filename in os.listdir(os.path.join(srcdir, 't'))):
@@ -1326,7 +1390,7 @@ python do_qa_patch() {
         oe.qa.handle_error("unimplemented-ptest", "%s: autotools-based tests detected" % d.getVar('PN'), d)
 
     # Last resort, detect a test directory in sources
-    elif os.path.exists(srcdir) and any(filename.lower() in ["test", "tests"] for filename in os.listdir(srcdir)):
+    elif any(filename.lower() in ["test", "tests"] for filename in os.listdir(srcdir)):
         oe.qa.handle_error("unimplemented-ptest", "%s: test subdirectory detected" % d.getVar('PN'), d)
 
     oe.qa.exit_if_errors(d)
@@ -1499,7 +1563,8 @@ do_unpack[postfuncs] += "do_qa_unpack"
 python () {
     import re
 
-    if bb.utils.contains('ERROR_QA', 'desktop', True, False, d) or bb.utils.contains('WARN_QA', 'desktop', True, False, d):
+    tests = d.getVar('ALL_QA').split()
+    if "desktop" in tests:
         d.appendVar("PACKAGE_DEPENDS", " desktop-file-utils-native")
 
     ###########################################################################
@@ -1528,31 +1593,17 @@ python () {
     if prog.search(pn):
         oe.qa.handle_error("uppercase-pn", 'PN: %s is upper case, this can result in unexpected behavior.' % pn, d)
 
-    sourcedir = d.getVar("S")
-    builddir = d.getVar("B")
-    workdir = d.getVar("WORKDIR")
-    unpackdir = d.getVar("UNPACKDIR")
-    if sourcedir == workdir:
-        bb.fatal("Using S = ${WORKDIR} is no longer supported")
-    if builddir == workdir:
-        bb.fatal("Using B = ${WORKDIR} is no longer supported")
-    if unpackdir == workdir:
-        bb.fatal("Using UNPACKDIR = ${WORKDIR} is not supported")
-    if sourcedir[-1] == '/':
-        bb.warn("Recipe %s sets S variable with trailing slash '%s', remove it" % (d.getVar("PN"), d.getVar("S")))
-    if builddir[-1] == '/':
-        bb.warn("Recipe %s sets B variable with trailing slash '%s', remove it" % (d.getVar("PN"), d.getVar("B")))
-
     # Some people mistakenly use DEPENDS:${PN} instead of DEPENDS and wonder
     # why it doesn't work.
     if (d.getVar(d.expand('DEPENDS:${PN}'))):
         oe.qa.handle_error("pkgvarcheck", "recipe uses DEPENDS:${PN}, should use DEPENDS", d)
 
     # virtual/ is meaningless for these variables
-    for k in ['RDEPENDS', 'RPROVIDES']:
-        for var in bb.utils.explode_deps(d.getVar(k + ':' + pn) or ""):
-            if var.startswith("virtual/"):
-                oe.qa.handle_error("virtual-slash", "%s is set to %s but the substring 'virtual/' holds no meaning in this context. It only works for build time dependencies, not runtime ones. It is suggested to use 'VIRTUAL-RUNTIME_' variables instead." % (k, var), d)
+    if "virtual-slash" in (d.getVar("ALL_QA") or "").split():
+        for k in ['RDEPENDS', 'RPROVIDES']:
+            for var in bb.utils.explode_deps(d.getVar(k + ':' + pn) or ""):
+                if var.startswith("virtual/"):
+                    oe.qa.handle_error("virtual-slash", "%s is set to %s but the substring 'virtual/' holds no meaning in this context. It only works for build time dependencies, not runtime ones. It is suggested to use 'VIRTUAL-RUNTIME_' variables instead." % (k, var), d)
 
     issues = []
     if (d.getVar('PACKAGES') or "").split():
@@ -1562,7 +1613,8 @@ python () {
             if d.getVar(var, False):
                 issues.append(var)
 
-        if bb.utils.contains('ERROR_QA', 'host-user-contaminated', True, False, d) or bb.utils.contains('WARN_QA', 'host-user-contaminated', True, False, d):
+        fakeroot_tests = d.getVar('FAKEROOT_QA').split()
+        if set(tests) & set(fakeroot_tests):
             d.setVarFlag('do_package_qa', 'fakeroot', '1')
             d.appendVarFlag('do_package_qa', 'depends', ' virtual/fakeroot-native:do_populate_sysroot')
     else:

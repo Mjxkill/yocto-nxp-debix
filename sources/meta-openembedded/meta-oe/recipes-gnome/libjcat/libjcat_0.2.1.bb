@@ -32,5 +32,3 @@ GTKDOC_MESON_OPTION = "gtkdoc"
 RDEPENDS:${PN}:class-target = "\
     ${@bb.utils.contains('PACKAGECONFIG', 'gpg', 'gnupg', '', d)} \
 "
-
-INSANE_SKIP:${PN}-ptest += "buildpaths"

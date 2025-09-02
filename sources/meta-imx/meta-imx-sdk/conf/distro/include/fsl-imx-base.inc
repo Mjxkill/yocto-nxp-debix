@@ -2,7 +2,7 @@ require conf/distro/poky.conf
 
 DISTRO = "imx-nxp"
 DISTRO_NAME = "NXP i.MX Release Distro"
-DISTRO_VERSION = "6.12-styhead"
+DISTRO_VERSION = "6.6-scarthgap"
 DISTROOVERRIDES = "fsl"
 
 MAINTAINER = "NXP <lauren.post@nxp.com>"
@@ -34,23 +34,14 @@ DEFAULTTUNE:mx9-nxp-bsp    ?= "armv8a-crc-crypto"
 DEFAULTTUNE:mx91-nxp-bsp  ?= "armv8a-crc-crypto"
 DEFAULTTUNE:mx93-nxp-bsp   ?= "armv8a-crc-crypto"
 
-# Use systemd as default init manager
-POKY_INIT_MANAGER = "systemd"
-
-# Use virtual-runc as a default container runtime
-# runtime: runc, crun, runv, runx
-VIRTUAL-RUNTIME_container_runtime = "virtual-runc"
-
 PACKAGECONFIG:append:pn-gstreamer1.0-plugins-ugly = " x264"
 
 PACKAGECONFIG:append:pn-perf = " jevents"
 
 PACKAGECONFIG:append:pn-pulseaudio = " autospawn-for-root"
 
-PACKAGECONFIG:append:class-target:pn-qtquick3d = " examples"
-PACKAGECONFIG:remove:class-target:pn-qtquick3d = "openxr"
-
-PACKAGECONFIG:append:class-target:pn-qtwebengine = " examples"
+PACKAGECONFIG:append:class-target:pn-qtquick3d     = " examples"
+PACKAGECONFIG:append:class-target:pn-qtwebengine   = " examples"
 
 PACKAGECONFIG:append:pn-systemd = " unmanaged-network"
 

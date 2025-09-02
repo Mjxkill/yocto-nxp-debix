@@ -35,5 +35,3 @@ SOLIBS = ".so"
 FILES_SOLIBSDEV = ""
 
 FILES:${PN} += "${datadir}/vulkan"
-
-INSANE_SKIP:${PN} += "buildpaths"

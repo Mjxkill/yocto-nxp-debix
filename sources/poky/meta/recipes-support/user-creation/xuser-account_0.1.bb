@@ -6,9 +6,6 @@ SRC_URI = "file://system-xuser.conf"
 
 inherit allarch useradd
 
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
-
 do_configure() {
     :
 }
@@ -18,7 +15,7 @@ do_compile() {
 }
 
 do_install() {
-    install -D -m 0644 ${UNPACKDIR}/system-xuser.conf ${D}${sysconfdir}/dbus-1/system.d/system-xuser.conf
+    install -D -m 0644 ${WORKDIR}/system-xuser.conf ${D}${sysconfdir}/dbus-1/system.d/system-xuser.conf
 }
 
 FILES:${PN} = "${sysconfdir}/dbus-1/system.d/system-xuser.conf"
