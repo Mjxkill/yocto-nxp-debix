@@ -1,7 +1,7 @@
 require conf/distro/poky.conf
 
 DISTRO = "imx-nxp"
-DISTRO_NAME = "NXP i.MX Release Distro"
+DISTRO_NAME = "Debix Model A&B&Infinity V1.03_20241114"
 DISTRO_VERSION = "6.6-scarthgap"
 DISTROOVERRIDES = "fsl"
 

@@ -8,10 +8,15 @@ LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=6bc538ed5bd9a7fc9398086aedcd7e46"
 
 SRC_URI = "${LINUX_IMX_SRC}"
-LINUX_IMX_SRC ?= "git://github.com/nxp-imx/linux-imx.git;protocol=https;branch=${SRCBRANCH}"
-SRCBRANCH = "lf-6.6.y"
-LOCALVERSION = "-lts-${SRCBRANCH}"
-SRCREV = "d23d64eea5111e1607efcce1d601834fceec92cb"
+## John_gao use Debix git
+##LINUX_IMX_SRC ?= "git://github.com/nxp-imx/linux-imx.git;protocol=https;branch=${SRCBRANCH}"
+#SRCBRANCH = "lf-6.6.y"
+#LOCALVERSION = "-lts-${SRCBRANCH}"
+#SRCREV = "d23d64eea5111e1607efcce1d601834fceec92cb"
+LINUX_IMX_SRC ?= "git://github.com/debix-tech/linux-nxp-debix.git;protocol=https;branch=${SRCBRANCH}"
+SRCBRANCH = "lf_6.6.36-debix_model_ab"
+LOCALVERSION = ""
+SRCREV = "0dd1c385cfd8fe1d90cc5d59f0bad21dba1bd2cf"
 
 S = "${WORKDIR}/git"
 

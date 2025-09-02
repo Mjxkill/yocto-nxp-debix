@@ -59,3 +59,15 @@ CORE_IMAGE_EXTRA_INSTALL += " \
     ${DOCKER} \
     ${G2D_SAMPLES} \
 "
+
+#add by polyhex 
+#
+#android-tools 
+#android-tools-conf 
+#
+IMAGE_INSTALL += " \
+	debix-custom \
+	htpdate \
+	htop \
+	stress-ng \
+"
