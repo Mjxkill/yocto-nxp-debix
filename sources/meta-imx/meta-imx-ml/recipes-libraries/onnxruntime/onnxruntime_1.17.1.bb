@@ -10,8 +10,8 @@ DEPENDS = "libpng zlib"
 
 inherit setuptools3
 
-SRC_URI = "${ONNXRUNTIME_SRC};branch=${SRCBRANCH} \\
-           file://0001-Use-GitHub-Eigen-mirror.patch \\
+SRC_URI = "${ONNXRUNTIME_SRC};branch=${SRCBRANCH} \
+           file://0001-Use-GitHub-Eigen-mirror.patch \
           "
 ONNXRUNTIME_SRC ?= "gitsm://github.com/nxp-imx/onnxruntime-imx.git;protocol=https"
 SRCBRANCH = "lf-6.6.36_2.1.0"
