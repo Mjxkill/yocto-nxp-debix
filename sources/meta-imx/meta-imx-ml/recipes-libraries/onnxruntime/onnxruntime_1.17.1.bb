@@ -24,6 +24,11 @@ inherit cmake python3native
 OECMAKE_SOURCEPATH = "${S}/cmake"
 OECMAKE_GENERATOR = "Unix Makefiles"
 
+# GCC 13 introduces -Winterference-size, which Eigen triggers when
+# using std::hardware_destructive_interference_size. Treat this
+# warning as non-fatal to allow building with new toolchains.
+CXXFLAGS:append = " -Wno-error=interference-size"
+
 # Notes:
 # Abseil:
 #   - FETCHCONTENT_FULLY_DISCONNECTED=OFF and do_configure:prepend() added to allow
