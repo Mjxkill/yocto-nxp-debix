@@ -1,5 +1,5 @@
 # Use FIT second loader at 0x40200000 without OP-TEE
-DEPLOY_OPTEE = "false"
+DEPLOY_OPTEE:imx8mpevk = "false"
 
 do_compile:append() {
     if [ "${MACHINE}" = "imx8mpevk" ]; then
