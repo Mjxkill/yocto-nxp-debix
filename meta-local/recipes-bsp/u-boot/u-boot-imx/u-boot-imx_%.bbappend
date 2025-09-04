@@ -1,4 +1,4 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}:"
 
-# Add FIT load address configuration for SPL
-SRC_URI:append = " file://u-boot-spl-fitaddr.cfg"
+# Patch defconfig to set SPL FIT load address
+SRC_URI:append = " file://0001-imx8mp_evk-set-spl-load-fit-address.patch"
