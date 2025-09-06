@@ -82,3 +82,15 @@ $ bitbake imx-image-full
 ```
 
  
+## Flutter and Dart support
+A helper script is available to fetch the meta-flutter layer and its dependencies:
+
+```bash
+$ ./scripts/setup-flutter.sh
+$ DISTRO=<distro name> MACHINE=<machine name> source imx-setup-release.sh -b <build dir>
+$ bitbake-layers add-layer ../sources/meta-clang ../sources/meta-flutter
+$ echo 'IMAGE_INSTALL:append = " flutter-engine flutter-embedded-linux"' >> conf/local.conf
+$ bitbake imx-image-full
+```
+
+The `flutter-engine` and `flutter-embedded-linux` packages provide the Flutter engine and Dart runtime, while the `flutter-sdk` recipe supplies the `dart` command-line tools on the host.
