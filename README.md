@@ -7,6 +7,7 @@ New features added for all supported boards:
 - Upgraded the Yocto Project to version 5.0 Scarthgap.
 - Supports the GCC 13.3 toolchain.
 - Supports Glitch Detection (GDET) on i.MX 93.
+- Provides Flutter SDK, Dart runtime, and a Flutter embedder for embedded application development.
 - Cortex-M33 update for 8ULP and i.MX 93, Cortex-M7 updates for i.MX 8M Nano, i.MX 8M Plus, and i.MX 95,
 and Cortex-M4 update for i.MX 7ULP, i.MX 8M Mini, and i.MX 8M Quad.
 - Since LF6.6.3_1.0.0, Pipewire has become the default audio service, see the i.MX Linux User's Guide
@@ -80,5 +81,17 @@ build debix model ab
 $ EULA=1 DISTRO=fsl-imx-xwayland MACHINE=imx8mpevk source imx-setup-release.sh -b Model_AB_Infinity
 $ bitbake imx-image-full
 ```
+
+### Flutter development workflow
+After building the image, an SDK with host `flutter` and `dart` tools can be generated:
+
+```
+$ bitbake imx-image-full -c populate_sdk
+```
+
+Install and source the resulting SDK on your PC to build Flutter applications and
+deploy them to the i.MX8MP board over the network (SSH) or via USB networking.
+`imx-image-full` already includes machine learning, DSP and audio libraries, so no
+additional packages are required for these features.
 
  
