@@ -1,0 +1,16 @@
+[Unit]
+Description=Flutter Embedded Autostart
+After=weston@root.service graphical.target
+Wants=weston@root.service
+
+[Service]
+Type=simple
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/0
+ExecStart=/usr/bin/flutter-embedded
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target
+
