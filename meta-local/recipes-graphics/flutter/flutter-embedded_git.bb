@@ -14,7 +14,8 @@ inherit cmake pkgconfig
 FLUTTER_ENGINE_SUBDIR = "${@'linux-arm64-release' if d.getVar('TARGET_ARCH') == 'aarch64' else 'linux-x64-release'}"
 FLUTTER_ENGINE_LIB_PATH = "${RECIPE_SYSROOT}/opt/flutter-sdk/bin/cache/artifacts/engine/${FLUTTER_ENGINE_SUBDIR}/libflutter_engine.so"
 
-DEPENDS += "wayland wayland-native virtual/egl libxkbcommon flutter-sdk"
+# Link against Flutter engine which requires fontconfig symbols at link time
+DEPENDS += "wayland wayland-native virtual/egl libxkbcommon flutter-sdk fontconfig"
 EXTRA_OECMAKE += "-DUSER_PROJECT_PATH=${S}/examples/flutter-wayland-client"
 EXTRA_OECMAKE += " -DFLUTTER_EMBEDDER_LIB=${FLUTTER_ENGINE_LIB_PATH}"
 
@@ -23,7 +24,10 @@ EXTRA_OECMAKE += " -DFLUTTER_EMBEDDER_LIB=${FLUTTER_ENGINE_LIB_PATH}"
 
 do_install() {
     install -d ${D}${bindir}
-    if [ -f ${B}/embedding_demo ]; then
+    # Upstream target name varies; prefer flutter-client, fallback to embedding_demo
+    if [ -f ${B}/flutter-client ]; then
+        install -m0755 ${B}/flutter-client ${D}${bindir}/flutter-embedded
+    elif [ -f ${B}/embedding_demo ]; then
         install -m0755 ${B}/embedding_demo ${D}${bindir}/flutter-embedded
     fi
 }
