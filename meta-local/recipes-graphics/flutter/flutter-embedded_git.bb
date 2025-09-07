@@ -10,7 +10,7 @@ S = "${WORKDIR}/git"
 
 inherit cmake pkgconfig
 
-DEPENDS += "wayland wayland-native virtual/egl"
+DEPENDS += "wayland wayland-native virtual/egl libxkbcommon"
 EXTRA_OECMAKE += "-DUSER_PROJECT_PATH=${S}/examples/flutter-wayland-client"
 
 # do_install simply installs demo binary if build executed
