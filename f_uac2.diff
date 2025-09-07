@@ -1,0 +1,124 @@
+diff --git a/drivers/usb/gadget/function/f_uac2.c b/drivers/usb/gadget/function/f_uac2.c
+index 0219cd794..5ada22b3c 100644
+--- a/drivers/usb/gadget/function/f_uac2.c
++++ b/drivers/usb/gadget/function/f_uac2.c
+@@ -20,6 +20,7 @@
+ 
+ /* UAC2 spec: 4.1 Audio Channel Cluster Descriptor */
+ #define UAC2_CHANNEL_MASK 0x07FFFFFF
++#define UAC_FORCE_FEEDBACK_EP 1
+ 
+ /*
+  * The driver implements a simple UAC_2 topology.
+@@ -30,7 +31,7 @@
+  *    CLK_5 := c_srate, and CLK_6 := p_srate
+  */
+ #define USB_OUT_CLK_ID	(out_clk_src_desc.bClockID)
+-#define USB_IN_CLK_ID	(in_clk_src_desc.bClockID)
++#define USB_IN_CLK_ID	(out_clk_src_desc.bClockID)
+ #define USB_OUT_FU_ID	(out_feature_unit_desc->bUnitID)
+ #define USB_IN_FU_ID	(in_feature_unit_desc->bUnitID)
+ 
+@@ -168,16 +169,16 @@ static struct usb_interface_descriptor std_ac_if_desc = {
+ };
+ 
+ /* Clock source for IN traffic */
+-static struct uac_clock_source_descriptor in_clk_src_desc = {
+-	.bLength = sizeof in_clk_src_desc,
+-	.bDescriptorType = USB_DT_CS_INTERFACE,
++//static struct uac_clock_source_descriptor in_clk_src_desc = {
++//	.bLength = sizeof in_clk_src_desc,
++//	.bDescriptorType = USB_DT_CS_INTERFACE,
+ 
+-	.bDescriptorSubtype = UAC2_CLOCK_SOURCE,
++//	.bDescriptorSubtype = UAC2_CLOCK_SOURCE,
+ 	/* .bClockID = DYNAMIC */
+-	.bmAttributes = UAC_CLOCK_SOURCE_TYPE_INT_FIXED,
+-	.bmControls = (CONTROL_RDWR << CLK_FREQ_CTRL),
+-	.bAssocTerminal = 0,
+-};
++//	.bmAttributes = UAC_CLOCK_SOURCE_TYPE_INT_FIXED,
++//	.bmControls = (CONTROL_RDWR << CLK_FREQ_CTRL),
++//	.bAssocTerminal = 0,
++//};
+ 
+ /* Clock source for OUT traffic */
+ static struct uac_clock_source_descriptor out_clk_src_desc = {
+@@ -531,7 +532,7 @@ static struct usb_descriptor_header *fs_audio_desc[] = {
+ 	(struct usb_descriptor_header *)&std_ac_if_desc,
+ 
+ 	(struct usb_descriptor_header *)&ac_hdr_desc,
+-	(struct usb_descriptor_header *)&in_clk_src_desc,
++//	(struct usb_descriptor_header *)&in_clk_src_desc,
+ 	(struct usb_descriptor_header *)&out_clk_src_desc,
+ 	(struct usb_descriptor_header *)&usb_out_it_desc,
+ 	(struct usb_descriptor_header *)&out_feature_unit_desc,
+@@ -566,7 +567,7 @@ static struct usb_descriptor_header *hs_audio_desc[] = {
+ 	(struct usb_descriptor_header *)&std_ac_if_desc,
+ 
+ 	(struct usb_descriptor_header *)&ac_hdr_desc,
+-	(struct usb_descriptor_header *)&in_clk_src_desc,
++//	(struct usb_descriptor_header *)&in_clk_src_desc,
+ 	(struct usb_descriptor_header *)&out_clk_src_desc,
+ 	(struct usb_descriptor_header *)&usb_out_it_desc,
+ 	(struct usb_descriptor_header *)&out_feature_unit_desc,
+@@ -601,7 +602,7 @@ static struct usb_descriptor_header *ss_audio_desc[] = {
+ 	(struct usb_descriptor_header *)&std_ac_if_desc,
+ 
+ 	(struct usb_descriptor_header *)&ac_hdr_desc,
+-	(struct usb_descriptor_header *)&in_clk_src_desc,
++//	(struct usb_descriptor_header *)&in_clk_src_desc,
+ 	(struct usb_descriptor_header *)&out_clk_src_desc,
+ 	(struct usb_descriptor_header *)&usb_out_it_desc,
+   (struct usb_descriptor_header *)&out_feature_unit_desc,
+@@ -842,8 +843,8 @@ static void setup_headers(struct f_uac2_opts *opts,
+ 	headers[i++] = USBDHDR(&iad_desc);
+ 	headers[i++] = USBDHDR(&std_ac_if_desc);
+ 	headers[i++] = USBDHDR(&ac_hdr_desc);
+-	if (EPIN_EN(opts))
+-		headers[i++] = USBDHDR(&in_clk_src_desc);
++//	if (EPIN_EN(opts))
++//		headers[i++] = USBDHDR(&in_clk_src_desc);
+ 	if (EPOUT_EN(opts)) {
+ 		headers[i++] = USBDHDR(&out_clk_src_desc);
+ 		headers[i++] = USBDHDR(&usb_out_it_desc);
+@@ -921,8 +922,8 @@ static void setup_descriptor(struct f_uac2_opts *opts)
+ 		in_feature_unit_desc->bUnitID = i++;
+ 	if (EPOUT_EN(opts))
+ 		out_clk_src_desc.bClockID = i++;
+-	if (EPIN_EN(opts))
+-		in_clk_src_desc.bClockID = i++;
++//	if (EPIN_EN(opts))
++//		in_clk_src_desc.bClockID = i++;
+ 
+ 	usb_out_it_desc.bCSourceID = out_clk_src_desc.bClockID;
+ 
+@@ -933,8 +934,8 @@ static void setup_descriptor(struct f_uac2_opts *opts)
+ 		usb_in_ot_desc.bSourceID = io_in_it_desc.bTerminalID;
+ 	}
+ 
+-	usb_in_ot_desc.bCSourceID = in_clk_src_desc.bClockID;
+-	io_in_it_desc.bCSourceID = in_clk_src_desc.bClockID;
++	usb_in_ot_desc.bCSourceID = out_clk_src_desc.bClockID;
++	io_in_it_desc.bCSourceID = out_clk_src_desc.bClockID;
+ 	io_out_ot_desc.bCSourceID = out_clk_src_desc.bClockID;
+ 
+ 	if (FUOUT_EN(opts)) {
+@@ -953,7 +954,7 @@ static void setup_descriptor(struct f_uac2_opts *opts)
+ 	if (EPIN_EN(opts)) {
+ 		u16 len = le16_to_cpu(ac_hdr_desc.wTotalLength);
+ 
+-		len += sizeof(in_clk_src_desc);
++//		len += sizeof(in_clk_src_desc);
+ 		len += sizeof(usb_in_ot_desc);
+ 
+ 		if (FUIN_EN(opts))
+@@ -1066,7 +1067,7 @@ afunc_bind(struct usb_configuration *cfg, struct usb_function *fn)
+ 
+ 	iad_desc.iFunction = us[STR_ASSOC].id;
+ 	std_ac_if_desc.iInterface = us[STR_IF_CTRL].id;
+-	in_clk_src_desc.iClockSource = us[STR_CLKSRC_IN].id;
++//	in_clk_src_desc.iClockSource = us[STR_CLKSRC_OUT].id;
+ 	out_clk_src_desc.iClockSource = us[STR_CLKSRC_OUT].id;
+ 	usb_out_it_desc.iTerminal = us[STR_USB_IT].id;
+ 	io_in_it_desc.iTerminal = us[STR_IO_IT].id;
