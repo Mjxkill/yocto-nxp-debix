@@ -7,8 +7,8 @@ SRC_URI = "https://storage.googleapis.com/flutter_infra_release/releases/stable/
 SRC_URI:class-native = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.13.9-stable.tar.xz"
 SRC_URI:class-nativesdk = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.13.9-stable.tar.xz"
 SRC_URI[sha256sum] = "b6bc6f93423488c67110e0fe56523cd2260f3a4c379ed015cd1c7fab66362739"
-SRC_URI[sha256sum]:class-native = "b6bc6f93423488c67110e0fe56523cd2260f3a4c379ed015cd1c7fab66362739"
-SRC_URI[sha256sum]:class-nativesdk = "b6bc6f93423488c67110e0fe56523cd2260f3a4c379ed015cd1c7fab66362739"
+SRC_URI:class-native[sha256sum] = "b6bc6f93423488c67110e0fe56523cd2260f3a4c379ed015cd1c7fab66362739"
+SRC_URI:class-nativesdk[sha256sum] = "b6bc6f93423488c67110e0fe56523cd2260f3a4c379ed015cd1c7fab66362739"
 S = "${WORKDIR}/flutter"
 
 inherit pkgconfig
