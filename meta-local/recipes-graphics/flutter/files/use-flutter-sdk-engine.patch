@@ -1,0 +1,7 @@
+--- a/cmake/build.cmake
++++ b/cmake/build.cmake
+@@
+-set(FLUTTER_EMBEDDER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build/libflutter_engine.so")
++if(NOT DEFINED FLUTTER_EMBEDDER_LIB)
++  set(FLUTTER_EMBEDDER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build/libflutter_engine.so")
++endif()

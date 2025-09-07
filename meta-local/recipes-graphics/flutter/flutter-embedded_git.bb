@@ -4,14 +4,19 @@ LICENSE = "BSD-3-Clause"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=d45359c88eb146940e4bede4f08c821a"
 
 SRC_URI = "git://github.com/sony/flutter-embedded-linux.git;branch=master;protocol=https"
+SRC_URI += " file://use-flutter-sdk-engine.patch"
 SRCREV = "1653fa656bf9fe9fa5f84789a59b0c07671a8fc8"
 
 S = "${WORKDIR}/git"
 
 inherit cmake pkgconfig
 
-DEPENDS += "wayland wayland-native virtual/egl libxkbcommon"
+FLUTTER_ENGINE_SUBDIR = "${@'linux-arm64-release' if d.getVar('TARGET_ARCH') == 'aarch64' else 'linux-x64-release'}"
+FLUTTER_ENGINE_LIB_PATH = "${RECIPE_SYSROOT}/opt/flutter-sdk/bin/cache/artifacts/engine/${FLUTTER_ENGINE_SUBDIR}/libflutter_engine.so"
+
+DEPENDS += "wayland wayland-native virtual/egl libxkbcommon flutter-sdk"
 EXTRA_OECMAKE += "-DUSER_PROJECT_PATH=${S}/examples/flutter-wayland-client"
+EXTRA_OECMAKE += " -DFLUTTER_EMBEDDER_LIB=${FLUTTER_ENGINE_LIB_PATH}"
 
 # do_install simply installs demo binary if build executed
 # do_install will not run under -n parse

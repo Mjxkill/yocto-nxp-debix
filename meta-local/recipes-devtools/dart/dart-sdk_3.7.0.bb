@@ -27,4 +27,5 @@ do_install() {
 FILES:${PN} += "/opt/${PN}"
 
 RDEPENDS:${PN} += "bash"
+INSANE_SKIP:${PN} += "already-stripped"
 
