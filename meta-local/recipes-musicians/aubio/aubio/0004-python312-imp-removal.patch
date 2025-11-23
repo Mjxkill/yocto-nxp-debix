@@ -1,0 +1,9 @@
+--- a/waflib/Context.py	2025-09-08
++++ b/waflib/Context.py	2025-09-08
+@@ -4,7 +4,8 @@
+- import os,re,imp,sys
++ import os,re,sys
++ import importlib as imp
+  from waflib import Utils,Errors,Logs
+  import waflib.Node
+ PATCH

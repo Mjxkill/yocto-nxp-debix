@@ -1,0 +1,11 @@
+# Yocto build output
+Model_AB_Infinity/
+downloads/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor settings
+.vscode/

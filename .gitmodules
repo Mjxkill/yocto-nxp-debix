@@ -1,0 +1,3 @@
+[submodule "sources/meta-musicians"]
+	path = sources/meta-musicians
+	url = https://github.com/schnitzeltony/meta-musicians.git
