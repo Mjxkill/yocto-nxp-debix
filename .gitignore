@@ -9,3 +9,8 @@ __pycache__/
 
 # Editor settings
 .vscode/
+
+# Backup files
+*.bak
+*~
+*.orig
