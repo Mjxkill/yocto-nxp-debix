@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Michael <michael@debix.local>
+Date: Thu, 27 Mar 2026 00:00:00 +0100
+Subject: [PATCH] arm64: dts: imx8mp-evk: add 4x TAC5212 TDM on SAI7
+
+Configure four TI TAC5212 audio codecs on the I2C4 bus (i2c@30a50000)
+sharing SAI7 in TDM mode for 8-channel capture and 8-channel playback.
+
+TAC0 (0x50) acts as bus controller generating BCLK and FSYNC.
+TAC1-3 (0x51-0x53) are bus targets. SAI7 operates in target mode.
+
+TDM bus: 8 slots x 32 bits = BCLK 12.288 MHz at 48 kHz sample rate.
+Each TAC5212 uses 2 TDM slots (2 ADC capture + 2 DAC playback).
+
+Replaces the previous sound-dac-out / spdif-dit dummy codec configuration.
+
+Signed-off-by: Michael <michael@debix.local>
+---
+ arch/arm64/boot/dts/freescale/imx8mp-evk.dts | 80 ++++++++++++++++---
+ 1 file changed, 70 insertions(+), 10 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/freescale/imx8mp-evk.dts b/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
+--- a/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
++++ b/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
+@@ -228,25 +228,43 @@
+ 			"Headphone Jack", "HPOR";
+ 	};
+
+-	spdif_dit: spdif-dit-0 {
+-		compatible = "linux,spdif-dit";
+-		#sound-dai-cells = <0>;
+-		status = "okay";
+-	};
+-
+-	sound-dac-out {
+-		compatible = "simple-audio-card";
+-		simple-audio-card,name = "DAC-Out";
+-		simple-audio-card,format = "i2s";
+-		simple-audio-card,bitclock-master = <&sai7_port>;
+-		simple-audio-card,frame-master = <&sai7_port>;
++	sound-tac5212 {
++		compatible = "fsl,imx-audio-card";
++		model = "tac5212-tdm";
+ 		status = "okay";
+-
+-		sai7_port: simple-audio-card,cpu {
+-			sound-dai = <&sai7>;
+-			dai-tdm-slot-num = <2>;
+-			dai-tdm-slot-width = <32>;
++		pri-dai-link {
++			link-name = "tac5212 tdm";
++			format = "dsp_b";
++			dai-tdm-slot-num = <8>;
++			dai-tdm-slot-width = <32>;
++			bitclock-master = <&tac5212_codec>;
++			frame-master = <&tac5212_codec>;
++			cpu {
++				sound-dai = <&sai7>;
++			};
++			tac5212_codec: codec {
++				sound-dai = <&tac0>, <&tac1>, <&tac2>, <&tac3>;
++			};
+ 		};
++	};
+
+-		simple-audio-card,codec {
+-			sound-dai = <&spdif_dit>;
+-		};
++/* I2C4 = /dev/i2c-3: TAC5212 codecs */
++&i2c4 {
++	/* Disable conflicting devices */
++	/delete-node/ eeprom@50;
++	/delete-node/ hym8563@51;
++
++	tac0: audio-codec@50 {
++		compatible = "ti,tac5212";
++		reg = <0x50>;
++		#sound-dai-cells = <0>;
++		ti,bus-controller;
++	};
++	tac1: audio-codec@51 {
++		compatible = "ti,tac5212";
++		reg = <0x51>;
++		#sound-dai-cells = <0>;
++	};
++	tac2: audio-codec@52 {
++		compatible = "ti,tac5212";
++		reg = <0x52>;
++		#sound-dai-cells = <0>;
++	};
++	tac3: audio-codec@53 {
++		compatible = "ti,tac5212";
++		reg = <0x53>;
++		#sound-dai-cells = <0>;
+ 	};
+ };
+
+@@ -1010,12 +1028,14 @@
+ &sai7 {
+ 	#sound-dai-cells = <0>;
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pinctrl_sai7>;
+ 	assigned-clocks = <&clk IMX8MP_CLK_SAI7>;
+ 	assigned-clock-parents = <&clk IMX8MP_AUDIO_PLL1_OUT>;
+ 	assigned-clock-rates = <12288000>;
+ 	fsl,sai-asynchronous;
+-	fsl,sai-mclk-direction-output;
+-	fsl,dataline = <1 0 1>;
++	fsl,dataline = <1 1 1>;
+ 	status = "okay";
+ };
+
+@@ -1544,6 +1564,7 @@
+ 	pinctrl_sai7: sai7grp {
+ 		fsl,pins = <
+ 			MX8MP_IOMUXC_ECSPI1_SS0__AUDIOMIX_SAI7_TX_SYNC	0x1c4
+ 			MX8MP_IOMUXC_ECSPI2_SCLK__AUDIOMIX_SAI7_TX_BCLK	0x1c4
+ 			MX8MP_IOMUXC_ECSPI2_MOSI__AUDIOMIX_SAI7_TX_DATA00	0x1c4
++			MX8MP_IOMUXC_ECSPI1_MISO__AUDIOMIX_SAI7_RX_DATA00	0x1c4
+ 		>;
+ 	};
