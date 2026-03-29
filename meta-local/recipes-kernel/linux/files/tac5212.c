@@ -63,7 +63,7 @@ static const struct reg_default tac5212_reg_defaults[] = {
 	{ TAC5212_PASI_TX_CH6_CFG,	0x05 },
 	{ TAC5212_PASI_TX_CH7_CFG,	0x06 },
 	{ TAC5212_PASI_TX_CH8_CFG,	0x07 },
-	{ TAC5212_PASI_RX_CFG0,		0x00 },
+	{ TAC5212_PASI_RX_CFG0,		0x01 },
 	{ TAC5212_PASI_RX_CFG1,		0x00 },
 	{ TAC5212_PASI_RX_CH1_CFG,	0x20 },
 	{ TAC5212_PASI_RX_CH2_CFG,	0x21 },
@@ -692,6 +692,11 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 
 	/* PASI_TX_CFG1: TX_OFFSET=1 to align with SAI dsp_a (FSE=1) */
 	ret = regmap_write(priv->regmap, TAC5212_PASI_TX_CFG1, 0x01);
+	if (ret)
+		return ret;
+
+	/* PASI_RX_CFG0: RX_OFFSET=1 to align DAC input with SAI dsp_a */
+	ret = regmap_write(priv->regmap, TAC5212_PASI_RX_CFG0, 0x01);
 	if (ret)
 		return ret;
 

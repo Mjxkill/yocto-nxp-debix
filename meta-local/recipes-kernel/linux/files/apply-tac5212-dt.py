@@ -141,6 +141,13 @@ if i2c4_start is not None:
             lines.insert(i2c4_end, line)
         content = '\n'.join(lines)
 
+# 7. Switch DSP node from remoteproc to SOF: override compatible in &dsp
+# The base compatible is in imx8mp.dtsi, we override it in the &dsp node
+content = re.sub(
+    r'(&dsp \{)',
+    r'\1\n\tcompatible = "fsl,imx8mp-dsp";',
+    content)
+
 with open(dts_path, 'w') as f:
     f.write(content)
 
