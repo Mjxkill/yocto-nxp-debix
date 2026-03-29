@@ -28,7 +28,7 @@ content = re.sub(
 \t\tstatus = "okay";
 \t\tpri-dai-link {
 \t\t\tlink-name = "tac5212 tdm";
-\t\t\tformat = "dsp_b";
+\t\t\tformat = "dsp_a";
 \t\t\tdai-tdm-slot-num = <8>;
 \t\t\tdai-tdm-slot-width = <32>;
 \t\t\tbitclock-master = <&tac5212_cpu>;

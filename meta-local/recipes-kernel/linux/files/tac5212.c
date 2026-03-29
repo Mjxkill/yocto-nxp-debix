@@ -53,7 +53,7 @@ static const struct reg_default tac5212_reg_defaults[] = {
 	{ TAC5212_ASI_CFG1,		0x00 },
 	{ TAC5212_PASI_CFG0,		0x30 },
 	{ TAC5212_PASI_TX_CFG0,		0x00 },
-	{ TAC5212_PASI_TX_CFG1,		0x00 },
+	{ TAC5212_PASI_TX_CFG1,		0x01 },
 	{ TAC5212_PASI_TX_CFG2,		0x00 },
 	{ TAC5212_PASI_TX_CH1_CFG,	0x20 },
 	{ TAC5212_PASI_TX_CH2_CFG,	0x21 },
@@ -173,7 +173,7 @@ static const struct regmap_config tac5212_regmap_config = {
 	.num_reg_defaults = ARRAY_SIZE(tac5212_reg_defaults),
 	.readable_reg = tac5212_readable_reg,
 	.volatile_reg = tac5212_volatile_reg,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_NONE,
 };
 
 /* ADC volume: register value 0=mute, 1=-80dB ... 161=0dB ... 255=+47dB
@@ -687,6 +687,11 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 
 	/* PASI_TX_CFG0: TX_FILL=1 + TX_KEEPER=1 + TX_LSB=1 (per AN sbaa383c) */
 	ret = regmap_write(priv->regmap, TAC5212_PASI_TX_CFG0, 0x68);
+	if (ret)
+		return ret;
+
+	/* PASI_TX_CFG1: TX_OFFSET=1 to align with SAI dsp_a (FSE=1) */
+	ret = regmap_write(priv->regmap, TAC5212_PASI_TX_CFG1, 0x01);
 	if (ret)
 		return ret;
 

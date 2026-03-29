@@ -45,6 +45,33 @@ do_patch:prepend() {
 \t\t}' ${S}/sound/soc/fsl/fsl_sai.c
     fi
 
+    # Patch fsl_sai_hw_params: async capture must also configure TX registers
+    # (TCR4/TCR5/TMR) so TX generates proper TDM clocks, and enable TX MCLK
+    if ! grep -q "async capture TX config" ${S}/sound/soc/fsl/fsl_sai.c; then
+        sed -i '/~0UL - ((1 << min(channels, slots)) - 1));/{
+            a\
+\n\t/* async capture TX config: configure TX TDM format for clock generation */\
+\tif (!tx && !sai->synchronous[RX] && !sai->synchronous[TX]) {\
+\t\tregmap_update_bits(sai->regmap, FSL_SAI_xCR4(true, ofs),\
+\t\t\t\t   FSL_SAI_CR4_SYWD_MASK | FSL_SAI_CR4_FRSZ_MASK |\
+\t\t\t\t   FSL_SAI_CR4_CHMOD_MASK | FSL_SAI_CR4_FCONT_MASK,\
+\t\t\t\t   val_cr4 | FSL_SAI_CR4_CHMOD);\
+\t\tregmap_update_bits(sai->regmap, FSL_SAI_xCR5(true, ofs),\
+\t\t\t\t   FSL_SAI_CR5_WNW_MASK | FSL_SAI_CR5_W0W_MASK |\
+\t\t\t\t   FSL_SAI_CR5_FBT_MASK, val_cr5);\
+\t\tregmap_write(sai->regmap, FSL_SAI_xMR(true),\
+\t\t\t     ~0UL - ((1 << min(channels, slots)) - 1));\
+\t\tif (!sai->is_consumer_mode[true]) {\
+\t\t\tfsl_sai_set_bclk(cpu_dai, true, bclk);\
+\t\t\tif (!(sai->mclk_streams & BIT(SNDRV_PCM_STREAM_PLAYBACK))) {\
+\t\t\t\tclk_prepare_enable(sai->mclk_clk[sai->mclk_id[true]]);\
+\t\t\t\tsai->mclk_streams |= BIT(SNDRV_PCM_STREAM_PLAYBACK);\
+\t\t\t}\
+\t\t}\
+\t}
+        }' ${S}/sound/soc/fsl/fsl_sai.c
+    fi
+
     # Add Kconfig entry before SND_SOC_TAS2552
     if ! grep -q SND_SOC_TAC5212 ${S}/sound/soc/codecs/Kconfig; then
         sed -i '/config SND_SOC_TAS2552/i\
