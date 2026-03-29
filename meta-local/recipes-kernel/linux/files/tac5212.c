@@ -513,6 +513,13 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 	if (ret)
 		return ret;
 
+	/* TX_EDGE: add half-cycle delay for BCLK > 18.5 MHz (per AN sbaa383c) */
+	ret = regmap_update_bits(priv->regmap, TAC5212_PASI_TX_CFG0,
+				TAC5212_PASI_TX_EDGE,
+				rate >= 96000 ? TAC5212_PASI_TX_EDGE : 0);
+	if (ret)
+		return ret;
+
 	/* All TACs are targets: receive BCLK+FSYNC from SAI7 */
 	ret = regmap_update_bits(priv->regmap, TAC5212_CNT_CLK_CFG2,
 				TAC5212_PASI_CNT_CFG |
@@ -656,7 +663,7 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 		return ret;
 	msleep(10);
 
-	/* INTF_CFG1: DOUT = Primary ASI DOUT (0x5), Hi-Z on inactive slots (0x3) */
+	/* INTF_CFG1: DOUT = Primary ASI DOUT (0x5), Hi-Z inactive slots (0x3) */
 	ret = regmap_write(priv->regmap, TAC5212_INTF_CFG1, 0x53);
 	if (ret)
 		return ret;
@@ -678,14 +685,8 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 	if (ret)
 		return ret;
 
-	/* PASI_TX_CFG0: Hi-Z for unused TDM slots (TX_FILL=1) */
-	ret = regmap_update_bits(priv->regmap, TAC5212_PASI_TX_CFG0,
-				TAC5212_PASI_TX_FILL, TAC5212_PASI_TX_FILL);
-	if (ret)
-		return ret;
-
-	/* PASI_TX_CFG1: TX_OFFSET=1 BCLK to align with SAI dsp_a framing */
-	ret = regmap_write(priv->regmap, TAC5212_PASI_TX_CFG1, 0x01);
+	/* PASI_TX_CFG0: TX_FILL=1 + TX_KEEPER=1 + TX_LSB=1 (per AN sbaa383c) */
+	ret = regmap_write(priv->regmap, TAC5212_PASI_TX_CFG0, 0x68);
 	if (ret)
 		return ret;
 
@@ -699,7 +700,7 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 	if (ret)
 		return ret;
 
-	/* PDM_DIN1_SEL=3 (GPI1) in INTF_CFG4 - applied when PDM mux is selected */
+	/* PDM_DIN1_SEL=3 (GPI1) in INTF_CFG4 */
 	ret = regmap_update_bits(priv->regmap, TAC5212_INTF_CFG4,
 				TAC5212_PDM_DIN1_SEL_MASK,
 				0x03 << TAC5212_PDM_DIN1_SEL_SHIFT);
