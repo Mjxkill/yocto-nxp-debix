@@ -479,7 +479,6 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 		break;
 	case 48000:
 	case 96000:
-	case 192000:
 		fs_mode = 0;
 		break;
 	default:
@@ -616,8 +615,7 @@ static struct snd_soc_dai_driver tac5212_dai = {
 		.channels_max = 2,
 		.rates = SNDRV_PCM_RATE_44100 |
 			SNDRV_PCM_RATE_48000 |
-			SNDRV_PCM_RATE_96000 |
-			SNDRV_PCM_RATE_192000,
+			SNDRV_PCM_RATE_96000,
 		.formats = SNDRV_PCM_FMTBIT_S16_LE |
 			   SNDRV_PCM_FMTBIT_S20_3LE |
 			   SNDRV_PCM_FMTBIT_S24_LE |
@@ -629,8 +627,7 @@ static struct snd_soc_dai_driver tac5212_dai = {
 		.channels_max = 2,
 		.rates = SNDRV_PCM_RATE_44100 |
 			SNDRV_PCM_RATE_48000 |
-			SNDRV_PCM_RATE_96000 |
-			SNDRV_PCM_RATE_192000,
+			SNDRV_PCM_RATE_96000,
 		.formats = SNDRV_PCM_FMTBIT_S16_LE |
 			   SNDRV_PCM_FMTBIT_S20_3LE |
 			   SNDRV_PCM_FMTBIT_S24_LE |
