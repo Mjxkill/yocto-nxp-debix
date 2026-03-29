@@ -17,28 +17,32 @@ do_patch:prepend() {
     cp ${WORKDIR}/tac5212.c ${S}/sound/soc/codecs/tac5212.c
     cp ${WORKDIR}/tac5212.h ${S}/sound/soc/codecs/tac5212.h
 
-    # Patch fsl_sai: in sync mode, ensure BCD/FSD set on BOTH directions
-    # Both TX and RX pins drive the same BCLK/FSYNC (same SAI, shared wire)
-    if ! grep -q "sync mode BCD/FSD fix" ${S}/sound/soc/fsl/fsl_sai.c; then
+    # Patch fsl_sai: async mode - force RX as consumer (BCD=0, FSD=0)
+    # TX stays provider, RX receives clocks from shared wire via its own pins
+    if ! grep -q "async RX consumer fix" ${S}/sound/soc/fsl/fsl_sai.c; then
         sed -i '/FSL_SAI_CR4_FSP | FSL_SAI_CR4_FSD_MSTR, val_cr4);/{
             a\
-\n\t/* sync mode BCD/FSD fix: set BCD/FSD on both directions */\
-\tif (sai->synchronous[RX] && !sai->synchronous[TX]) {\
-\t\tregmap_update_bits(sai->regmap, FSL_SAI_xCR2(true, ofs),\
-\t\t\t\t   FSL_SAI_CR2_BCD_MSTR, val_cr2 & FSL_SAI_CR2_BCD_MSTR);\
-\t\tregmap_update_bits(sai->regmap, FSL_SAI_xCR4(true, ofs),\
-\t\t\t\t   FSL_SAI_CR4_FSD_MSTR, val_cr4 & FSL_SAI_CR4_FSD_MSTR);\
+\n\t/* async RX consumer fix: RX must be consumer (clocks from TX via shared wire) */\
+\tif (!sai->synchronous[RX] && !sai->synchronous[TX] && !tx) {\
+\t\tregmap_update_bits(sai->regmap, FSL_SAI_xCR2(false, ofs),\
+\t\t\t\t   FSL_SAI_CR2_BCD_MSTR, 0);\
+\t\tregmap_update_bits(sai->regmap, FSL_SAI_xCR4(false, ofs),\
+\t\t\t\t   FSL_SAI_CR4_FSD_MSTR, 0);\
+\t\tsai->is_consumer_mode[false] = true;\
 \t}
         }' ${S}/sound/soc/fsl/fsl_sai.c
     fi
 
-    # Patch fsl_sai_trigger: in sync mode capture, enable TX TRCE for clock gen
-    if ! grep -q "sync mode TRCE fix" ${S}/sound/soc/fsl/fsl_sai.c; then
+    # Patch fsl_sai_trigger: when capture starts, also start TX for clock gen
+    if ! grep -q "async capture TX start" ${S}/sound/soc/fsl/fsl_sai.c; then
         sed -i '/FSL_SAI_CSR_xIE_MASK, FSL_SAI_FLAGS);/a\
-\n\t\t/* sync mode TRCE fix: enable opposite TRCE for clock generation */\
-\t\tif (fsl_sai_dir_is_synced(sai, adir) && !tx)\
-\t\t\tregmap_update_bits(sai->regmap, FSL_SAI_xCR3(!tx, ofs),\
-\t\t\t\t\t   FSL_SAI_CR3_TRCE_MASK, FSL_SAI_CR3_TRCE(1));' ${S}/sound/soc/fsl/fsl_sai.c
+\n\t\t/* async capture TX start: enable TX clocks when RX starts */\
+\t\tif (!tx && !sai->synchronous[RX]) {\
+\t\t\tregmap_update_bits(sai->regmap, FSL_SAI_xCR3(true, ofs),\
+\t\t\t\t\t   FSL_SAI_CR3_TRCE_MASK, FSL_SAI_CR3_TRCE(1));\
+\t\t\tregmap_update_bits(sai->regmap, FSL_SAI_xCSR(true, ofs),\
+\t\t\t\t\t   FSL_SAI_CSR_TERE, FSL_SAI_CSR_TERE);\
+\t\t}' ${S}/sound/soc/fsl/fsl_sai.c
     fi
 
     # Add Kconfig entry before SND_SOC_TAS2552

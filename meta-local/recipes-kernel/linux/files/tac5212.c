@@ -659,8 +659,8 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 		return ret;
 	msleep(10);
 
-	/* INTF_CFG1: DOUT = Primary ASI DOUT (0x5), active drive (0x2) */
-	ret = regmap_write(priv->regmap, TAC5212_INTF_CFG1, 0x52);
+	/* INTF_CFG1: DOUT = Primary ASI DOUT (0x5), Hi-Z on inactive slots (0x3) */
+	ret = regmap_write(priv->regmap, TAC5212_INTF_CFG1, 0x53);
 	if (ret)
 		return ret;
 
@@ -678,6 +678,29 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 
 	/* MISC_CFG: ignore clock errors so TAC can init before BCLK is present */
 	ret = regmap_update_bits(priv->regmap, TAC5212_MISC_CFG, BIT(6), BIT(6));
+	if (ret)
+		return ret;
+
+	/* PASI_TX_CFG0: Hi-Z for unused TDM slots (TX_FILL=1) */
+	ret = regmap_update_bits(priv->regmap, TAC5212_PASI_TX_CFG0,
+				TAC5212_PASI_TX_FILL, TAC5212_PASI_TX_FILL);
+	if (ret)
+		return ret;
+
+	/* GPO1: PDMCLK output, active drive */
+	ret = regmap_write(priv->regmap, TAC5212_GPO1_CFG0, 0x41);
+	if (ret)
+		return ret;
+
+	/* GPI1: enable as input (for PDM data) */
+	ret = regmap_write(priv->regmap, TAC5212_GPI_CFG, 0x02);
+	if (ret)
+		return ret;
+
+	/* PDM_DIN1_SEL=3 (GPI1) in INTF_CFG4 - applied when PDM mux is selected */
+	ret = regmap_update_bits(priv->regmap, TAC5212_INTF_CFG4,
+				TAC5212_PDM_DIN1_SEL_MASK,
+				0x03 << TAC5212_PDM_DIN1_SEL_SHIFT);
 	if (ret)
 		return ret;
 

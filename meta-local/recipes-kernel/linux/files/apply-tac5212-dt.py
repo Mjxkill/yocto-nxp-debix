@@ -43,13 +43,12 @@ content = re.sub(
 \t};""", content, flags=re.DOTALL)
 
 # 3. SAI7: keep mclk-direction-output (SAI is bus master),
-#    synchronous mode (RX uses TX clocks),
+#    asynchronous mode (TX=provider, RX=consumer on same physical wires),
 #    enable both RX and TX datalines,
 #    remove fixed clock rate so driver can switch PLL for 44.1k/48k families
 def fix_sai7(m):
     block = m.group(0)
-    block = block.replace('fsl,sai-asynchronous;\n', '')
-    block = block.replace('fsl,dataline = <1 0 1>;', 'fsl,dataline = <1 1 1>;')
+    block = block.replace('fsl,dataline = <1 0 1>;', 'fsl,dataline = <0 1 1>;')
     # Remove fixed clock rate so SAI driver can reparent PLL dynamically
     block = re.sub(r'\n\tassigned-clock-rates = <12288000>;', '', block)
     # Override clocks and clock-names to add pll8k/pll11k for 44.1k support
@@ -69,9 +68,10 @@ content = re.sub(r'&sai7 \{.*?\n\};', fix_sai7, content, flags=re.DOTALL)
 content = content.replace(
     'MX8MP_IOMUXC_ECSPI2_MOSI__AUDIOMIX_SAI7_TX_DATA00\t0x1c4\n\t\t>;',
     'MX8MP_IOMUXC_ECSPI2_MOSI__AUDIOMIX_SAI7_TX_DATA00\t0x1c4\n'
-    '\t\t\tMX8MP_IOMUXC_ECSPI1_SCLK__AUDIOMIX_SAI7_RX_SYNC\t0x1c4\n'
-    '\t\t\tMX8MP_IOMUXC_ECSPI1_MOSI__AUDIOMIX_SAI7_RX_BCLK\t0x1c4\n'
-    '\t\t\tMX8MP_IOMUXC_ECSPI1_MISO__AUDIOMIX_SAI7_RX_DATA00\t0x1c4\n\t\t>;')
+    '\t\t\t/* RX pins with SION enabled (0x13 = mux mode 3 + SION bit) */\n'
+    '\t\t\t0x1E0 0x440 0x538 0x13 0x1\t\t\t\t0x1c4\n'
+    '\t\t\t0x1E4 0x444 0x530 0x13 0x1\t\t\t\t0x1c4\n'
+    '\t\t\t0x1E8 0x448 0x534 0x13 0x1\t\t\t\t0x1c4\n\t\t>;')
 
 # 5. Disable eeprom@50 and hym8563@51
 content = re.sub(
