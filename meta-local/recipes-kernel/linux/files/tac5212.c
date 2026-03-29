@@ -687,6 +687,11 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 	if (ret)
 		return ret;
 
+	/* PASI_TX_CFG1: TX_OFFSET=1 BCLK to align with SAI dsp_a framing */
+	ret = regmap_write(priv->regmap, TAC5212_PASI_TX_CFG1, 0x01);
+	if (ret)
+		return ret;
+
 	/* GPO1: PDMCLK output, active drive */
 	ret = regmap_write(priv->regmap, TAC5212_GPO1_CFG0, 0x41);
 	if (ret)
