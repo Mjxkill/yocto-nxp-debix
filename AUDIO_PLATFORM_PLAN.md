@@ -30,11 +30,15 @@ Plateforme audio professionnelle embarquée sur i.MX8MP (Debix Model AB) avec :
                     │  └────┬─────┘    └──────────┘          │
                     │       │                                │
                     │  ┌────┴──────────────────────┐         │
-                    │  │ USB Composite Gadget       │         │
-                    │  │ ├─ UAC2 Audio 8x8 (PC)    │──► USB1 │
-                    │  │ ├─ RNDIS/ECM Network       │         │
-                    │  │ └─ UAC2 Audio 2x2 (Phone)  │──► USB2 │
-                    │  └───────────────────────────┘         │
+                    │  │ USB1 Composite Gadget (PC) │         │
+                    │  │ ├─ UAC2 Audio 8in x 8out   │──► USB1 │
+                    │  │ ├─ MIDI IN/OUT              │         │
+                    │  │ └─ RNDIS/ECM Network        │         │
+                    │  │                             │         │
+                    │  │ USB2 Composite Gadget (Phone)│        │
+                    │  │ ├─ UAC2 Audio 2in x 2out    │──► USB2 │
+                    │  │ └─ MIDI IN/OUT              │         │
+                    │  └─────────────────────────────┘        │
                     └────────────────────────────────────────┘
 ```
 
@@ -152,7 +156,8 @@ Avec SOF, le DSP maintient le SAI7 actif en permanence → BCLK continu natif.
 ### Configuration ConfigFS
 
 ```
-/sys/kernel/config/usb_gadget/audiomix/
+# USB1 — PC (Audio 8x8 + MIDI + Réseau)
+/sys/kernel/config/usb_gadget/usb1_pc/
 ├── idVendor = 0x1d6b
 ├── idProduct = 0x0104
 ├── strings/0x409/
@@ -160,29 +165,58 @@ Avec SOF, le DSP maintient le SAI7 actif en permanence → BCLK continu natif.
 │   ├── product = "Audio Platform 8x8"
 │   └── serialnumber = "001"
 ├── functions/
-│   ├── uac2.0/          # Audio 8x8 pour PC
+│   ├── uac2.0/          # Audio 8in x 8out
 │   │   ├── c_chmask = 0xFF    # 8 canaux capture
 │   │   ├── c_srate = 48000
 │   │   ├── c_ssize = 4        # 32-bit
 │   │   ├── p_chmask = 0xFF    # 8 canaux playback
 │   │   ├── p_srate = 48000
 │   │   └── p_ssize = 4
-│   ├── uac2.1/          # Audio 2x2 pour téléphone (USB2)
-│   │   ├── c_chmask = 0x03
-│   │   ├── p_chmask = 0x03
-│   │   └── ...
+│   ├── midi.0/           # MIDI IN/OUT
+│   │   ├── in_ports = 1
+│   │   └── out_ports = 1
 │   └── rndis.0/         # Réseau Ethernet over USB
 │       └── (config auto)
 ├── configs/c.1/
 │   ├── uac2.0 → functions/uac2.0
+│   ├── midi.0 → functions/midi.0
 │   └── rndis.0 → functions/rndis.0
-└── UDC = <controller>
+└── UDC = <controller1>
+
+# USB2 — Téléphone (Audio 2x2 + MIDI)
+/sys/kernel/config/usb_gadget/usb2_phone/
+├── idVendor = 0x1d6b
+├── idProduct = 0x0105
+├── strings/0x409/
+│   ├── manufacturer = "Debix Audio"
+│   ├── product = "Audio Platform 2x2"
+│   └── serialnumber = "002"
+├── functions/
+│   ├── uac2.0/          # Audio 2in x 2out
+│   │   ├── c_chmask = 0x03    # 2 canaux capture
+│   │   ├── c_srate = 48000
+│   │   ├── c_ssize = 4
+│   │   ├── p_chmask = 0x03    # 2 canaux playback
+│   │   ├── p_srate = 48000
+│   │   └── p_ssize = 4
+│   └── midi.0/           # MIDI IN/OUT
+│       ├── in_ports = 1
+│       └── out_ports = 1
+├── configs/c.1/
+│   ├── uac2.0 → functions/uac2.0
+│   └── midi.0 → functions/midi.0
+└── UDC = <controller2>
 ```
 
-### Réseau USB
+### Réseau USB (via USB1 uniquement)
 - IP fixe : 192.168.10.1 (côté carte)
 - DHCP serveur : dnsmasq (range 192.168.10.100-200)
 - Le PC obtient automatiquement une IP et accède au site web
+
+### MIDI
+- USB MIDI Class Compliant (pas de driver spécial côté PC/téléphone)
+- Utilisable pour : contrôle de la table de mixage par surface MIDI,
+  transport DAW, sync tempo Delay, automation des paramètres
 
 ---
 
@@ -227,9 +261,12 @@ GET/POST /api/master/limiter             # {ceiling, release}
 GET/POST /api/master/fader               # -inf à 0 dB
 GET/POST /api/master/eq                  # {band1..3: {freq, gain, q}} (TAC DAC Biquads)
 
-# USB Audio
+# USB Audio & MIDI
 GET/POST /api/usb/pc/routing             # Matrice de routage 8x8
 GET/POST /api/usb/phone/routing          # Matrice de routage 2x2
+GET/POST /api/midi/mapping               # MIDI CC → paramètre mixer (assignable)
+GET/POST /api/midi/learn                 # Mode MIDI Learn (touche un CC → assigne)
+GET      /api/midi/status                # Ports MIDI connectés
 
 # NPU Auto-Mastering
 GET/POST /api/npu/auto_master            # {enabled, target_lufs, style}
@@ -338,13 +375,14 @@ GET      /api/system/status              # Statut PLL, clock errors, DSP load
 - [ ] 4.10 Valider : chaîne complète channel strip → FX → master → sortie
 - [ ] 4.11 Mesurer charge DSP, optimiser si nécessaire
 
-### Phase 5 : USB Audio Gadget + EASRC
-- [ ] 5.1 USB Composite Gadget ConfigFS (UAC2 8x8 + RNDIS)
-- [ ] 5.2 Script systemd pour configuration automatique au boot
-- [ ] 5.3 Intégration EASRC : routage DMA des flux USB vers ASRC hardware
-- [ ] 5.4 Topologie SOF étendue : endpoints USB dans la matrice de routage
-- [ ] 5.5 2ème port USB : UAC2 2x2 pour téléphone
-- [ ] 5.6 Valider : PC voit carte son 8x8 + interface réseau, téléphone 2x2
+### Phase 5 : USB Gadgets + EASRC + MIDI
+- [ ] 5.1 USB1 Composite Gadget ConfigFS (UAC2 8x8 + MIDI + RNDIS) pour PC
+- [ ] 5.2 USB2 Composite Gadget ConfigFS (UAC2 2x2 + MIDI) pour téléphone
+- [ ] 5.3 Scripts systemd pour configuration automatique au boot (2 gadgets)
+- [ ] 5.4 Intégration EASRC : routage DMA des flux USB vers ASRC hardware
+- [ ] 5.5 Topologie SOF étendue : endpoints USB dans la matrice de routage
+- [ ] 5.6 MIDI : bridge ALSA MIDI ↔ contrôles DSP/TAC (paramètres mappables)
+- [ ] 5.7 Valider : PC voit carte son 8x8 + MIDI + réseau, téléphone 2x2 + MIDI
 
 ### Phase 6 : NPU Auto-Mastering
 - [ ] 6.1 Modèle d'analyse spectrale (TFLite sur NPU via eIQ)
