@@ -468,7 +468,13 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 	 * white noise. At probe time BCLK is not yet running.
 	 */
 	if (priv->needs_reset) {
+		unsigned int saved_cfg4;
+
 		priv->needs_reset = false;
+		/* Save user's PDM_CH_SEL choice before reset */
+		regmap_read(priv->regmap, TAC5212_INTF_CFG4, &saved_cfg4);
+		saved_cfg4 &= (TAC5212_PDM_CH1_SEL | TAC5212_PDM_CH2_SEL);
+
 		regmap_write(priv->regmap, TAC5212_SW_RESET,
 			     TAC5212_SW_RESET_BIT);
 		msleep(2);
@@ -488,7 +494,7 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 		regmap_write(priv->regmap, TAC5212_GPO1_CFG0, 0x41);
 		regmap_write(priv->regmap, TAC5212_GPI_CFG, 0x02);
 		regmap_write(priv->regmap, TAC5212_INTF_CFG4,
-			     TAC5212_PDM_CH1_SEL | TAC5212_PDM_CH2_SEL |
+			     saved_cfg4 |
 			     (0x03 << TAC5212_PDM_DIN1_SEL_SHIFT));
 		regmap_write(priv->regmap, TAC5212_PASI_CFG0, 0x30);
 		regmap_write(priv->regmap, TAC5212_CLK_CFG2,
@@ -750,12 +756,9 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 	if (ret)
 		return ret;
 
-	/* INTF_CFG4: enable PDM on CH1+CH2, PDM_DIN1=GPI1
-	 * PDM must be configured BEFORE channels/power are enabled,
-	 * otherwise the PDM decoder produces white noise.
-	 * DAPM mux can switch back to analog later if needed. */
+	/* INTF_CFG4: pre-configure PDM_DIN1=GPI1, default analog.
+	 * DAPM mux controls PDM_CH_SEL bits when user switches. */
 	ret = regmap_write(priv->regmap, TAC5212_INTF_CFG4,
-			   TAC5212_PDM_CH1_SEL | TAC5212_PDM_CH2_SEL |
 			   (0x03 << TAC5212_PDM_DIN1_SEL_SHIFT));
 	if (ret)
 		return ret;
