@@ -27,6 +27,7 @@ struct tac5212_priv {
 	unsigned int tdm_slots;
 	unsigned int slot_width;
 	unsigned int base_slot;
+	bool needs_reset;
 };
 
 static const struct reg_default tac5212_reg_defaults[] = {
@@ -461,6 +462,45 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 	unsigned int wlen, fs_mode, dummy;
 	int ret;
 
+	/*
+	 * On first stream open, do a SW reset with BCLK present.
+	 * The PDM decoder needs BCLK active during init to avoid
+	 * white noise. At probe time BCLK is not yet running.
+	 */
+	if (priv->needs_reset) {
+		priv->needs_reset = false;
+		regmap_write(priv->regmap, TAC5212_SW_RESET,
+			     TAC5212_SW_RESET_BIT);
+		msleep(2);
+		regmap_write(priv->regmap, TAC5212_DEV_MISC_CFG,
+			     TAC5212_SLEEP_ENZ | TAC5212_SLEEP_EXIT_VREF_EN);
+		msleep(10);
+		regmap_write(priv->regmap, TAC5212_INTF_CFG1, 0x53);
+		regmap_write(priv->regmap, TAC5212_INTF_CFG2,
+			     TAC5212_PASI_DIN_EN);
+		regmap_write(priv->regmap, TAC5212_ASI_CFG0,
+			     TAC5212_SASI_DIS);
+		regmap_update_bits(priv->regmap, TAC5212_MISC_CFG,
+				   BIT(6), BIT(6));
+		regmap_write(priv->regmap, TAC5212_PASI_TX_CFG0, 0x68);
+		regmap_write(priv->regmap, TAC5212_PASI_TX_CFG1, 0x01);
+		regmap_write(priv->regmap, TAC5212_PASI_RX_CFG0, 0x01);
+		regmap_write(priv->regmap, TAC5212_GPO1_CFG0, 0x41);
+		regmap_write(priv->regmap, TAC5212_GPI_CFG, 0x02);
+		regmap_write(priv->regmap, TAC5212_INTF_CFG4,
+			     TAC5212_PDM_CH1_SEL | TAC5212_PDM_CH2_SEL |
+			     (0x03 << TAC5212_PDM_DIN1_SEL_SHIFT));
+		regmap_write(priv->regmap, TAC5212_PASI_CFG0, 0x30);
+		regmap_write(priv->regmap, TAC5212_CLK_CFG2,
+			     TAC5212_AUTO_PLL_FR_ALLOW);
+		regmap_write(priv->regmap, TAC5212_CH_EN,
+			     TAC5212_IN_CH1_EN | TAC5212_IN_CH2_EN |
+			     TAC5212_OUT_CH1_EN | TAC5212_OUT_CH2_EN);
+		regmap_write(priv->regmap, TAC5212_PWR_CFG,
+			     TAC5212_ADC_PDZ | TAC5212_DAC_PDZ |
+			     TAC5212_MICBIAS_PDZ);
+	}
+
 	/* Clear latched clock errors */
 	{
 		unsigned int dummy;
@@ -710,10 +750,13 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 	if (ret)
 		return ret;
 
-	/* PDM_DIN1_SEL=3 (GPI1) in INTF_CFG4 */
-	ret = regmap_update_bits(priv->regmap, TAC5212_INTF_CFG4,
-				TAC5212_PDM_DIN1_SEL_MASK,
-				0x03 << TAC5212_PDM_DIN1_SEL_SHIFT);
+	/* INTF_CFG4: enable PDM on CH1+CH2, PDM_DIN1=GPI1
+	 * PDM must be configured BEFORE channels/power are enabled,
+	 * otherwise the PDM decoder produces white noise.
+	 * DAPM mux can switch back to analog later if needed. */
+	ret = regmap_write(priv->regmap, TAC5212_INTF_CFG4,
+			   TAC5212_PDM_CH1_SEL | TAC5212_PDM_CH2_SEL |
+			   (0x03 << TAC5212_PDM_DIN1_SEL_SHIFT));
 	if (ret)
 		return ret;
 
@@ -763,7 +806,8 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 	if (ret)
 		return ret;
 	ret = regmap_write(priv->regmap, TAC5212_PWR_CFG,
-			   TAC5212_ADC_PDZ | TAC5212_DAC_PDZ);
+			   TAC5212_ADC_PDZ | TAC5212_DAC_PDZ |
+			   TAC5212_MICBIAS_PDZ);
 	if (ret)
 		return ret;
 
@@ -775,6 +819,9 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 		regmap_read(priv->regmap, TAC5212_DEV_STS0, &dummy);
 		regmap_read(priv->regmap, TAC5212_DEV_STS1, &dummy);
 	}
+
+	/* Request SW reset on first stream open (BCLK needed for PDM init) */
+	priv->needs_reset = true;
 
 	dev_info(priv->dev, "TAC5212 initialized (I2C 0x%02x, slots %u-%u)\n",
 		 priv->base_slot / 2 + TAC5212_I2C_BASE_ADDR,
