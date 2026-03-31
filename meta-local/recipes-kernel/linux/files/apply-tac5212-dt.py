@@ -173,13 +173,9 @@ content = re.sub(
 \tstatus = "okay";
 };""", content, flags=re.DOTALL)
 
-# 8. Disable SAI7 — SOF controls it via the DSP
-# Replace status = "okay" with "disabled" inside the &sai7 block
-def disable_sai7(m):
-    block = m.group(0)
-    block = block.replace('status = "okay"', 'status = "disabled"')
-    return block
-content = re.sub(r'&sai7 \{.*?\n\};', disable_sai7, content, flags=re.DOTALL)
+# 8. Keep SAI7 enabled (clocks/clock gates active) but SOF controls it via DSP
+# The sound-tac5212 machine driver is already replaced by sof-sound-tac5212,
+# so SAI7 won't create its own ALSA card. It just keeps clocks running.
 
 with open(dts_path, 'w') as f:
     f.write(content)
