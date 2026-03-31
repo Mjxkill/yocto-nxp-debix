@@ -177,7 +177,12 @@ content = re.sub(
 \tstatus = "okay";
 };""", content, flags=re.DOTALL)
 
-# 8. Disable SAI7 — SOF controls it via the DSP
+# 8. Disable SDMA3 — SOF DSP controls it directly
+content = content.replace(
+    '&sdma3 {',
+    '&sdma3 {\n\tstatus = "disabled";')
+
+# 9. Disable SAI7 — SOF controls it via the DSP
 # Clock gates and pin mux are handled by the DSP node and tac5212 driver
 def disable_sai7(m):
     block = m.group(0)
