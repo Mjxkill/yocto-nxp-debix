@@ -67,7 +67,8 @@ DAI_ADD(sof/pipe-dai-playback.m4,
 	1000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
 
 # PCM devices
-PCM_DUPLEX_ADD(TAC5212, 0, PIPELINE_PCM_1, PIPELINE_PCM_2)
+# PCM_DUPLEX_ADD(name, id, playback_pipeline, capture_pipeline)
+PCM_DUPLEX_ADD(TAC5212, 0, PIPELINE_PCM_2, PIPELINE_PCM_1)
 
 # SAI7 DAI configuration
 # TDM: 8 slots x 32 bits, DSP_A format
