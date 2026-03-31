@@ -148,14 +148,20 @@ content = re.sub(
 \t#sound-dai-cells = <1>;
 \tcompatible = "fsl,imx8mp-dsp";
 \treg = <0x0 0x3B6E8000 0x0 0x88000>;
+\tpinctrl-names = "default";
+\tpinctrl-0 = <&pinctrl_sai7>;
 \tpower-domains = <&audiomix_pd>;
+\tassigned-clocks = <&clk IMX8MP_CLK_SAI7>;
+\tassigned-clock-parents = <&clk IMX8MP_AUDIO_PLL1_OUT>;
+\tassigned-clock-rates = <12288000>;
 \tclocks = <&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_OCRAMA_IPG>,
 \t\t<&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_DSP_ROOT>,
 \t\t<&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_DSPDBG_ROOT>,
 \t\t<&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_SAI7_IPG>,
+\t\t<&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_SAI7_MCLK1>,
 \t\t<&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_SDMA3_ROOT>;
 \tclock-names = "ipg", "ocram", "core",
-\t\t"sai7_bus", "sdma3_root";
+\t\t"sai7_bus", "sai7_mclk", "sdma3_root";
 \tmbox-names = "txdb0", "txdb1", "rxdb0", "rxdb1";
 \tmboxes = <&mu2 2 0>, <&mu2 2 1>,
 \t\t <&mu2 3 0>, <&mu2 3 1>;
