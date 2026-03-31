@@ -141,12 +141,32 @@ if i2c4_start is not None:
             lines.insert(i2c4_end, line)
         content = '\n'.join(lines)
 
-# 7. Switch DSP node from remoteproc to SOF: override compatible in &dsp
-# The base compatible is in imx8mp.dtsi, we override it in the &dsp node
+# 7. Reconfigure DSP node for SOF (replaces remoteproc config)
+# Based on imx8mp-evk-sof-wm8960.dts reference
 content = re.sub(
-    r'(&dsp \{)',
-    r'\1\n\tcompatible = "fsl,imx8mp-dsp";',
-    content)
+    r'&dsp \{[^}]*\};',
+    """&dsp {
+\t#sound-dai-cells = <1>;
+\tcompatible = "fsl,imx8mp-dsp";
+\treg = <0x0 0x3B6E8000 0x0 0x88000>;
+\tpower-domains = <&audiomix_pd>;
+\tclocks = <&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_OCRAMA_IPG>,
+\t\t<&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_DSP_ROOT>,
+\t\t<&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_DSPDBG_ROOT>,
+\t\t<&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_SAI7_IPG>,
+\t\t<&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_SDMA3_ROOT>;
+\tclock-names = "ipg", "ocram", "core",
+\t\t"sai7_bus", "sdma3_root";
+\tmbox-names = "txdb0", "txdb1", "rxdb0", "rxdb1";
+\tmboxes = <&mu2 2 0>, <&mu2 2 1>,
+\t\t <&mu2 3 0>, <&mu2 3 1>;
+\tmemory-region = <&dsp_reserved>;
+\t/delete-property/ firmware-name;
+\ttplg-name = "sof-imx8-nocodec-sai.tplg";
+\tmachine-drv-name = "asoc-simple-card";
+\tsyscon = <&audio_blk_ctrl>;
+\tstatus = "okay";
+};""", content, flags=re.DOTALL)
 
 with open(dts_path, 'w') as f:
     f.write(content)
