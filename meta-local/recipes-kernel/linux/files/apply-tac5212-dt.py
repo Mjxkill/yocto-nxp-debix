@@ -22,19 +22,18 @@ content = re.sub(
 content = re.sub(
     r'\n\tsound-dac-out \{.*?\n\t\};',
     """
-\tsound-tac5212 {
-\t\tcompatible = "fsl,imx-audio-card";
-\t\tmodel = "tac5212-tdm";
-\t\tstatus = "okay";
-\t\tpri-dai-link {
-\t\t\tlink-name = "tac5212 tdm";
+\tsof-sound-tac5212 {
+\t\tcompatible = "simple-audio-card";
+\t\tlabel = "tac5212-tdm";
+\t\tsimple-audio-card,dai-link@0 {
+\t\t\tlink-name = "tac5212-hifi";
 \t\t\tformat = "dsp_a";
 \t\t\tdai-tdm-slot-num = <8>;
 \t\t\tdai-tdm-slot-width = <32>;
-\t\t\tbitclock-master = <&tac5212_cpu>;
-\t\t\tframe-master = <&tac5212_cpu>;
-\t\t\ttac5212_cpu: cpu {
-\t\t\t\tsound-dai = <&sai7>;
+\t\t\tbitclock-master = <&sndcpu>;
+\t\t\tframe-master = <&sndcpu>;
+\t\t\tsndcpu: cpu {
+\t\t\t\tsound-dai = <&dsp 1>;
 \t\t\t};
 \t\t\tcodec {
 \t\t\t\tsound-dai = <&tac0>, <&tac1>, <&tac2>, <&tac3>;
@@ -167,6 +166,14 @@ content = re.sub(
 \tsyscon = <&audio_blk_ctrl>;
 \tstatus = "okay";
 };""", content, flags=re.DOTALL)
+
+# 8. Disable SAI7 — SOF controls it via the DSP
+# Replace status = "okay" with "disabled" inside the &sai7 block
+def disable_sai7(m):
+    block = m.group(0)
+    block = block.replace('status = "okay"', 'status = "disabled"')
+    return block
+content = re.sub(r'&sai7 \{.*?\n\};', disable_sai7, content, flags=re.DOTALL)
 
 with open(dts_path, 'w') as f:
     f.write(content)

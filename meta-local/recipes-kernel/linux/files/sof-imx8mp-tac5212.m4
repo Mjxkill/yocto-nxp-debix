@@ -56,13 +56,13 @@ dnl     deadline, priority, core)
 
 # Capture DAI is SAI7 (dai_index=6, zero-based: SAI1=0...SAI7=6)
 DAI_ADD(sof/pipe-dai-capture.m4,
-	1, SAI, 6, tac5212-tdm,
+	1, SAI, 7, tac5212-hifi,
 	PIPELINE_SINK_1, 2, s32le,
 	1000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
 
 # Playback DAI is SAI7
 DAI_ADD(sof/pipe-dai-playback.m4,
-	2, SAI, 6, tac5212-tdm,
+	2, SAI, 7, tac5212-hifi,
 	PIPELINE_SOURCE_2, 2, s32le,
 	1000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
 
@@ -72,9 +72,9 @@ PCM_DUPLEX_ADD(TAC5212, 0, PIPELINE_PCM_1, PIPELINE_PCM_2)
 # SAI7 DAI configuration
 # TDM: 8 slots x 32 bits, DSP_A format
 # SAI7 is bus master (codec_consumer = SAI provides clocks)
-DAI_CONFIG(SAI, 6, 0, tac5212-tdm,
+DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
 	SAI_CONFIG(DSP_A, SAI_CLOCK(mclk, 12288000, codec_mclk_in),
 		SAI_CLOCK(bclk, 12288000, codec_consumer),
 		SAI_CLOCK(fsync, 48000, codec_consumer),
 		SAI_TDM(8, 32, 255, 255),
-		SAI_CONFIG_DATA(SAI, 6, 0)))
+		SAI_CONFIG_DATA(SAI, 7, 0)))
