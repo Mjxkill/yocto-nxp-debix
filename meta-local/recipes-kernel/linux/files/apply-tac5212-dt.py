@@ -162,7 +162,7 @@ content = re.sub(
 \t\t <&mu2 3 0>, <&mu2 3 1>;
 \tmemory-region = <&dsp_reserved>;
 \t/delete-property/ firmware-name;
-\ttplg-name = "sof-imx8-nocodec-sai.tplg";
+\ttplg-name = "sof-imx8mp-tac5212.tplg";
 \tmachine-drv-name = "asoc-simple-card";
 \tsyscon = <&audio_blk_ctrl>;
 \tstatus = "okay";
