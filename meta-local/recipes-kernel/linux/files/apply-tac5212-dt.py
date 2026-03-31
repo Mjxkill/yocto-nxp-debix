@@ -112,6 +112,10 @@ if i2c4_start is not None:
             '\t\treg = <0x50>;',
             '\t\t#sound-dai-cells = <0>;',
             '\t\tsound-name-prefix = "TAC0";',
+            '\t\t/* SAI7 clocks kept enabled for DSP/SOF operation */',
+            '\t\tclocks = <&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_SAI7_IPG>,',
+            '\t\t\t <&audio_blk_ctrl IMX8MP_CLK_AUDIOMIX_SAI7_MCLK1>;',
+            '\t\tclock-names = "sai-ipg", "sai-mclk";',
             '\t};',
             '',
             '\ttac1: audio-codec@51 {',
@@ -173,9 +177,13 @@ content = re.sub(
 \tstatus = "okay";
 };""", content, flags=re.DOTALL)
 
-# 8. Keep SAI7 enabled (clocks/clock gates active) but SOF controls it via DSP
-# The sound-tac5212 machine driver is already replaced by sof-sound-tac5212,
-# so SAI7 won't create its own ALSA card. It just keeps clocks running.
+# 8. Disable SAI7 — SOF controls it via the DSP
+# Clock gates and pin mux are handled by the DSP node and tac5212 driver
+def disable_sai7(m):
+    block = m.group(0)
+    block = block.replace('status = "okay"', 'status = "disabled"')
+    return block
+content = re.sub(r'&sai7 \{.*?\n\};', disable_sai7, content, flags=re.DOTALL)
 
 with open(dts_path, 'w') as f:
     f.write(content)

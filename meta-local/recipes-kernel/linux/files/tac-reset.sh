@@ -49,25 +49,45 @@ reset_tac() {
     echo "TAC @ $ADDR reset done."
 }
 
+# Fix SAI7 RX direction: force consumer mode (BCD=0, FSD=0)
+# SOF firmware incorrectly sets RX as master, conflicting with TX on shared pins
+fix_sai7_rx() {
+    python3 -c "
+import mmap, struct, os
+fd = os.open('/dev/mem', os.O_RDWR | os.O_SYNC)
+m = mmap.mmap(fd, 0x100, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=0x30c80000)
+rcr2 = struct.unpack('<I', m[0x90:0x94])[0]
+rcr2 &= ~(1 << 24)  # BCD=0 (consumer)
+m[0x90:0x94] = struct.pack('<I', rcr2)
+rcr4 = struct.unpack('<I', m[0x98:0x9C])[0]
+rcr4 &= ~1  # FSD=0 (consumer)
+m[0x98:0x9C] = struct.pack('<I', rcr4)
+m.close(); os.close(fd)
+print('SAI7 RX fixed: BCD=0 FSD=0')
+" 2>/dev/null
+}
+
 case "$MODE" in
     pdm)
         ADDR=${2:-0x50}
-        # 0x8C = PDM_CH1_SEL + PDM_DIN1_SEL=GPI1
+        fix_sai7_rx
         reset_tac $ADDR 0x8C
         ;;
     analog)
         ADDR=${2:-0x50}
-        # 0x0C = PDM_DIN1_SEL=GPI1, analog mode
+        fix_sai7_rx
         reset_tac $ADDR 0x0C
         ;;
     all)
         echo "Resetting all TACs for analog..."
+        fix_sai7_rx
         for addr in 0x50 0x51 0x52 0x53; do
             reset_tac $addr 0x0C
         done
         ;;
     allpdm)
         echo "Resetting all TACs for PDM..."
+        fix_sai7_rx
         for addr in 0x50 0x51 0x52 0x53; do
             reset_tac $addr 0x8C
         done

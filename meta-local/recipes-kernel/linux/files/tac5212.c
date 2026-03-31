@@ -14,6 +14,7 @@
 #include <linux/regmap.h>
 #include <linux/delay.h>
 #include <linux/of.h>
+#include <linux/clk.h>
 #include <sound/soc.h>
 #include <sound/tlv.h>
 #include <sound/pcm_params.h>
@@ -881,6 +882,29 @@ static int tac5212_i2c_probe(struct i2c_client *client)
 	priv->slot_width = 32;
 
 	i2c_set_clientdata(client, priv);
+
+	/*
+	 * Enable SAI7 clock gates for SOF DSP operation.
+	 * When SAI7 is disabled in DT, Linux doesn't open the AudioMix
+	 * clock gates. TAC0 DT node has SAI7 clocks declared; we activate
+	 * them here and keep them enabled permanently (devm-managed).
+	 */
+	{
+		struct clk_bulk_data *clks;
+		int num_clks;
+
+		num_clks = devm_clk_bulk_get_all(dev, &clks);
+		if (num_clks > 0) {
+			int ret_clk = clk_bulk_prepare_enable(num_clks, clks);
+
+			if (ret_clk)
+				dev_warn(dev, "failed to enable clocks: %d\n",
+					 ret_clk);
+			else
+				dev_info(dev, "SAI7 clocks enabled (%d)\n",
+					 num_clks);
+		}
+	}
 
 	return devm_snd_soc_register_component(dev, &tac5212_component_driver,
 					       &tac5212_dai, 1);
