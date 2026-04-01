@@ -46,6 +46,11 @@ reset_tac() {
     i2cset -f -y $BUS $ADDR 0x34 0x40  # CLK_CFG2
     i2cset -f -y $BUS $ADDR 0x76 0xCC  # CH_EN
     i2cset -f -y $BUS $ADDR 0x78 0xE0  # PWR_CFG (ADC+DAC+MICBIAS)
+
+    # Wait for PLL lock then clear latched clock errors
+    sleep 1
+    i2cget -f -y $BUS $ADDR 0x3c > /dev/null 2>&1  # Clear CLK_ERR_STS0
+    i2cget -f -y $BUS $ADDR 0x3d > /dev/null 2>&1  # Clear CLK_ERR_STS1
     echo "TAC @ $ADDR reset done."
 }
 

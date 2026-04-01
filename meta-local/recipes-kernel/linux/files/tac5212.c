@@ -466,29 +466,8 @@ static int tac5212_set_tdm_slot(struct snd_soc_dai *dai,
 #define SAI7_RCR2	0x90
 #define SAI7_RCR4	0x98
 
-static void tac5212_fix_sai7(struct tac5212_priv *priv)
-{
-	void __iomem *base = priv->sai7_base;
-	u32 val;
-
-	if (!base)
-		return;
-
-	/* RCR2: clear BCD (bit 24) — RX must be consumer */
-	val = readl(base + SAI7_RCR2);
-	val &= ~(1 << 24);
-	writel(val, base + SAI7_RCR2);
-
-	/* RCR4: clear FSD (bit 0), set FCONT (bit 28) */
-	val = readl(base + SAI7_RCR4);
-	val = (val & ~1) | (1 << 28);
-	writel(val, base + SAI7_RCR4);
-
-	/* TCR4: set FCONT (bit 28) */
-	val = readl(base + SAI7_TCR4);
-	val |= (1 << 28);
-	writel(val, base + SAI7_TCR4);
-}
+/* tac5212_fix_sai7 removed — RX pins are GPIO input, no BCD/FSD conflict.
+ * FCONT is set directly in the trigger callback. */
 
 static int tac5212_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_pcm_hw_params *params,
@@ -498,8 +477,15 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 	struct tac5212_priv *priv = snd_soc_component_get_drvdata(component);
 	unsigned int base = priv->base_slot;
 
-	/* No SAI7 RX fix needed — RX_BCLK/RX_FSYNC pins are GPIO input,
-	 * SOF SYNC mode uses TX clocks internally */
+	/* Set FCONT on SAI7 TCR4/RCR4 if mapped */
+	if (priv->sai7_base) {
+		u32 v;
+
+		v = readl(priv->sai7_base + SAI7_TCR4);
+		writel(v | (1 << 28), priv->sai7_base + SAI7_TCR4);
+		v = readl(priv->sai7_base + SAI7_RCR4);
+		writel(v | (1 << 28), priv->sai7_base + SAI7_RCR4);
+	}
 	unsigned int rate = params_rate(params);
 	unsigned int wlen, fs_mode, dummy;
 	int ret;
@@ -691,7 +677,15 @@ static int tac5212_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
 		regmap_write(priv->regmap, TAC5212_DAC_CH2A_CFG0, val);
 	}
 
-	/* SAI7 RX fix no longer needed — pins decoupled */
+	/* Set FCONT on SAI7 — SOF firmware doesn't set it */
+	if (!mute && priv->sai7_base) {
+		u32 v;
+
+		v = readl(priv->sai7_base + SAI7_TCR4);
+		writel(v | (1 << 28), priv->sai7_base + SAI7_TCR4);
+		v = readl(priv->sai7_base + SAI7_RCR4);
+		writel(v | (1 << 28), priv->sai7_base + SAI7_RCR4);
+	}
 
 	return 0;
 }
@@ -705,8 +699,15 @@ static int tac5212_trigger(struct snd_pcm_substream *substream, int cmd,
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
-		/* Fix SAI7 RX after SOF firmware has configured it */
-		tac5212_fix_sai7(priv);
+		/* Set FCONT on SAI7 TCR4/RCR4 — SOF firmware doesn't set it */
+		if (priv->sai7_base) {
+			u32 v;
+
+			v = readl(priv->sai7_base + SAI7_TCR4);
+			writel(v | (1 << 28), priv->sai7_base + SAI7_TCR4);
+			v = readl(priv->sai7_base + SAI7_RCR4);
+			writel(v | (1 << 28), priv->sai7_base + SAI7_RCR4);
+		}
 		break;
 	}
 	return 0;
@@ -966,7 +967,9 @@ static int tac5212_i2c_probe(struct i2c_client *client)
 		}
 	}
 
-	/* SAI7 RX_BCLK/FSYNC pins are GPIO input — no register fixup needed */
+	/* Map SAI7 for FCONT fixup (first TAC only) */
+	if (priv->base_slot == 0)
+		priv->sai7_base = devm_ioremap(dev, SAI7_BASE, 0x100);
 
 	return devm_snd_soc_register_component(dev, &tac5212_component_driver,
 					       &tac5212_dai, 1);
