@@ -81,6 +81,24 @@ content = re.sub(
     r'\1\n\2\n\t\tstatus = "disabled";',
     content)
 
+# 5b. Add SAI7_TX_SYNC to the hog group so it's muxed at boot
+# The DSP pinctrl doesn't apply the mux (GPIO UNCLAIMED issue)
+content = content.replace(
+    'MX8MP_IOMUXC_HDMI_CEC__HDMIMIX_HDMI_CEC\t\t0x40000010',
+    'MX8MP_IOMUXC_HDMI_CEC__HDMIMIX_HDMI_CEC\t\t0x40000010\n'
+    '\t\t\tMX8MP_IOMUXC_ECSPI1_SS0__AUDIOMIX_SAI7_TX_SYNC\t0x1c4')
+
+# 5c. Remove ECSPI1 pinctrl that steals ECSPI1_SS0 (our SAI7_TX_SYNC)
+# ECSPI1 is disabled but its pinctrl_ecspi1_cs muxes SS0 as GPIO,
+# overriding our SAI7_TX_SYNC mux → FSYNC doesn't output → TAC ratio error
+# Remove ALL ecspi1 pinctrl and cs-gpios — these pins are used for SAI7
+content = content.replace(
+    'pinctrl-0 = <&pinctrl_ecspi1 &pinctrl_ecspi1_cs>;',
+    '/* pinctrl removed — pins used by SAI7 */')
+content = content.replace(
+    'cs-gpios = <&gpio5 9 GPIO_ACTIVE_LOW>;',
+    '/* cs-gpios removed — pin used by SAI7 TX_SYNC */')
+
 # 6. Add TAC5212 I2C nodes inside &i2c4
 # Find the block containing pinctrl_i2c4, track braces to find its closing };
 lines = content.split('\n')

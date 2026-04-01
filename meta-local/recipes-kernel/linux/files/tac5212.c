@@ -477,14 +477,16 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 	struct tac5212_priv *priv = snd_soc_component_get_drvdata(component);
 	unsigned int base = priv->base_slot;
 
-	/* Set FCONT on SAI7 TCR4/RCR4 if mapped */
+	/* Fix SAI7 RX + FCONT */
 	if (priv->sai7_base) {
 		u32 v;
 
+		v = readl(priv->sai7_base + SAI7_RCR2);
+		writel(v & ~(1 << 24), priv->sai7_base + SAI7_RCR2);
+		v = readl(priv->sai7_base + SAI7_RCR4);
+		writel((v & ~1) | (1 << 28), priv->sai7_base + SAI7_RCR4);
 		v = readl(priv->sai7_base + SAI7_TCR4);
 		writel(v | (1 << 28), priv->sai7_base + SAI7_TCR4);
-		v = readl(priv->sai7_base + SAI7_RCR4);
-		writel(v | (1 << 28), priv->sai7_base + SAI7_RCR4);
 	}
 	unsigned int rate = params_rate(params);
 	unsigned int wlen, fs_mode, dummy;
@@ -677,14 +679,16 @@ static int tac5212_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
 		regmap_write(priv->regmap, TAC5212_DAC_CH2A_CFG0, val);
 	}
 
-	/* Set FCONT on SAI7 — SOF firmware doesn't set it */
+	/* Fix SAI7 RX + FCONT on unmute */
 	if (!mute && priv->sai7_base) {
 		u32 v;
 
+		v = readl(priv->sai7_base + SAI7_RCR2);
+		writel(v & ~(1 << 24), priv->sai7_base + SAI7_RCR2);
+		v = readl(priv->sai7_base + SAI7_RCR4);
+		writel((v & ~1) | (1 << 28), priv->sai7_base + SAI7_RCR4);
 		v = readl(priv->sai7_base + SAI7_TCR4);
 		writel(v | (1 << 28), priv->sai7_base + SAI7_TCR4);
-		v = readl(priv->sai7_base + SAI7_RCR4);
-		writel(v | (1 << 28), priv->sai7_base + SAI7_RCR4);
 	}
 
 	return 0;
@@ -699,14 +703,19 @@ static int tac5212_trigger(struct snd_pcm_substream *substream, int cmd,
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
-		/* Set FCONT on SAI7 TCR4/RCR4 — SOF firmware doesn't set it */
+		/* Fix SAI7 RX and set FCONT after SOF firmware config */
 		if (priv->sai7_base) {
 			u32 v;
 
+			/* RCR2: clear BCD (RX consumer) */
+			v = readl(priv->sai7_base + SAI7_RCR2);
+			writel(v & ~(1 << 24), priv->sai7_base + SAI7_RCR2);
+			/* RCR4: clear FSD, set FCONT */
+			v = readl(priv->sai7_base + SAI7_RCR4);
+			writel((v & ~1) | (1 << 28), priv->sai7_base + SAI7_RCR4);
+			/* TCR4: set FCONT */
 			v = readl(priv->sai7_base + SAI7_TCR4);
 			writel(v | (1 << 28), priv->sai7_base + SAI7_TCR4);
-			v = readl(priv->sai7_base + SAI7_RCR4);
-			writel(v | (1 << 28), priv->sai7_base + SAI7_RCR4);
 		}
 		break;
 	}
