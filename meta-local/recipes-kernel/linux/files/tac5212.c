@@ -15,7 +15,6 @@
 #include <linux/delay.h>
 #include <linux/of.h>
 #include <linux/clk.h>
-#include <linux/io.h>
 #include <sound/soc.h>
 #include <sound/tlv.h>
 #include <sound/pcm_params.h>
@@ -29,9 +28,8 @@ struct tac5212_priv {
 	unsigned int tdm_slots;
 	unsigned int slot_width;
 	unsigned int base_slot;
+	bool is_bus_closest;	/* true for TAC0 (closest to host on shared DOUT) */
 	bool needs_reset;
-	void __iomem *sai7_base;	/* for SAI7 register fixup */
-	struct delayed_work sai7_fix_work;
 };
 
 static const struct reg_default tac5212_reg_defaults[] = {
@@ -455,19 +453,7 @@ static int tac5212_set_tdm_slot(struct snd_soc_dai *dai,
 	return 0;
 }
 
-/*
- * Fix SAI7 RX registers for SOF DSP operation.
- * SOF firmware sets RX as master (BCD=1, FSD=1) which conflicts
- * with TX on shared physical pins. We force RX to consumer mode
- * and add FCONT for clean frame sync.
- */
-#define SAI7_BASE	0x30c80000
-#define SAI7_TCR4	0x18
-#define SAI7_RCR2	0x90
-#define SAI7_RCR4	0x98
-
-/* tac5212_fix_sai7 removed — RX pins are GPIO input, no BCD/FSD conflict.
- * FCONT is set directly in the trigger callback. */
+/* SAI7 registers managed by SOF DSP firmware — no kernel patches */
 
 static int tac5212_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_pcm_hw_params *params,
@@ -477,17 +463,6 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 	struct tac5212_priv *priv = snd_soc_component_get_drvdata(component);
 	unsigned int base = priv->base_slot;
 
-	/* Fix SAI7 RX + FCONT */
-	if (priv->sai7_base) {
-		u32 v;
-
-		v = readl(priv->sai7_base + SAI7_RCR2);
-		writel(v & ~(1 << 24), priv->sai7_base + SAI7_RCR2);
-		v = readl(priv->sai7_base + SAI7_RCR4);
-		writel((v & ~1) | (1 << 28), priv->sai7_base + SAI7_RCR4);
-		v = readl(priv->sai7_base + SAI7_TCR4);
-		writel(v | (1 << 28), priv->sai7_base + SAI7_TCR4);
-	}
 	unsigned int rate = params_rate(params);
 	unsigned int wlen, fs_mode, dummy;
 	int ret;
@@ -518,7 +493,8 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 			     TAC5212_SASI_DIS);
 		regmap_update_bits(priv->regmap, TAC5212_MISC_CFG,
 				   BIT(6), BIT(6));
-		regmap_write(priv->regmap, TAC5212_PASI_TX_CFG0, 0x68);
+		regmap_write(priv->regmap, TAC5212_PASI_TX_CFG0,
+			     priv->is_bus_closest ? 0x48 : 0x40);
 		regmap_write(priv->regmap, TAC5212_PASI_TX_CFG1, 0x01);
 		regmap_write(priv->regmap, TAC5212_PASI_RX_CFG0, 0x01);
 		regmap_write(priv->regmap, TAC5212_GPO1_CFG0, 0x41);
@@ -589,7 +565,7 @@ static int tac5212_hw_params(struct snd_pcm_substream *substream,
 	if (ret)
 		return ret;
 
-	/* TX_EDGE: add half-cycle delay for BCLK > 18.5 MHz (per AN sbaa383c) */
+	/* TX_EDGE (bit 7): add half-cycle delay for BCLK > 18.5 MHz (per AN sbaa383c) */
 	ret = regmap_update_bits(priv->regmap, TAC5212_PASI_TX_CFG0,
 				TAC5212_PASI_TX_EDGE,
 				rate >= 96000 ? TAC5212_PASI_TX_EDGE : 0);
@@ -679,53 +655,13 @@ static int tac5212_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
 		regmap_write(priv->regmap, TAC5212_DAC_CH2A_CFG0, val);
 	}
 
-	/* Fix SAI7 RX + FCONT on unmute */
-	if (!mute && priv->sai7_base) {
-		u32 v;
 
-		v = readl(priv->sai7_base + SAI7_RCR2);
-		writel(v & ~(1 << 24), priv->sai7_base + SAI7_RCR2);
-		v = readl(priv->sai7_base + SAI7_RCR4);
-		writel((v & ~1) | (1 << 28), priv->sai7_base + SAI7_RCR4);
-		v = readl(priv->sai7_base + SAI7_TCR4);
-		writel(v | (1 << 28), priv->sai7_base + SAI7_TCR4);
-	}
-
-	return 0;
-}
-
-static int tac5212_trigger(struct snd_pcm_substream *substream, int cmd,
-			   struct snd_soc_dai *dai)
-{
-	struct snd_soc_component *component = dai->component;
-	struct tac5212_priv *priv = snd_soc_component_get_drvdata(component);
-
-	switch (cmd) {
-	case SNDRV_PCM_TRIGGER_START:
-	case SNDRV_PCM_TRIGGER_RESUME:
-		/* Fix SAI7 RX and set FCONT after SOF firmware config */
-		if (priv->sai7_base) {
-			u32 v;
-
-			/* RCR2: clear BCD (RX consumer) */
-			v = readl(priv->sai7_base + SAI7_RCR2);
-			writel(v & ~(1 << 24), priv->sai7_base + SAI7_RCR2);
-			/* RCR4: clear FSD, set FCONT */
-			v = readl(priv->sai7_base + SAI7_RCR4);
-			writel((v & ~1) | (1 << 28), priv->sai7_base + SAI7_RCR4);
-			/* TCR4: set FCONT */
-			v = readl(priv->sai7_base + SAI7_TCR4);
-			writel(v | (1 << 28), priv->sai7_base + SAI7_TCR4);
-		}
-		break;
-	}
 	return 0;
 }
 
 static const struct snd_soc_dai_ops tac5212_dai_ops = {
 	.set_fmt	= tac5212_set_fmt,
 	.set_tdm_slot	= tac5212_set_tdm_slot,
-	.trigger	= tac5212_trigger,
 	.hw_params	= tac5212_hw_params,
 	.mute_stream	= tac5212_mute_stream,
 	.no_capture_mute = 1,
@@ -802,8 +738,15 @@ static int tac5212_component_probe(struct snd_soc_component *component)
 	if (ret)
 		return ret;
 
-	/* PASI_TX_CFG0: TX_FILL=1 + TX_KEEPER=1 + TX_LSB=1 (per AN sbaa383c) */
-	ret = regmap_write(priv->regmap, TAC5212_PASI_TX_CFG0, 0x68);
+	/*
+	 * PASI_TX_CFG0 (per AN sbaa383c):
+	 *   TX_FILL=1 (Hi-Z unused cycles), TX_LSB=0 (no half-cycle delay at 48kHz)
+	 *   TAC0 (closest to host): TX_KEEPER=01 (bus keeper enabled) → 0x48
+	 *   TAC1-3: TX_KEEPER=00 (bus keeper disabled) → 0x40
+	 *   TX_EDGE set dynamically in hw_params for rates >= 96kHz
+	 */
+	ret = regmap_write(priv->regmap, TAC5212_PASI_TX_CFG0,
+			   priv->is_bus_closest ? 0x48 : 0x40);
 	if (ret)
 		return ret;
 
@@ -947,6 +890,9 @@ static int tac5212_i2c_probe(struct i2c_client *client)
 	/* Derive TDM base slot from I2C address */
 	priv->base_slot = (client->addr - TAC5212_I2C_BASE_ADDR) * 2;
 
+	/* TAC0 (0x50) is closest to host on shared DOUT — gets bus keeper */
+	priv->is_bus_closest = (client->addr == TAC5212_I2C_BASE_ADDR);
+
 	/* Defaults */
 	priv->tdm_slots = 8;
 	priv->slot_width = 32;
@@ -976,9 +922,6 @@ static int tac5212_i2c_probe(struct i2c_client *client)
 		}
 	}
 
-	/* Map SAI7 for FCONT fixup (first TAC only) */
-	if (priv->base_slot == 0)
-		priv->sai7_base = devm_ioremap(dev, SAI7_BASE, 0x100);
 
 	return devm_snd_soc_register_component(dev, &tac5212_component_driver,
 					       &tac5212_dai, 1);

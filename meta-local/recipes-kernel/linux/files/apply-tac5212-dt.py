@@ -67,9 +67,12 @@ content = re.sub(r'&sai7 \{.*?\n\};', fix_sai7, content, flags=re.DOTALL)
 content = content.replace(
     'MX8MP_IOMUXC_ECSPI2_MOSI__AUDIOMIX_SAI7_TX_DATA00\t0x1c4\n\t\t>;',
     'MX8MP_IOMUXC_ECSPI2_MOSI__AUDIOMIX_SAI7_TX_DATA00\t0x1c4\n'
-    '\t\t\t/* RX_DATA only — RX_BCLK/RX_FSYNC left as GPIO input */\n'
-    '\t\t\t/* (SOF SYNC mode uses TX clocks internally, no RX clock pins needed) */\n'
-    '\t\t\t0x1E8 0x448 0x534 0x13 0x1\t\t\t\t0x1c4\n\t\t>;')
+    '\t\t\t/* RX_DATA */\n'
+    '\t\t\t0x1E8 0x448 0x534 0x13 0x1\t\t\t\t0x1c4\n'
+    '\t\t\t/* ECSPI1_SCLK = SAI7_RX_SYNC (ALT3+SION, input_sel 0x538=1) */\n'
+    '\t\t\t0x1E0 0x440 0x538 0x13 0x1\t\t\t\t0x1c4\n'
+    '\t\t\t/* ECSPI1_MOSI = SAI7_RX_BCLK (ALT3+SION, input_sel 0x530=1) */\n'
+    '\t\t\t0x1E4 0x444 0x530 0x13 0x1\t\t\t\t0x1c4\n\t\t>;')
 
 # 5. Disable eeprom@50 and hym8563@51
 content = re.sub(
@@ -88,7 +91,12 @@ content = content.replace(
     'MX8MP_IOMUXC_HDMI_CEC__HDMIMIX_HDMI_CEC\t\t0x40000010\n'
     '\t\t\tMX8MP_IOMUXC_ECSPI1_SS0__AUDIOMIX_SAI7_TX_SYNC\t0x1c4')
 
-# 5c. Remove ECSPI1 pinctrl that steals ECSPI1_SS0 (our SAI7_TX_SYNC)
+# 5c. Remove TX_SYNC from pinctrl_sai7 (now in hog group, avoid double claim)
+content = content.replace(
+    'MX8MP_IOMUXC_ECSPI1_SS0__AUDIOMIX_SAI7_TX_SYNC\t0x1c4\n\t\t\tMX8MP_IOMUXC_ECSPI2_SCLK',
+    'MX8MP_IOMUXC_ECSPI2_SCLK')
+
+# 5d. Remove ECSPI1 pinctrl that steals ECSPI1_SS0 (our SAI7_TX_SYNC)
 # ECSPI1 is disabled but its pinctrl_ecspi1_cs muxes SS0 as GPIO,
 # overriding our SAI7_TX_SYNC mux → FSYNC doesn't output → TAC ratio error
 # Remove ALL ecspi1 pinctrl and cs-gpios — these pins are used for SAI7

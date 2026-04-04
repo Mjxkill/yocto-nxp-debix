@@ -1,82 +1,74 @@
 #!/bin/sh
-# TAC5212 SW reset script - run WHILE audio stream is active (BCLK present)
-# Usage: tac-reset.sh [pdm|analog] [tac_addr]
-#   pdm    - reset for PDM microphone input on CH1+CH2
-#   analog - reset for analog ADC input (default)
-#   tac_addr - I2C address (default: 0x50 = TAC0)
-#
-# Example:
-#   tac-reset.sh pdm          # Reset TAC0 for PDM
-#   tac-reset.sh analog 0x51  # Reset TAC1 for analog
-#   tac-reset.sh all          # Reset all TACs for analog
+# TAC5212 reset script — sequential per-device reset for shared DOUT bus
+# With continuous BCLK (SOF ASYNC mode), resetting all TACs simultaneously
+# causes DOUT bus contention. Reset one TAC at a time instead.
+# Usage: tac-reset [pdm|analog]
 
 MODE=${1:-analog}
 BUS=3
-
-reset_tac() {
-    local ADDR=$1
-    local CFG4=$2
-
-    echo "Resetting TAC @ $ADDR (INTF_CFG4=$CFG4)..."
-    i2cset -f -y $BUS $ADDR 0x01 0x01  # SW_RESET
-    usleep 100000
-    i2cset -f -y $BUS $ADDR 0x02 0x09  # Exit sleep
-    usleep 100000
-    i2cset -f -y $BUS $ADDR 0x10 0x53  # INTF_CFG1
-    i2cset -f -y $BUS $ADDR 0x11 0x80  # INTF_CFG2
-    i2cset -f -y $BUS $ADDR 0x18 0x40  # ASI_CFG0
-    i2cset -f -y $BUS $ADDR 0x04 0x40  # MISC_CFG
-    i2cset -f -y $BUS $ADDR 0x1b 0x68  # PASI_TX_CFG0
-    i2cset -f -y $BUS $ADDR 0x1c 0x01  # TX_OFFSET=1
-    i2cset -f -y $BUS $ADDR 0x26 0x01  # RX_OFFSET=1
-    i2cset -f -y $BUS $ADDR 0x0c 0x41  # GPO1=PDMCLK
-    i2cset -f -y $BUS $ADDR 0x0d 0x02  # GPI1 enable
-    i2cset -f -y $BUS $ADDR 0x13 $CFG4 # INTF_CFG4
-    i2cset -f -y $BUS $ADDR 0x1a 0x30  # PASI_CFG0: TDM 32bit
-
-    # Slot assignments based on I2C address
-    local BASE=$(( ($ADDR - 0x50) * 2 ))
-    local SLOT1=$(( 0x20 | $BASE ))
-    local SLOT2=$(( 0x20 | $BASE + 1 ))
-    i2cset -f -y $BUS $ADDR 0x1e $SLOT1  # TX_CH1
-    i2cset -f -y $BUS $ADDR 0x1f $SLOT2  # TX_CH2
-    i2cset -f -y $BUS $ADDR 0x28 $SLOT1  # RX_CH1
-    i2cset -f -y $BUS $ADDR 0x29 $SLOT2  # RX_CH2
-
-    i2cset -f -y $BUS $ADDR 0x34 0x40  # CLK_CFG2
-    i2cset -f -y $BUS $ADDR 0x76 0xCC  # CH_EN
-    i2cset -f -y $BUS $ADDR 0x78 0xE0  # PWR_CFG (ADC+DAC+MICBIAS)
-
-    # Wait for PLL lock then clear latched clock errors
-    sleep 1
-    i2cget -f -y $BUS $ADDR 0x3c > /dev/null 2>&1  # Clear CLK_ERR_STS0
-    i2cget -f -y $BUS $ADDR 0x3d > /dev/null 2>&1  # Clear CLK_ERR_STS1
-    echo "TAC @ $ADDR reset done."
-}
+ADDRS="0x50 0x51 0x52 0x53"
 
 case "$MODE" in
-    pdm)
-        ADDR=${2:-0x50}
-reset_tac $ADDR 0x8C
-        ;;
-    analog)
-        ADDR=${2:-0x50}
-reset_tac $ADDR 0x0C
-        ;;
-    all)
-        echo "Resetting all TACs for analog..."
-for addr in 0x50 0x51 0x52 0x53; do
-            reset_tac $addr 0x0C
-        done
-        ;;
-    allpdm)
-        echo "Resetting all TACs for PDM..."
-for addr in 0x50 0x51 0x52 0x53; do
-            reset_tac $addr 0x8C
-        done
-        ;;
-    *)
-        echo "Usage: $0 [pdm|analog|all|allpdm] [i2c_addr]"
-        exit 1
-        ;;
+    pdm)    CFG4=0x8C ;;
+    analog) CFG4=0x0C ;;
+    *)      echo "Usage: $0 [pdm|analog]"; exit 1 ;;
 esac
+
+echo "Resetting TACs sequentially ($MODE mode)..."
+
+for addr in $ADDRS; do
+    BASE=$(( ($addr - 0x50) * 2 ))
+    SLOT1=$(( 0x20 | $BASE ))
+    SLOT2=$(( 0x20 | $BASE + 1 ))
+    KEEPER=0x40
+    [ "$addr" = "0x50" ] && KEEPER=0x48
+
+    # Reset THIS TAC only
+    i2cset -f -y $BUS $addr 0x01 0x01
+    usleep 50000
+
+    # Exit sleep
+    i2cset -f -y $BUS $addr 0x02 0x09
+    usleep 50000
+
+    # Interface config
+    i2cset -f -y $BUS $addr 0x10 0x51
+    i2cset -f -y $BUS $addr 0x11 0x80
+    i2cset -f -y $BUS $addr 0x18 0x40
+    i2cset -f -y $BUS $addr 0x04 0x40
+
+    # TX config: TX_FILL=1 BEFORE setting slots
+    i2cset -f -y $BUS $addr 0x1b $KEEPER
+    i2cset -f -y $BUS $addr 0x1c 0x01
+
+    # RX config
+    i2cset -f -y $BUS $addr 0x26 0x01
+
+    # GPIO/PDM
+    i2cset -f -y $BUS $addr 0x0c 0x41
+    i2cset -f -y $BUS $addr 0x0d 0x02
+    i2cset -f -y $BUS $addr 0x13 $CFG4
+
+    # TDM format
+    i2cset -f -y $BUS $addr 0x1a 0x30
+
+    # Slot assignments
+    i2cset -f -y $BUS $addr 0x1e $SLOT1
+    i2cset -f -y $BUS $addr 0x1f $SLOT2
+    i2cset -f -y $BUS $addr 0x28 $SLOT1
+    i2cset -f -y $BUS $addr 0x29 $SLOT2
+
+    # Clock config
+    i2cset -f -y $BUS $addr 0x34 0x40
+
+    # Channel enable + power up
+    i2cset -f -y $BUS $addr 0x76 0xCC
+    i2cset -f -y $BUS $addr 0x78 0xE0
+
+    # Wait PLL lock for THIS TAC
+    usleep 500000
+    i2cget -f -y $BUS $addr 0x3c > /dev/null 2>&1
+    i2cget -f -y $BUS $addr 0x3d > /dev/null 2>&1
+done
+
+echo "All TACs reset done ($MODE)."
