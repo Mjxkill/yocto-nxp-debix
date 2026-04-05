@@ -659,11 +659,31 @@ static int tac5212_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
 	return 0;
 }
 
+static int tac5212_trigger(struct snd_pcm_substream *substream, int cmd,
+			   struct snd_soc_dai *dai)
+{
+	struct snd_soc_component *component = dai->component;
+	struct tac5212_priv *priv = snd_soc_component_get_drvdata(component);
+	unsigned int dummy;
+
+	if (cmd == SNDRV_PCM_TRIGGER_START ||
+	    cmd == SNDRV_PCM_TRIGGER_RESUME ||
+	    cmd == SNDRV_PCM_TRIGGER_PAUSE_RELEASE) {
+		/* Clear any clock errors latched during PLL lock transient. */
+		msleep(50);
+		regmap_read(priv->regmap, TAC5212_CLK_ERR_STS0, &dummy);
+		regmap_read(priv->regmap, TAC5212_CLK_ERR_STS1, &dummy);
+	}
+
+	return 0;
+}
+
 static const struct snd_soc_dai_ops tac5212_dai_ops = {
 	.set_fmt	= tac5212_set_fmt,
 	.set_tdm_slot	= tac5212_set_tdm_slot,
 	.hw_params	= tac5212_hw_params,
 	.mute_stream	= tac5212_mute_stream,
+	.trigger	= tac5212_trigger,
 	.no_capture_mute = 1,
 };
 
