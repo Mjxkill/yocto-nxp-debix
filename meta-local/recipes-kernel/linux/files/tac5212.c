@@ -682,9 +682,13 @@ static const struct snd_soc_dai_ops tac5212_dai_ops = {
 	.set_fmt	= tac5212_set_fmt,
 	.set_tdm_slot	= tac5212_set_tdm_slot,
 	.hw_params	= tac5212_hw_params,
-	.mute_stream	= tac5212_mute_stream,
+	/* mute_stream removed: DAC volumes are managed by tac-reset and
+	 * user-space mixer controls. The automatic mute/unmute on stream
+	 * start/stop was breaking duplex loopback — every playback
+	 * prepare/recovery cycle would zero the DAC volume registers,
+	 * silencing output until manually restored via i2c.
+	 */
 	.trigger	= tac5212_trigger,
-	.no_capture_mute = 1,
 };
 
 static struct snd_soc_dai_driver tac5212_dai = {
