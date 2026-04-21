@@ -66,14 +66,45 @@
 }
 
 \title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
-  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.2}\\[4pt]
+  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.3}\\[4pt]
   \large Structure DSP, tests, livrables et procédure d'exécution}
 \author{Document de référence technique}
-\date{2026-04-21 --- rev V2.2}
+\date{2026-04-21 --- rev V2.3}
 
 \begin{document}
 \maketitle
 \tableofcontents
+\clearpage
+
+% =======================================================================
+\section*{Changelog V2.2 $\rightarrow$ V2.3}
+\addcontentsline{toc}{section}{Changelog V2.2 $\rightarrow$ V2.3}
+
+V2.3 intègre la \textbf{4\textsuperscript{e} investigation critic} (job \texttt{1986cc65}). Verdict global : \textbf{les 7 corrections V2.1→V2.2 sur le fond sont toutes confirmées correctes}, mais 3 bugs critiques de \emph{transposition} étaient restés dans le squelette \texttt{pipe-masterchain.m4} (noms de fichiers d'include et de macros raccourcis à tort). V2.3 applique le diff minimal.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Ref} & \textbf{Sévérité} & \textbf{Correction V2.3} \\
+\midrule
+L1 & Critique & \texttt{include(`mbdrc\_coef\_default.m4')} $\rightarrow$ \texttt{include(`multiband\_drc\_coef\_default.m4')}. Le fichier coef réel a le nom complet. \\
+L2 & Critique & \texttt{define(MBDRC\_priv, ...)} $\rightarrow$ \texttt{define(MULTIBAND\_DRC\_priv, ...)}. Le fichier \texttt{multiband\_drc\_coef\_default.m4:2} contient \texttt{CONTROLBYTES\_PRIV(MULTIBAND\_DRC\_priv, ...)} en littéral ; sans ce nom exact, \texttt{alsatplg} ne trouve pas la SectionData. Pattern identique dans \texttt{sof/pipe-multiband-drc-playback.m4:32}. \\
+L3 & Critique & \texttt{include(`drc\_coef\_limiter\_default.m4')} $\rightarrow$ \texttt{include(`drc\_coef\_default.m4')}. Fichiers existants dans le fork : \texttt{drc\_coef\_default.m4} (DRC générique) et \texttt{drc\_coef\_speaker\_default.m4}. Aucun "limiter\_default". Le blob est tunable à chaud via \texttt{Master Limiter Config} pour atteindre un comportement limiter. \\
+N1 & Medium & Annexe : \texttt{VOL\_ZERO\_DB = 0x40000000} (Q2.30, stale V1) $\rightarrow$ \texttt{0x10000} (Q8.16 IPC3), cohérent avec le changelog V2.1. \\
+Polish & Low & Renommage \texttt{MBDRC\_CTRL} $\rightarrow$ \texttt{MY\_MULTIBAND\_DRC\_CTRL} et \texttt{DRC\_CTRL} $\rightarrow$ \texttt{MY\_DRC\_CTRL} (convention \texttt{MY\_} upstream pour éviter collision macro). \texttt{undefine} mis à jour. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Bugs medium connus et assumés} (pas corrigés en V2.3, à traiter plus tard) :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{N2} : les switches \texttt{Master MBDRC Bypass} / \texttt{Master Limiter Bypass} référencés par T4 ne sont pas déclarés dans la topology. Le bypass sera piloté via \texttt{sof-ctl} en poussant un blob \texttt{process\_enabled=0} plutôt que par un switch ALSA. T4 adapté en conséquence.
+  \item \textbf{N3} : \texttt{PIPELINE\_SCHED\_COMP\_<id> = N\_PCMP(...)} (vs \texttt{N\_DAI\_IN} upstream) --- fonctionnel mais non-canonique. Test runtime requis en Séquence 1a.1.
+  \item \textbf{P2} : \texttt{W\_BUFFER} en 3 args (pas de \texttt{SCHEDULE\_CORE}) --- conforme au pattern \texttt{pipe-eq-iir-volume-playback.m4}, i.MX8MP est mono-core HiFi4 donc sans impact. Acceptable.
+\end{itemize}
+
+Après V2.3, le squelette m4 doit pouvoir passer \texttt{m4 \textbar\ alsatplg} sans erreur. C'est le prochain gate de validation.
+
 \clearpage
 
 % =======================================================================
@@ -629,12 +660,12 @@ DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
 
 Deux pipelines custom n'existent pas en upstream SOF et doivent être écrits dans \texttt{meta-local/recipes-kernel/linux/files/} (OU dans \texttt{sof/tools/topology/topology1/sof/} si acceptable). Règle : on ne touche PAS les upstream \texttt{sof/pipe-*.m4}.
 
-\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2.2}
-Pipeline d'entrée de la chaîne master, calqué sur le pattern canonique \texttt{sof/tools/topology/topology1/sof/pipe-volume-playback.m4} (qui compile upstream). Valeurs : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz). \textbf{[V2.2]} \texttt{W\_PGA} avec 7 args conformes + prélude \texttt{W\_VENDORTUPLES}/\texttt{W\_DATA}, sans \texttt{define(PGA\_NAME)}, TLV en commentaire libre, kcontrol ref en \texttt{"PIPELINE\_ID Master Volume"}.
+\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2.3}
+Pipeline d'entrée de la chaîne master, calqué sur les patterns canoniques \texttt{sof/pipe-volume-playback.m4} (W\_PGA + tokens) et \texttt{sof/pipe-multiband-drc-playback.m4} (multiband\_drc coef + MULTIBAND\_DRC\_priv). Valeurs : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz). \textbf{[V2.3]} Corrections L1/L2/L3 des noms d'includes et macros + convention \texttt{MY\_} pour les \texttt{CTRL} locaux.
 
 \begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
-# Master chain input V2.2 : host PCM -> mbdrc -> pga -> drc -> buf
-# Pattern canonique : pipe-volume-playback.m4
+# Master chain input V2.3 : host PCM -> mbdrc -> pga -> drc -> buf
+# Patterns canoniques: pipe-volume-playback.m4 + pipe-multiband-drc-playback.m4
 # PIPELINE_CHANNELS = 2, PIPELINE_FORMAT = s32le, SCHEDULE_PERIOD = 2000us
 include(`utils.m4')
 include(`buffer.m4')
@@ -673,18 +704,20 @@ W_DATA(DEF_PGA_CONF, DEF_PGA_TOKENS)
 W_PCM_PLAYBACK(PCM_ID, Source Play, 2, 0, SCHEDULE_CORE)
 
 # --- multiband_drc ---
-define(MBDRC_priv, concat(`mbdrc_bytes_', PIPELINE_ID))
-define(MBDRC_CTRL, concat(`mbdrc_control_', PIPELINE_ID))
-include(`mbdrc_coef_default.m4')
-C_CONTROLBYTES(MBDRC_CTRL, PIPELINE_ID,
+# [V2.3 L1/L2] nom de fichier coef et nom MULTIBAND_DRC_priv complets
+# (pattern sof/pipe-multiband-drc-playback.m4:32)
+define(MULTIBAND_DRC_priv,     concat(`multiband_drc_bytes_',   PIPELINE_ID))
+define(MY_MULTIBAND_DRC_CTRL,  concat(`multiband_drc_control_', PIPELINE_ID))
+include(`multiband_drc_coef_default.m4')
+C_CONTROLBYTES(MY_MULTIBAND_DRC_CTRL, PIPELINE_ID,
     CONTROLBYTES_OPS(bytes, 258 binds the control to bytes get/put, 258, 258),
     CONTROLBYTES_EXTOPS(258 binds the control to bytes get/put, 258, 258),
     , , ,
     CONTROLBYTES_MAX(, 1024),
     ,
-    MBDRC_priv)
+    MULTIBAND_DRC_priv)
 W_MULTIBAND_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
-    LIST(`   ', "MBDRC_CTRL"))
+    LIST(`   ', "MY_MULTIBAND_DRC_CTRL"))
 
 # --- PGA (Programmable Gain Amplifier = volume DVC) ---
 # [V2.2 C1-NEW] W_PGA signature: (index, format, periods_sink, periods_source,
@@ -694,11 +727,14 @@ W_MULTIBAND_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
 W_PGA(0, PIPELINE_FORMAT, 2, 2, DEF_PGA_CONF, SCHEDULE_CORE,
     LIST(`		', "PIPELINE_ID Master Volume"))
 
-# --- drc (final limiter) ---
-define(DRC_priv, concat(`drc_bytes_', PIPELINE_ID))
-define(DRC_CTRL, concat(`drc_control_', PIPELINE_ID))
-include(`drc_coef_limiter_default.m4')
-C_CONTROLBYTES(DRC_CTRL, PIPELINE_ID,
+# --- drc (final limiter via blob runtime) ---
+# [V2.3 L3] drc_coef_limiter_default.m4 n'existe pas. On utilise le
+# blob DRC generique (drc_coef_default.m4) et on tune en limiter
+# via Master Limiter Config bytes control a runtime.
+define(DRC_priv,    concat(`drc_bytes_',   PIPELINE_ID))
+define(MY_DRC_CTRL, concat(`drc_control_', PIPELINE_ID))
+include(`drc_coef_default.m4')
+C_CONTROLBYTES(MY_DRC_CTRL, PIPELINE_ID,
     CONTROLBYTES_OPS(bytes, 258 binds the control to bytes get/put, 258, 258),
     CONTROLBYTES_EXTOPS(258 binds the control to bytes get/put, 258, 258),
     , , ,
@@ -706,7 +742,7 @@ C_CONTROLBYTES(DRC_CTRL, PIPELINE_ID,
     ,
     DRC_priv)
 W_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
-    LIST(`   ', "DRC_CTRL"))
+    LIST(`   ', "MY_DRC_CTRL"))
 
 # --- Buffers : host | mbdrc-out | pga-out | drc-out (shared avec PIPE 5) ---
 W_BUFFER(0, COMP_BUFFER_SIZE(3,
@@ -753,9 +789,9 @@ indir(`define', concat(`PIPELINE_PCM_', PIPELINE_ID), Source Play PCM_ID)
 PCM_CAPABILITIES(Source Play PCM_ID, CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT),
     PCM_MIN_RATE, PCM_MAX_RATE, 2, 2, 2, 16, 192, 16384, 65536, 65536)
 
-undefine(`MBDRC_CTRL')
-undefine(`MBDRC_priv')
-undefine(`DRC_CTRL')
+undefine(`MY_MULTIBAND_DRC_CTRL')
+undefine(`MULTIBAND_DRC_priv')
+undefine(`MY_DRC_CTRL')
 undefine(`DRC_priv')
 undefine(`DEF_PGA_TOKENS')
 undefine(`DEF_PGA_CONF')
@@ -1482,7 +1518,7 @@ Training d'un modèle TFLite (from scratch) pour le mastering assisté :
 \midrule
 \texttt{multiband\_drc} & \texttt{multiband\_drc\_generic.c:14} & \texttt{multiband\_drc\_default\_pass} ($\equiv$ \texttt{audio\_stream\_copy}) \\
 \texttt{drc} & \texttt{drc\_generic.c:473} & \texttt{drc\_default\_pass} ($\equiv$ \texttt{audio\_stream\_copy}) \\
-\texttt{volume} & \texttt{volume.c} & gain Q2.30 $=$ \texttt{0x40000000} $=$ 1{,}0 $\Rightarrow$ multiplication par 1 \\
+\texttt{volume} & \texttt{volume.c} & gain Q8.16 $=$ \texttt{0x10000} $=$ 1{,}0 (IPC3) $\Rightarrow$ bascule \texttt{is\_passthrough=true} $\rightarrow$ \texttt{vol\_passthrough} SIMD sans mult [V2.3 corr.] \\
 \bottomrule
 \end{tabularx}
 \end{center}
