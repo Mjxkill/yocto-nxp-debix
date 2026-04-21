@@ -66,14 +66,39 @@
 }
 
 \title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
-  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2}\\[4pt]
+  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.1}\\[4pt]
   \large Structure DSP, tests, livrables et procédure d'exécution}
 \author{Document de référence technique}
-\date{2026-04-21 --- rev V2}
+\date{2026-04-21 --- rev V2.1}
 
 \begin{document}
 \maketitle
 \tableofcontents
+\clearpage
+
+% =======================================================================
+\section*{Changelog V2 $\rightarrow$ V2.1}
+\addcontentsline{toc}{section}{Changelog V2 $\rightarrow$ V2.1}
+
+Cette V2.1 intègre une \textbf{2\textsuperscript{e} investigation critic} (job \texttt{e9c99a99}) qui, pour la première fois, avait accès au fork SOF réel (\texttt{Mjxkill/sof} branche \texttt{feature/sdma-ap2ap-phase1}) via le paramètre \texttt{sub\_repos} du MCP. Les claims de la V2 ont été vérifiés contre les vraies sources et 3 bugs critiques + 3 high bloquaient le build.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Ref} & \textbf{Sévérité} & \textbf{Correction V2.1} \\
+\midrule
+C1 & Critique & \texttt{W\_VOLUME} n'existe pas, \texttt{SOF\_VOLUME\_RAMP\_NONE} non plus. Remplacé par \texttt{W\_PGA} (macro réelle, \texttt{m4/pga.m4:11}) + \texttt{C\_CONTROLMIXER} avec TLV pour exposer "Master Volume". \\
+C2 & Critique & Squelette \texttt{pipe-masterchain.m4} ajoute \texttt{indir(define, PIPELINE\_SCHED\_COMP\_<id>, N\_PCMP(PCM\_ID))} + \texttt{W\_PIPELINE(...)}. \texttt{pipe-mastertap.m4} ajoute aussi \texttt{W\_PIPELINE(SCHED\_COMP, ...)}. Sans ces lignes, le scheduler est orphelin. \\
+C3 & Critique & \texttt{drc2ms.m4} n'existe pas dans le fork (seul \texttt{drc8ms.m4} est commité). V2.1 change la baseline référencée à \texttt{sof-imx8mp-tac5212-drc8ms.m4} ; le fichier \texttt{drc2ms.m4} local (déployé en session précédente) sera commité AVANT l'implémentation. \\
+H1 & Haute & \texttt{sof/app/boards/imx8mp\_evk\_mimx8ml8\_adsp.conf} reçoit \texttt{CONFIG\_COMP\_MULTIBAND\_DRC=y}, \texttt{CONFIG\_COMP\_MUX=y}, \texttt{CONFIG\_COMP\_VOLUME=y} en plus du \texttt{CONFIG\_COMP\_DRC=y} existant. \\
+H2 & Haute & Correction : \texttt{VOL\_ZERO\_DB = 0x10000} (Q8.16 en IPC3), pas \texttt{0x40000000} (Q2.30). Toute la doc V2 qui citait \texttt{0x40000000} est reprise. \\
+H3 & Haute & PIPE 3 (master chain) et PIPE 5 (tap) piggyback \textbf{tous deux} sur \texttt{PIPELINE\_SCHED\_COMP\_1} (DMA-driven SAI RX). Garantit un scheduling commun avec PIPE 2 (monitor) quand Phase 1a.3 ajoute le mux merge. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textit{Les verdicts CONFIRMÉS de V2 (bypass bit-perfect multiband\_drc/drc, AP2AP memcpy\_dma, domain\_is\_pending, zephyr\_ll hook, PCM\_CAPTURE\_ADD/PCM\_PLAYBACK\_ADD, args PIPELINE\_PCM\_ADD, SDMA3 32 canaux) restent valides et ne sont pas re-listés ici.}
+
 \clearpage
 
 % =======================================================================
@@ -204,14 +229,17 @@ Null-test bypass & bit-perfect requis pour T4 \\
   \item Fournir un \textbf{script de test automatisé} couvrant T1\,$\rightarrow$\,T9.
 \end{enumerate}
 
-\subsection{Baseline existante --- point de départ}
-\textbf{La topology actuellement déployée sur la board fonctionne en duplex}. Rappel :
+\subsection{Baseline existante --- point de départ (V2.1)}
+\textbf{La topology actuellement commitée dans le fork SOF fonctionne en duplex}. Rappel :
 \begin{itemize}[leftmargin=*, itemsep=1pt]
-  \item Fichier actif : \texttt{sof-imx8mp-tac5212-drc2ms.m4} (variante 2 ms)
+  \item Fichier de référence commité : \texttt{sof-imx8mp-tac5212-drc8ms.m4} (variante 8 ms, dans le fork \texttt{feature/sdma-ap2ap-phase1})
+  \item Variante locale 2 ms non-commitée : \texttt{sof-imx8mp-tac5212-drc2ms.m4} créée en session précédente par \texttt{cp drc4ms.m4 drc2ms.m4} + edit de la période (4000$\rightarrow$2000). Déployée manuellement via \texttt{scp .tplg} sur la board.
   \item Déployé en : \texttt{/lib/firmware/imx/sof-tplg/sof-imx8mp-tac5212.tplg}
   \item Validé utilisateur : \texttt{sox -c 8 -t alsa plughw:2,0 -c 8 -t alsa plughw:2,0 remix 8 7 6 5 4 3 2 1} tourne en loopback 8 canaux sans clic ni xrun
   \item Structure : 1 pipeline capture avec DRC + 1 pipeline playback passthrough, exposé en 1 PCM duplex (ID 0)
 \end{itemize}
+\textbf{[V2.1]} Avant toute extension en Phase 1a.1, \textbf{commiter \texttt{drc2ms.m4}} dans le fork SOF (ou l'ignorer et repartir de \texttt{drc8ms.m4}). Sans commit, les workers et les futurs ré-builds ne verront pas le fichier.
+
 La topology Phase 1a (\texttt{sof-imx8mp-tac5212-masterlite.m4}) \textbf{étend} cette baseline --- elle garde le couple capture/playback SAI (qui marche) et \textbf{ajoute} les pipelines master chain + master tap.
 
 \subsection{Hors scope Phase 1a}
@@ -382,7 +410,7 @@ PIPE\_6 & 2 ms & Playback host direct --- host \texttt{SAI\_Playback} (8ch) $\ri
 \begin{itemize}[leftmargin=*, itemsep=2pt]
   \item \texttt{multiband\_drc\_default\_pass} dans \texttt{multiband\_drc\_generic.c:14} $=$ \texttt{audio\_stream\_copy(src,0,sink,0,ch*frames)}
   \item \texttt{drc\_default\_pass} dans \texttt{drc\_generic.c:473} $=$ idem
-  \item \texttt{volume} à 0 dB (gain 0x40000000 en Q2.30) $=$ multiplication par 1.0, pas de loss
+  \item \texttt{volume} à 0 dB (gain \texttt{VOL\_ZERO\_DB = 0x10000} en Q8.16 pour IPC3) $\rightarrow$ bascule en mode \texttt{is\_passthrough=true} (volume.c:349-358) $\rightarrow$ fonction \texttt{vol\_passthrough\_s32\_to\_s24\_s32} (volume\_hifi4.c:287-324) utilise AE\_LA32X2/AE\_SA32X2 SIMD pur, sans multiplication $\rightarrow$ bit-perfect garanti. \textbf{[V2.1 correction]} La V2 citait à tort \texttt{0x40000000} (Q2.30).
 \end{itemize}
 
 Le null-test T4 compare la sortie de \texttt{Master\_Tap} en mode bypass avec le signal envoyé à \texttt{Source\_Play}. Différence attendue : \textbf{0 dBFS (silence parfait)}. Si ce n'est pas le cas, il y a un bug dans le pipeline ou un composant a un side-effect non documenté.
@@ -568,19 +596,22 @@ DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
 
 Deux pipelines custom n'existent pas en upstream SOF et doivent être écrits dans \texttt{meta-local/recipes-kernel/linux/files/} (OU dans \texttt{sof/tools/topology/topology1/sof/} si acceptable). Règle : on ne touche PAS les upstream \texttt{sof/pipe-*.m4}.
 
-\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2}
-Pipeline d'entrée de la chaîne master. Valeurs concrètes : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz).
+\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2.1}
+Pipeline d'entrée de la chaîne master. Valeurs concrètes : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz). \textbf{[V2.1]} Utilise \texttt{W\_PGA} (pas \texttt{W\_VOLUME}) + \texttt{C\_CONTROLMIXER} pour exposer "Master Volume". Exporte \texttt{PIPELINE\_SCHED\_COMP\_<id>} + appelle \texttt{W\_PIPELINE(...)}.
+
 \begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
-# Master chain input V2: host PCM -> mbdrc -> volume -> drc -> buf
+# Master chain input V2.1: host PCM -> mbdrc -> pga -> drc -> buf
 # PIPELINE_CHANNELS = 2, PIPELINE_FORMAT = s32le, SCHEDULE_PERIOD = 2000us
 include(`utils.m4')
 include(`buffer.m4')
 include(`pcm.m4')
 include(`pipeline.m4')
 include(`bytecontrol.m4')
+include(`mixercontrol.m4')
 include(`multiband_drc.m4')
-include(`volume.m4')
+include(`pga.m4')             # [V2.1] W_PGA pas W_VOLUME
 include(`drc.m4')
+include(`common/tlv.m4')      # [V2.1] pour TLV_DB_SCALE
 
 # Host PCM playback endpoint (2ch, 3 periodes de sink)
 W_PCM_PLAYBACK(PCM_ID, Source Play, 2, 0, SCHEDULE_CORE)
@@ -599,9 +630,20 @@ C_CONTROLBYTES(MBDRC_CTRL, PIPELINE_ID,
 W_MULTIBAND_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
     LIST(`   ', "MBDRC_CTRL"))
 
-# --- volume (DVC master) ---
-# [V2] ramp NONE pour bit-perfect bypass
-W_VOLUME(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE, 0, SOF_VOLUME_RAMP_NONE)
+# --- PGA (Programmable Gain Amplifier = volume DVC) [V2.1] ---
+# W_PGA signature: (index, format, periods_sink, periods_source, kcontrol_list, core)
+define(PGA_NAME, `Master Volume')
+C_CONTROLMIXER(Master Volume, PIPELINE_ID,
+    CONTROLMIXER_OPS(volsw, 256 binds mixer control to volume get/put, 256, 256),
+    CONTROLMIXER_MAX(, 32),
+    false,
+    CONTROLMIXER_TLV(TLV_DB_SCALE_WTYPE(vtlv_m64s2, -6400, 50, 1), vtlv_m64s2),
+    Channel register and shift for Front Left/Right,
+    LIST(`      ', KCONTROL_CHANNEL(FL, 1, 0), KCONTROL_CHANNEL(FR, 1, 1)))
+W_PGA(0, PIPELINE_FORMAT, 2, 2,
+    LIST(`       ', "PGA_NAME"),
+    SCHEDULE_CORE)
+undefine(`PGA_NAME')
 
 # --- drc (final limiter) ---
 define(DRC_priv, concat(`drc_bytes_', PIPELINE_ID))
@@ -617,8 +659,7 @@ C_CONTROLBYTES(DRC_CTRL, PIPELINE_ID,
 W_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
     LIST(`   ', "DRC_CTRL"))
 
-# --- Buffers concretes ---
-# Un buffer par lien : host | mbdrc-out | vol-out | drc-out(shared)
+# --- Buffers : host | mbdrc-out | pga-out | drc-out(shared) ---
 W_BUFFER(0, COMP_BUFFER_SIZE(3,
     COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
     COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
@@ -636,16 +677,25 @@ W_BUFFER(3, COMP_BUFFER_SIZE(2,
     COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
     PLATFORM_COMP_MEM_CAP)
 
-# Graph : host -> B0 -> mbdrc -> B1 -> volume -> B2 -> drc -> B3
+# Graph : host -> B0 -> mbdrc -> B1 -> pga -> B2 -> drc -> B3
 P_GRAPH(pipe-master-chain, PIPELINE_ID,
     LIST(`  ',
         `dapm(N_BUFFER(0), N_PCMP(PCM_ID))',
         `dapm(N_MULTIBAND_DRC(0), N_BUFFER(0))',
         `dapm(N_BUFFER(1), N_MULTIBAND_DRC(0))',
-        `dapm(N_VOLUME(0), N_BUFFER(1))',
-        `dapm(N_BUFFER(2), N_VOLUME(0))',
+        `dapm(N_PGA(0), N_BUFFER(1))',
+        `dapm(N_BUFFER(2), N_PGA(0))',
         `dapm(N_DRC(0), N_BUFFER(2))',
         `dapm(N_BUFFER(3), N_DRC(0))'))
+
+# [V2.1] Export SCHED_COMP pour permettre aux autres pipelines
+# (ex: PIPE 5 master tap) de piggyback sur notre scheduler
+indir(`define', concat(`PIPELINE_SCHED_COMP_', PIPELINE_ID),
+      N_PCMP(PCM_ID))
+
+# [V2.1] Widget scheduler explicite
+W_PIPELINE(N_PCMP(PCM_ID), SCHEDULE_PERIOD, SCHEDULE_PRIORITY, SCHEDULE_CORE,
+           SCHEDULE_TIME_DOMAIN, pipe_media_schedule_plat)
 
 # Export buffer 3 comme SOURCE de la pipeline pour le graph externe
 indir(`define', concat(`PIPELINE_SOURCE_', PIPELINE_ID), N_BUFFER(3))
@@ -661,10 +711,10 @@ undefine(`DRC_CTRL')
 undefine(`DRC_priv')
 \end{lstlisting}
 
-\paragraph{\texttt{sof-imx8mp-tac5212-pipe-mastertap.m4} V2}
-Pipeline de sortie côté Master\_Tap, simple capture depuis un buffer externe (partagé avec pipe-masterchain buf\#3 via DAPM).
+\paragraph{\texttt{sof-imx8mp-tac5212-pipe-mastertap.m4} V2.1}
+Pipeline de sortie côté Master\_Tap, simple capture depuis un buffer externe (partagé avec pipe-masterchain buf\#3 via DAPM). \textbf{[V2.1]} Ajout du widget scheduler \texttt{W\_PIPELINE(SCHED\_COMP,...)} qui piggyback sur le scheduler de l'upstream (PIPELINE\_SCHED\_COMP\_3 reçu en argument).
 \begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
-# Master tap V2: buf (shared) -> host PCM Master_Tap
+# Master tap V2.1: buf (shared) -> host PCM Master_Tap
 # Co-scheduled avec PIPE 3 via PIPELINE_SCHED_COMP_3 passe dans
 # PIPELINE_PCM_ADD (cf. sof-imx8mp-tac5212-masterlite.m4)
 include(`utils.m4')
@@ -681,6 +731,11 @@ W_BUFFER(0, COMP_BUFFER_SIZE(2,
     COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
     PLATFORM_HOST_MEM_CAP)
 
+# [V2.1] Widget scheduler explicite, piggyback sur l'upstream SCHED_COMP
+# (SCHED_COMP est defini par le sof-imx8mp-tac5212-masterlite.m4 appelant)
+W_PIPELINE(SCHED_COMP, SCHEDULE_PERIOD, SCHEDULE_PRIORITY, SCHEDULE_CORE,
+           SCHEDULE_TIME_DOMAIN, pipe_media_schedule_plat)
+
 # Graph : buf -> host
 P_GRAPH(pipe-master-tap, PIPELINE_ID,
     LIST(`   ',
@@ -693,6 +748,49 @@ indir(`define', concat(`PIPELINE_PCM_', PIPELINE_ID), Master Tap PCM_ID)
 PCM_CAPABILITIES(Master Tap PCM_ID, CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT),
     PCM_MIN_RATE, PCM_MAX_RATE, 2, 2, 2, 16, 192, 16384, 65536, 65536)
 \end{lstlisting}
+
+\subsection{Board config SOF à modifier (V2.1, H1)}
+
+Le fichier \texttt{sof/app/boards/imx8mp\_evk\_mimx8ml8\_adsp.conf} ne contient actuellement que \texttt{CONFIG\_COMP\_DRC=y}. Phase 1a nécessite d'activer plusieurs composants additionnels :
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# Base existante (a garder)
+CONFIG_IMX8M=y
+CONFIG_HAVE_AGENT=n
+CONFIG_FORMAT_CONVERT_HIFI3=n
+CONFIG_KPB_FORCE_COPY_TYPE_NORMAL=n
+
+# Effects for capture path (existant)
+CONFIG_COMP_DRC=y
+
+# [V2.1 AJOUTS] Phase 1a master chain
+CONFIG_COMP_VOLUME=y        # PGA/DVC master (W_PGA macro)
+CONFIG_COMP_MULTIBAND_DRC=y # multiband_drc (depend COMP_IIR + COMP_CROSSOVER)
+CONFIG_COMP_IIR=y           # requis par multiband_drc
+CONFIG_COMP_CROSSOVER=y     # requis par multiband_drc
+CONFIG_COMP_MUX=y           # mux pour merge master + monitor (Phase 1a.3)
+\end{lstlisting}
+
+\textbf{Impact} : cette modif force un \textbf{rebuild firmware SOF complet} (west build + rimage + cat xman + scp \texttt{sof-imx8m.ri}). Pas juste un rebuild topology. Prévoir 10-15 min supplémentaires la première fois.
+
+\subsection{Valeur VOL\_ZERO\_DB (V2.1, H2)}
+
+La V2 citait \texttt{0x40000000} (Q2.30). \textbf{C'est faux en IPC3}. Valeurs correctes :
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{IPC} & \textbf{Format} & \textbf{VOL\_ZERO\_DB (hex)} \\
+\midrule
+IPC3 & Q8.16 & \texttt{0x10000} = 65\,536 \\
+IPC4 & Q1.23 & \texttt{0x800000} = 8\,388\,608 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Définition dans \texttt{sof/src/audio/volume/volume.h:103} : \texttt{VOL\_ZERO\_DB = BIT(VOL\_QXY\_Y)}. Sur IPC3 (notre cas), \texttt{VOL\_QXY\_Y = 16} donc \texttt{BIT(16) = 0x10000}.
+
+Tout preset \texttt{bytes blob} qui force "0 dB" doit utiliser \texttt{0x10000}, pas \texttt{0x40000000}. Les scripts de test qui appellent \texttt{amixer cset name='Master Volume' 0dB} s'en fichent (la macro dB $\rightarrow$ Q8.16 est dans le kernel), mais les blobs binaires bruts doivent être conformes.
 
 \subsection{Évolutions 1a.2 et 1a.3}
 
