@@ -1,0 +1,617 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2cm]{geometry}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{siunitx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{pifont}
+\usepackage{enumitem}
+\usepackage[colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!60!black]{hyperref}
+
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, calc, fit, backgrounds, decorations.pathreplacing}
+
+% Couleurs fonctionnelles
+\definecolor{chw}{HTML}{B71C1C}      % hardware (rouge foncé)
+\definecolor{cdsp}{HTML}{1565C0}     % DSP (bleu)
+\definecolor{ca53}{HTML}{2E7D32}     % A53 userspace (vert)
+\definecolor{cusb}{HTML}{6A1B9A}     % USB (violet)
+\definecolor{cnpu}{HTML}{E65100}     % NPU (orange)
+\definecolor{cfx}{HTML}{00838F}      % FX (cyan)
+\definecolor{cbg}{HTML}{F5F5F5}
+
+% Styles de blocs
+\tikzset{
+  hw/.style={draw, fill=chw!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  dsp/.style={draw, fill=cdsp!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  a53/.style={draw, fill=ca53!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  usb/.style={draw, fill=cusb!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  npu/.style={draw, fill=cnpu!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  fx/.style={draw, fill=cfx!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  zone/.style={draw, dashed, rounded corners=6pt, inner sep=10pt},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+  arrmulti/.style={-{Stealth[length=2mm]}, very thick},
+  pcm/.style={draw, fill=yellow!20, font=\sffamily\scriptsize, minimum height=5mm, rounded corners=1pt}
+}
+
+\title{\textbf{Plateforme Mastering Live Debix}\\[4pt]
+  \large Architectures DSP --- comparatif de 3 propositions}
+\author{Document de travail}
+\date{2026-04-20}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\vspace{1em}
+
+\hrule
+\vspace{0.5em}
+\noindent\textit{Ce document compare \textbf{3 architectures DSP} pour la plateforme mastering live. Objectif~: te permettre de trancher un choix structurant avant tout code. Chaque architecture a un schéma, un inventaire de PCMs, un budget latence, un budget CPU, ses avantages et ses contraintes.}
+\vspace{0.5em}
+\hrule
+
+% =======================================================================
+\section{Contexte et rappel}
+
+\subsection{Matériel}
+\begin{itemize}[leftmargin=*, itemsep=2pt]
+  \item \textbf{SoC}~: NXP i.MX8MP --- 4× Cortex-A53 @ 1{,}6~GHz + Cortex-M7 + DSP HiFi4 @ 800~MHz + NPU Vivante VIP8000 @ 2{,}3~TOPS
+  \item \textbf{Front-end audio}~: 4× codec TAC5212 daisy-chaînés sur SAI7, TDM 8~canaux $\times$ 32~bits @ 48~kHz
+  \item \textbf{USB gadget}~: 2 contrôleurs USB $\rightarrow$ UAC2 8in/8out (ASIO DAW) + UAC2 2in/2out (iOS)
+\end{itemize}
+
+\subsection{Objectif fonctionnel}
+Faire un \textbf{mastering live "lite"} piloté par le NPU. Le NPU analyse le bus master stéréo en continu et ajuste les paramètres (EQ, multiband compressor, exciter) à $\sim$10~Hz d'update.
+
+\subsection{Contraintes}
+\begin{center}
+\begin{tabularx}{0.92\textwidth}{lX}
+\toprule
+\textbf{Contrainte} & \textbf{Valeur} \\
+\midrule
+Sample rate & 48~kHz fixe (Phase 1) \\
+Latence chemin principal (USB\,$\rightarrow$\,DSP\,$\rightarrow$\,USB) & \textbf{$\leq$ 10~ms} \\
+Latence effets send (reverb, chorus\ldots) & non critique (20--50~ms OK) \\
+DSP period SOF & 2~ms (pipeline scheduling) \\
+Effets send & \textbf{en userspace A53} (JACK + LV2), pas dans le DSP \\
+NPU & modèle TFLite à entraîner \emph{from scratch} \\
+Règle & minimiser le contenu du DSP \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Les 4 axes qui distinguent les architectures}
+\label{sec:axes}
+
+Chaque architecture répond différemment à ces 4 questions~:
+
+\begin{enumerate}[leftmargin=*, itemsep=3pt]
+  \item \textbf{Où vit la matrice de routage ?} (DSP ou A53 userspace)
+  \item \textbf{Où vit l'EQ fine des entrées ?} (Codec TAC5212 / DSP / A53)
+  \item \textbf{Où vit la chaîne master ?} (DSP ou A53)
+  \item \textbf{Comment les audio USB transitent-elles entre le gadget et le DSP ?} (passage direct par A53 kernel / bridge \texttt{alsaloop} / JACK)
+\end{enumerate}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Axe} & \textbf{Archi A (Max DSP)} & \textbf{Archi B (Min DSP)} & \textbf{Archi C (Équilibrée)} \\
+\midrule
+Matrice de routage & DSP & A53 (JACK) & DSP \\
+EQ fine entrées & DSP (\texttt{eq\_iir}) & A53 (LV2) & Codec + DSP léger \\
+Chaîne master & DSP & A53 & DSP \\
+USB$\leftrightarrow$DSP bridge & \texttt{alsaloop} & JACK natif & \texttt{alsaloop} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\clearpage
+% =======================================================================
+\section{Architecture A --- Maximum DSP}
+\label{sec:archiA}
+
+\textbf{Philosophie}~: tout ce qui peut être fait en DSP y est fait. L'A53 sert uniquement de plombier ALSA vers USB, héberge les 4 effets send (obligatoire --- SOF n'a pas reverb/chorus/flanger), et fait tourner le NPU et l'UI.
+
+\subsection{Schéma}
+
+\begin{center}
+\begin{tikzpicture}[node distance=4mm and 8mm]
+
+% --- Hardware inputs
+\node[hw]                 (mics)  {8 mics};
+\node[hw, below=of mics]  (tac)   {4× TAC5212\\(AGC + HPF\\+ 3 biquads/ch)};
+
+% --- DSP block
+\node[dsp, right=18mm of tac, minimum width=70mm, minimum height=60mm, align=center] (dsp) {};
+\node[anchor=north] at (dsp.north) {\textbf{\textcolor{cdsp}{DSP HiFi4 (SOF)}}};
+
+\node[dsp, fill=cdsp!25] (eq8)     at ($(dsp.west)+(1.3,1.8)$) {8× eq\_iir\\(fine EQ)};
+\node[dsp, fill=cdsp!25, right=5mm of eq8] (matrix) {Matrice\\18$\times$18\\mixin\_mixout};
+\node[dsp, fill=cdsp!25, below=5mm of matrix] (mbdrc)  {multiband\_drc};
+\node[dsp, fill=cdsp!25, below=3mm of mbdrc]  (vol)    {volume};
+\node[dsp, fill=cdsp!25, below=3mm of vol]    (lim)    {drc (limiter)};
+\node[dsp, fill=cdsp!25, left=5mm of mbdrc]   (tap)    {NPU tap};
+
+% --- A53 block
+\node[a53, right=22mm of dsp, minimum width=55mm, minimum height=60mm] (a53) {};
+\node[anchor=north] at (a53.north) {\textbf{\textcolor{ca53}{A53 userspace}}};
+
+\node[fx, fill=cfx!25] (jack) at ($(a53.west)+(1.2,1.6)$) {JACK\\+ 4 LV2\\(Reverb\\Chorus\\Flanger\\Delay)};
+\node[usb, fill=cusb!25, below=3mm of jack] (usb1) {alsaloop\\USB1 (8in/8out)};
+\node[usb, fill=cusb!25, below=3mm of usb1] (usb2) {alsaloop\\USB2 (2in/2out)};
+\node[npu, fill=cnpu!25, below=3mm of usb2] (npu) {NPU service};
+
+% --- USB outside
+\node[usb, right=8mm of usb1] (daw)  {DAW\\ASIO};
+\node[usb, right=8mm of usb2] (ios)  {iOS};
+
+% --- Speakers
+\node[hw, left=12mm of lim] (hp) {HP/monitor};
+
+% Arrows: hardware to DSP
+\draw[arrmulti] (mics) -- (tac);
+\draw[arrmulti] (tac.east) -- node[above, font=\scriptsize, align=center]{SAI7\\8ch TDM} (eq8.west);
+
+% Internal DSP
+\draw[arr] (eq8) -- (matrix);
+\draw[arr] (matrix.south) -- (mbdrc.north);
+\draw[arr] (mbdrc) -- (vol);
+\draw[arr] (vol) -- (lim);
+\draw[arr] (mbdrc) -- (tap);
+
+% DSP to HP (via matrix 8ch direct)
+\draw[arrmulti, dashed] (matrix.west) to[bend right=40] node[left, font=\scriptsize]{8ch out} (hp);
+\draw[arr] (lim.west) to[bend left=30] (hp);
+
+% DSP <-> A53
+\draw[arrmulti, <->] (matrix.east)+(0,2mm) -- node[above, font=\scriptsize, align=center]{FX 4×2ch\\send/return} (jack.west);
+\draw[arrmulti, <->] (matrix.east)+(0,-2mm) -- node[below, font=\scriptsize, align=center, pos=0.3]{USB 8+2\\send/return} (usb1.west);
+\draw[arr] (tap.west) to[out=180, in=200] ($(dsp.south west)+(5mm,0)$) to node[below=2mm, font=\scriptsize]{analysis} (npu.west);
+
+% A53 to USB outside
+\draw[arrmulti, <->] (usb1.east) -- (daw.west);
+\draw[arrmulti, <->] (usb2.east) -- (ios.west);
+
+% NPU control back
+\draw[arr, dashed, red!70!black] (npu.north west) to[bend left=60] node[right=2mm, font=\scriptsize, text=red!70!black]{ALSA ctrl} (matrix.south east);
+
+\end{tikzpicture}
+\end{center}
+
+\subsection{Inventaire des PCMs (côté A53 = côté kernel ALSA)}
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+\textbf{PCM} & \textbf{Type} & \textbf{Ch} & \textbf{Rôle} \\
+\midrule
+\texttt{SAI\_Dry} & capture & 8 & Mics bruts post-TAC5212 (bypass matrice) \\
+\texttt{Master} & capture & 2 & Sortie master post-chaîne (NPU + bridge USB) \\
+\texttt{USB1\_Send} & capture & 8 & Sortie matrice vers DAW \\
+\texttt{USB2\_Send} & capture & 2 & Sortie matrice vers iOS \\
+\texttt{FX1..4\_Send} & capture $\times$4 & 2 & Sorties vers JACK \\
+\texttt{SAI\_Monitor} & playback & 8 & Vers TAC5212 DAC (HP/monitor) \\
+\texttt{USB1\_Ret} & playback & 8 & Retour depuis DAW \\
+\texttt{USB2\_Ret} & playback & 2 & Retour depuis iOS \\
+\texttt{FX1..4\_Ret} & playback $\times$4 & 2 & Retours depuis JACK \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\textbf{Total~: 12 PCMs} (4 captures fixes + 4 captures FX + 3 playback fixes + 4 playback FX = 15 pipelines SOF).
+
+\subsection{Budget latence (chemin principal USB$\rightarrow$DSP$\rightarrow$USB)}
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{Étape} & \textbf{Latence} \\
+\midrule
+USB gadget UAC2 in (isochronous, 48 kHz) & 1{,}0~ms \\
+\texttt{alsaloop} gadget$\rightarrow$DSP PCM (période 2~ms, 2 périodes) & 4{,}0~ms \\
+DSP pipeline 2~ms (1 cycle in + 1 cycle out + matrice) & 4{,}0~ms \\
+\texttt{alsaloop} DSP PCM$\rightarrow$gadget & 4{,}0~ms \\
+USB gadget UAC2 out & 1{,}0~ms \\
+\midrule
+\textbf{Total round-trip} & \textbf{14{,}0~ms} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textcolor{red!70!black}{\textbf{$>$ 10~ms~!}} Dépasse la contrainte. Nécessite DSP period 1~ms (au lieu de 2~ms) et \texttt{alsaloop} très agressif, ce qui stresse le HiFi4.
+
+\subsection{Budget CPU DSP (estimation)}
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{Composant} & \textbf{\% HiFi4} \\
+\midrule
+8 $\times$ eq\_iir (3 biquads/ch) & $\sim$5~\% \\
+Matrice 18$\times$18 mixin\_mixout & $\sim$8~\% \\
+multiband\_drc stéréo 3 bandes & $\sim$12~\% \\
+volume + drc limiter & $\sim$2~\% \\
+12 pipelines + IPC overhead & $\sim$8~\% \\
+\midrule
+\textbf{Total} & $\sim$35~\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+CPU confortable, mais topology \textbf{très complexe} (15 pipelines, 4 effets send à câbler en PCM loopback, chaque FX = 2 PCMs + 2 pipelines).
+
+\subsection{Avantages et inconvénients}
+\begin{center}
+\begin{tabularx}{\textwidth}{p{0.48\textwidth} X}
+\toprule
+\textbf{\textcolor{ca53}{Avantages}} & \textbf{\textcolor{chw}{Inconvénients}} \\
+\midrule
+Routage 100~\% déterministe, non dépendant de la charge Linux & 15 pipelines SOF à maintenir~: topology $\sim$500 lignes m4 \\
+Même latence pour tous les chemins & Latence round-trip $>$ 10~ms (contrainte violée) \\
+Paramètres matrix visibles via \texttt{amixer} & Chaque ajout (5\textsuperscript{e} FX, nouvel input) $=$ refonte topology + rebuild firmware \\
+CPU DSP sous-exploité & Tous les bugs sont dans le DSP, debug plus difficile \\
+& Matrice 18$\times$18 $=$ 324 cellules$\times$contrôles ALSA $=$ bruit dans l'UI \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Verdict Archi A}
+\textbf{Non retenue} si on veut tenir 10~ms. Trop complexe pour le ratio coût/bénéfice.
+
+% =======================================================================
+\clearpage
+\section{Architecture B --- Minimum DSP ("Thin DSP")}
+\label{sec:archiB}
+
+\textbf{Philosophie}~: le DSP est réduit au strict minimum --- juste un adaptateur codec + un tap pour le NPU. Tout le routage, l'EQ, le master chain et les effets send vivent dans un \textbf{graphe JACK} sur l'A53. Le codec TAC5212 fait le pré-conditionnement (AGC, biquads, HPF) pour soulager le DSP.
+
+\subsection{Schéma}
+
+\begin{center}
+\begin{tikzpicture}[node distance=4mm and 8mm]
+
+% Hardware
+\node[hw]                 (mics)  {8 mics};
+\node[hw, below=of mics]  (tac)   {4× TAC5212\\(AGC + HPF\\+ 3 biquads/ch\\+ phase/gain cal)};
+
+% DSP thin
+\node[dsp, right=15mm of tac, minimum width=40mm, minimum height=35mm] (dsp) {};
+\node[anchor=north] at (dsp.north) {\textbf{\textcolor{cdsp}{DSP HiFi4}}};
+\node[dsp, fill=cdsp!25] (passin)  at ($(dsp.west)+(1.2,0.5)$) {SAI$\leftrightarrow$host\\pass-through 8ch};
+\node[dsp, fill=cdsp!25, below=2mm of passin] (tap) {Master tap\\2ch};
+
+% A53 big
+\node[a53, right=18mm of dsp, minimum width=75mm, minimum height=75mm] (a53) {};
+\node[anchor=north] at (a53.north) {\textbf{\textcolor{ca53}{A53 userspace (JACK graph)}}};
+
+\node[fx, fill=ca53!25] (eq) at ($(a53.west)+(1.2,2.8)$) {8× eq LV2\\(fine EQ)};
+\node[fx, fill=ca53!25, right=4mm of eq] (matx) {Routing matrix\\JACK internal\\(N$\times$M)};
+\node[fx, fill=ca53!25, below=3mm of matx] (master) {Master chain\\mbdrc $\rightarrow$ vol\\$\rightarrow$ limiter\\(LV2)};
+\node[fx, fill=ca53!25, left=4mm of master] (fxall) {4 LV2 FX\\reverb\\chorus\\flanger\\delay};
+
+\node[usb, fill=cusb!25, below=3mm of fxall] (usb1) {UAC2 gadget\\USB1 (8+8)};
+\node[usb, fill=cusb!25, right=4mm of usb1] (usb2) {UAC2 gadget\\USB2 (2+2)};
+\node[npu, fill=cnpu!25, right=4mm of usb2] (npu) {NPU};
+
+% External USB clients
+\node[usb, right=8mm of usb2] (daw)  {DAW\\ASIO};
+\node[usb, above right=-2mm and 8mm of daw] (ios)  {iOS};
+
+\node[hw, left=10mm of master] (hp) {HP/monitor};
+
+% Arrows
+\draw[arrmulti] (mics) -- (tac);
+\draw[arrmulti] (tac.east) -- node[above, font=\scriptsize]{SAI7 TDM 8ch} (passin.west);
+\draw[arrmulti, <->] (passin.east) -- node[above, font=\scriptsize]{ALSA 8+8} (eq.west);
+\draw[arr] (eq) -- (matx);
+\draw[arr] (matx.south) -- (master.north);
+\draw[arr, <->] (matx.west) to[bend right=15] (fxall.north);
+\draw[arr] (master) -- node[above, font=\scriptsize]{loopback} (tap.east);
+\draw[arr] (master.west) -- (hp);
+\draw[arrmulti, <->] (matx.south east) to[bend left=25] (usb1.north);
+\draw[arrmulti, <->] (matx.east) to[bend left=10] (usb2.north);
+\draw[arrmulti, <->] (usb1) -- (daw);
+\draw[arrmulti, <->] (usb2) -- (ios);
+\draw[arr, dashed, red!70!black] (tap.south east) to[bend right=20] (npu.west);
+\draw[arr, dashed, red!70!black] (npu.north) to[bend right=10] node[right, font=\scriptsize, text=red!70!black]{ALSA ctrl} (master.south east);
+
+\end{tikzpicture}
+\end{center}
+
+\subsection{Inventaire des PCMs (très court)}
+\begin{center}
+\begin{tabular}{lllp{0.42\textwidth}}
+\toprule
+\textbf{PCM} & \textbf{Type} & \textbf{Ch} & \textbf{Rôle} \\
+\midrule
+\texttt{SAI\_Capture} & capture & 8 & Mics TAC5212 vers JACK \\
+\texttt{SAI\_Playback} & playback & 8 & JACK vers TAC5212 DAC \\
+\texttt{Master\_Tap} & capture & 2 & Master post-chain (NPU) \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Total~: 3 PCMs côté DSP}. Tout le reste vit dans JACK.
+
+\subsection{Budget latence}
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{Étape} & \textbf{Latence} \\
+\midrule
+USB gadget in & 1{,}0~ms \\
+JACK buffer (period 128 frames @ 48k $=$ 2{,}7~ms, $\times$2) & 5{,}3~ms \\
+LV2 plugins (EQ + matrix + master chain) & $\sim$2~ms \\
+USB gadget out & 1{,}0~ms \\
+\midrule
+\textbf{Round-trip sans DSP} & \textbf{9{,}3~ms} \\
+\midrule
+\textit{Chemin avec DSP (mic$\rightarrow$DAC)~:} & \\
+SAI in (1 DSP period 2ms, contrôle DMA) & 2{,}0~ms \\
+DSP$\rightarrow$host (ALSA 1 période de 2ms) & 2{,}0~ms \\
+JACK graph & 5{,}3~ms \\
+host$\rightarrow$DSP (ALSA 2ms) & 2{,}0~ms \\
+SAI out & 2{,}0~ms \\
+\textbf{Total mic$\rightarrow$HP} & \textbf{13{,}3~ms} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textcolor{red!70!black}{\textbf{13 ms pour mic$\rightarrow$HP}}. Mais le chemin "principal" USB$\rightarrow$USB reste à $\sim$9~ms si l'audio ne traverse pas le DSP (tout JACK). En pratique on veut que les mics traversent quand même le DSP pour le pré-conditionnement et le tap NPU, donc \textbf{on sort du budget 10~ms pour le mic monitoring live}.
+
+\subsection{Budget CPU}
+Charge DSP $\approx$ 3~\% (juste DMA et pipelines pass-through).
+Charge A53 $\approx$ 35--45~\% (JACK + 4 FX + EQ + matrix + master), soit \textbf{quasi 2 cœurs sur 4} à pleine charge.
+
+\subsection{Avantages et inconvénients}
+\begin{center}
+\begin{tabularx}{\textwidth}{p{0.48\textwidth} X}
+\toprule
+\textbf{\textcolor{ca53}{Avantages}} & \textbf{\textcolor{chw}{Inconvénients}} \\
+\midrule
+Topology SOF \textbf{triviale} ($<$ 50 lignes m4) & Latence mic$\rightarrow$HP $>$ 10~ms (contrainte violée pour monitoring live) \\
+Écosystème LV2 mature (reverb, mastering plugins, éditeurs) & Charge A53 élevée --- compétition avec Flutter UI et NPU \\
+Plugins hot-swappables à chaud sans rebuild firmware & Dépendant de la stabilité du scheduler Linux (xruns possibles sous charge) \\
+Graphe JACK visible avec patchbay (catia/qjackctl) & 2 cœurs A53 consommés en pic $=$ moins de marge pour NPU \\
+Debug plus simple (outils Linux standards) & Bridge ALSA DSP$\leftrightarrow$JACK ajoute 2--4~ms \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Verdict Archi B}
+\textbf{Adaptée si} la latence live n'est pas critique ou si on accepte un monitoring direct via le codec (bypass analogique TAC5212). \textbf{Rejetée} ici car contrainte 10~ms non tenue sur le chemin principal.
+
+% =======================================================================
+\clearpage
+\section{Architecture C --- Équilibrée (recommandée)}
+\label{sec:archiC}
+
+\textbf{Philosophie}~: le DSP fait ce qui \textbf{DOIT} être fait à basse latence (matrice de routage + chaîne master stéréo + tap NPU) et rien d'autre. Le codec TAC5212 fait le pré-conditionnement par canal. Les effets send (non critiques) vivent dans JACK/LV2 sur A53. La répartition joue sur les forces de chaque étage.
+
+\subsection{Schéma}
+
+\begin{center}
+\begin{tikzpicture}[node distance=4mm and 8mm]
+
+% Hardware
+\node[hw]                 (mics)  {8 mics};
+\node[hw, below=of mics]  (tac)   {4× TAC5212\\(AGC + HPF\\+ 3 biquads/ch\\+ phase/gain cal)};
+
+% DSP
+\node[dsp, right=14mm of tac, minimum width=55mm, minimum height=62mm] (dsp) {};
+\node[anchor=north] at (dsp.north) {\textbf{\textcolor{cdsp}{DSP HiFi4 (SOF)}}};
+
+\node[dsp, fill=cdsp!25] (eq) at ($(dsp.west)+(1.1,2.0)$) {8× eq\_iir\\(touche fine)};
+\node[dsp, fill=cdsp!25, below=2.5mm of eq] (matrix) {Matrice\\mixin\_mixout};
+\node[dsp, fill=cdsp!25, below=2.5mm of matrix] (mbdrc) {multiband\_drc\\(L/R, 3 bandes)};
+\node[dsp, fill=cdsp!25, below=2mm of mbdrc] (voldrc) {volume $\rightarrow$ drc\\(limiter)};
+\node[dsp, fill=cdsp!25, right=4mm of mbdrc] (tap) {NPU\\tap};
+
+% A53
+\node[a53, right=18mm of dsp, minimum width=55mm, minimum height=62mm] (a53) {};
+\node[anchor=north] at (a53.north) {\textbf{\textcolor{ca53}{A53 userspace}}};
+
+\node[fx, fill=cfx!25] (jack) at ($(a53.west)+(1.2,2.0)$) {JACK + 4 LV2\\Reverb\\Chorus\\Flanger\\Delay};
+\node[usb, fill=cusb!25, below=3mm of jack] (usb1) {UAC2 gadget\\USB1 (8in/8out)\\alsaloop bridge};
+\node[usb, fill=cusb!25, below=3mm of usb1] (usb2) {UAC2 gadget\\USB2 (2in/2out)};
+\node[npu, fill=cnpu!25, below=3mm of usb2] (npu) {NPU + UI\\(Flutter)};
+
+\node[usb, right=8mm of usb1] (daw) {DAW\\ASIO};
+\node[usb, right=8mm of usb2] (ios) {iOS};
+
+\node[hw, left=10mm of voldrc] (hp) {HP/monitor};
+
+% Arrows in DSP chain
+\draw[arrmulti] (mics) -- (tac);
+\draw[arrmulti] (tac.east) -- node[above, font=\scriptsize, align=center]{SAI7\\TDM 8ch} (eq.west);
+\draw[arr] (eq) -- (matrix);
+\draw[arr] (matrix) -- (mbdrc);
+\draw[arr] (mbdrc) -- (voldrc);
+\draw[arr] (mbdrc.east) -- (tap.west);
+
+% DSP output to speakers
+\draw[arrmulti, dashed] (matrix.west) to[bend right=45] node[left, font=\scriptsize]{8ch direct} (hp);
+\draw[arr] (voldrc.west) -- (hp);
+
+% A53 traffic
+\draw[arrmulti, <->] (matrix.east) -- node[above, font=\scriptsize, align=center]{FX 4×2ch\\ALSA} (jack.west);
+\draw[arrmulti, <->] (matrix.east)+(0,-3mm) -- node[below, font=\scriptsize, align=center]{USB 8+2\\ALSA} (usb1.west);
+\draw[arrmulti, <->] (usb1.east) -- (daw.west);
+\draw[arrmulti, <->] (usb2.east) -- (ios.west);
+\draw[arr, dashed, red!70!black] (tap.south) to[bend left=10] (npu.north west);
+\draw[arr, dashed, red!70!black] (npu.north) to[bend right=15] node[right=2mm, font=\scriptsize, text=red!70!black]{ctrls} (matrix.south east);
+
+\end{tikzpicture}
+\end{center}
+
+\subsection{Inventaire PCMs}
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{PCM côté DSP (SOF)} & \textbf{Ch} & \textbf{Rôle / Phase} \\
+\midrule
+\texttt{SAI\_Capture} & 8 & Dry mics TAC vers A53 (rec/bridge) --- Phase 1 \\
+\texttt{SAI\_Playback} & 8 & Monitor mix vers TAC5212 DAC --- Phase 1 \\
+\texttt{Master\_Tap} & 2 & Master post-chaîne (NPU + monitor) --- Phase 1 \\
+\texttt{USB1\_Send / Ret} & 8 / 8 & Bridge vers UAC2 gadget 1 --- Phase 2 \\
+\texttt{USB2\_Send / Ret} & 2 / 2 & Bridge vers UAC2 gadget 2 --- Phase 2 \\
+\texttt{FX1..4\_Send / Ret} & 2 / 2 $\times$4 & Bridge vers JACK LV2 --- Phase 3 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\textbf{Total une fois complet~: 11 PCMs}, mais on les ajoute \emph{phase par phase}. Phase 1 = 3 PCMs seulement.
+
+\subsection{Budget latence}
+\begin{center}
+\begin{tabular}{lrl}
+\toprule
+\textbf{Étape chemin principal} & \textbf{Latence} & \textbf{Note} \\
+\midrule
+USB gadget in & 1{,}0~ms & isoc UAC2 @ 48k \\
+\texttt{alsaloop} gadget$\rightarrow$DSP (1 période 2~ms) & 2{,}0~ms & single-buffer \\
+DSP routing + master chain & 2{,}0~ms & 1 cycle 2ms \\
+\texttt{alsaloop} DSP$\rightarrow$gadget & 2{,}0~ms & \\
+USB gadget out & 1{,}0~ms & \\
+\midrule
+\textbf{Round-trip principal} & \textbf{8{,}0~ms} & \textcolor{ca53}{\textbf{$\leq$ 10~ms} \checkmark} \\
+\midrule
+Chemin mic$\rightarrow$HP (interne DSP pur) & \textbf{$\sim$4~ms} & \\
+Chemin avec FX send (DSP$\rightarrow$JACK$\rightarrow$DSP) & $\sim$20--30~ms & non critique \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Contrainte 10~ms tenue} sur le chemin principal. Le mic$\rightarrow$HP traverse uniquement le DSP ($\sim$4~ms), excellent pour monitoring live.
+
+\subsection{Budget CPU}
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Composant} & \textbf{\% HiFi4} & \textbf{\% A53} \\
+\midrule
+8$\times$ eq\_iir (3 biquads/ch) & 4 & -- \\
+Matrice mixin\_mixout & 5--8 & -- \\
+multiband\_drc stéréo & 10 & -- \\
+volume + drc limiter & 2 & -- \\
+Pipelines + IPC SOF & 5 & -- \\
+\texttt{alsaloop} $\times$ bridges (USB+FX) & -- & 8--12 \\
+JACK + 4 LV2 FX (A53) & -- & 20--30 \\
+NPU service + UI & -- & 10--15 \\
+\midrule
+\textbf{Total estimé} & \textbf{25--30~\%} & \textbf{40--55~\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+Marge confortable côté DSP, charge A53 soutenable ($\sim$1 cœur sur 4 en moyenne).
+
+\subsection{Avantages et inconvénients}
+\begin{center}
+\begin{tabularx}{\textwidth}{p{0.48\textwidth} X}
+\toprule
+\textbf{\textcolor{ca53}{Avantages}} & \textbf{\textcolor{chw}{Inconvénients}} \\
+\midrule
+Contrainte 10~ms \textbf{tenue} & Topology SOF moyenne complexité ($\sim$200 lignes m4) \\
+Phase 1 déployable en $\sim$2 semaines (3 PCMs seulement) & Matrice en DSP $=$ ajout de voies $=$ rebuild firmware \\
+Effets send dans écosystème LV2 mature & 11 PCMs au total une fois Phase 3 finie \\
+CPU DSP $\sim$25~\% $=$ large marge pour exciter/harmonizer futur & \texttt{alsaloop} entre gadget et DSP $=$ 2$\times$2~ms supplémentaires \\
+Chaîne master toujours à latence déterministe (DSP) & \\
+Codec TAC5212 décharge le DSP du pré-conditionnement & \\
+Ajout phasé (mise en route incrémentale sûre) & \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Verdict Archi C}
+\textcolor{ca53}{\textbf{Retenue.}} Seule architecture à tenir la contrainte 10~ms \emph{tout en} gardant un DSP de complexité raisonnable et en réutilisant l'écosystème LV2 pour les effets.
+
+% =======================================================================
+\clearpage
+\section{Comparaison synthétique}
+
+\subsection{Tableau comparatif}
+\begin{center}
+\footnotesize
+\begin{tabularx}{\textwidth}{lXXX}
+\toprule
+\textbf{Critère} & \textbf{A --- Max DSP} & \textbf{B --- Min DSP} & \textbf{C --- Équilibrée} \\
+\midrule
+Matrice routage & DSP \texttt{mixin\_mixout} & JACK (A53) & DSP \texttt{mixin\_mixout} \\
+EQ fine 8 entrées & DSP \texttt{eq\_iir} & LV2 (A53) & Codec TAC + DSP léger \\
+Chaîne master & DSP (multiband\_drc + vol + drc) & LV2 (A53) & DSP \\
+Effets send (Reverb\ldots) & A53 (forcément) & A53 & A53 \\
+NPU tap & DSP & A53 JACK capture & DSP \\
+PCMs côté SOF & 12--15 & 3 & 3$\rightarrow$11 (phasé) \\
+Pipelines SOF & $\sim$15 & 3 & 5$\rightarrow$11 \\
+Latence round-trip USB & \textcolor{red!70!black}{\textbf{14~ms}} & $\sim$9--13~ms & \textcolor{ca53}{\textbf{8~ms}} \\
+Latence mic$\rightarrow$HP & 4~ms & 13~ms & \textcolor{ca53}{\textbf{4~ms}} \\
+CPU DSP & $\sim$35~\% & 3~\% & \textbf{$\sim$25~\%} \\
+CPU A53 & $\sim$20~\% & \textcolor{red!70!black}{40--55~\%} & $\sim$40~\% \\
+Topology m4 (lignes approx) & \textcolor{red!70!black}{$\sim$500} & \textbf{$\sim$50} & $\sim$200 \\
+Ajout d'une voie & rebuild firmware & \textbf{à chaud} & rebuild firmware \\
+Débogage quotidien & DSP logs only & \textbf{outils Linux} & mixte \\
+Tenue contrainte 10~ms & \textcolor{red!70!black}{non} & \textcolor{red!70!black}{non} & \textcolor{ca53}{\textbf{oui}} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Vue d'ensemble du trade-off}
+
+\begin{center}
+\begin{tikzpicture}[scale=0.9]
+\draw[->, thick] (0,0) -- (12,0) node[right]{\small CPU A53};
+\draw[->, thick] (0,0) -- (0,7) node[above]{\small Complexité DSP};
+
+\node[circle, fill=cdsp!30, draw, minimum size=12mm] (A) at (2,6) {A};
+\node[circle, fill=ca53!30, draw, minimum size=12mm] (B) at (10,1) {B};
+\node[circle, fill=cfx!30, draw, minimum size=12mm] (C) at (6,3.5) {\textbf{C}};
+
+\node[below=6mm of A, font=\scriptsize, align=center]{Max DSP\\{\color{red!70!black}14~ms RTT}};
+\node[right=10mm of B, font=\scriptsize, align=center]{Min DSP\\{\color{red!70!black}13~ms mic$\rightarrow$HP}};
+\node[below=6mm of C, font=\scriptsize, align=center]{Équilibrée\\{\color{ca53}8~ms RTT}};
+
+% Contour 10ms
+\draw[dashed, green!50!black, thick] plot[smooth] coordinates {(0,4.3) (4,4) (7,3) (10,2.5) (12,2.3)};
+\node[green!50!black, font=\scriptsize] at (11.5,4){\textit{frontière 10~ms}};
+
+\end{tikzpicture}
+\end{center}
+
+\subsection{Décision recommandée}
+
+\textbf{$\rightarrow$ Architecture C (équilibrée)} pour les raisons suivantes~:
+
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item Seule architecture tenant la contrainte \textbf{10~ms round-trip USB}.
+  \item Latence mic$\rightarrow$HP la plus basse (4~ms) $=$ monitoring live confortable pour les musiciens.
+  \item CPU DSP $\sim$25~\% laisse $\sim$75~\% de marge pour Phase 4 (exciter, harmonizer peut-être) sans rebâtir la topology.
+  \item Phase 1 minimale déployable rapidement (3 PCMs $=$ $\sim$100 lignes m4), puis ajout progressif en Phase 2 et 3.
+  \item Réutilise la puissance per-channel du TAC5212 (AGC, biquads) qui serait sinon gaspillée.
+  \item Garde les effets send dans LV2 (écosystème mature, tunable à chaud).
+\end{enumerate}
+
+% =======================================================================
+\clearpage
+\section{Glossaire}
+
+\begin{description}[leftmargin=2.5cm, style=nextline]
+\item[SOF] Sound Open Firmware. Framework firmware open-source qui tourne sur le DSP HiFi4 (Zephyr RTOS comme base) et gère les pipelines audio entre DMA, effets et host.
+\item[TAC5212] Codec audio 2 ADC + 4 DAC de TI, avec DSP intégré (biquads, AGC, DRC, HPF) configurable via I\textsuperscript{2}C.
+\item[TDM] Time Division Multiplexing. Mode de transport série permettant de véhiculer plusieurs canaux (8 ici) sur une paire BCLK/FSYNC/DATA.
+\item[SAI] Synchronous Audio Interface. Contrôleur i.MX8MP gérant le TDM/I\textsuperscript{2}S.
+\item[DRC] Dynamic Range Compressor (compresseur).
+\item[mixin\_mixout] Composant SOF (API IPC4) permettant un routage N$\times$M avec gain par connexion. Équivalent d'une console de mixage virtuelle.
+\item[eq\_iir] Composant SOF d'égaliseur paramétrique à filtres IIR (biquads en cascade).
+\item[LV2] Standard de plugins audio Linux, successeur de LADSPA. Plugins tunables à chaud, éditeur graphique via carla/jalv.
+\item[JACK] JACK Audio Connection Kit. Serveur audio bas latence pour Linux, graphe de routage dynamique entre applications.
+\item[UAC2] USB Audio Class 2. Protocole USB pour transporter de l'audio multi-canaux 24/32-bit jusqu'à 384~kHz.
+\item[NPU] Neural Processing Unit (Vivante VIP8000 sur i.MX8MP, 2{,}3~TOPS en int8).
+\item[Round-trip latency / RTT] Latence aller-retour entre USB in et USB out côté DAW (ou mic in et HP out).
+\item[ASIO] Audio Stream Input/Output. Driver audio bas latence Windows, utilisé par les DAW (Reaper, Ableton, Cubase). Le gadget UAC2 se présente comme un périphérique audio USB que le driver ASIO (ASIO4ALL ou propriétaire) consomme.
+\end{description}
+
+\vfill
+\begin{center}
+\textit{Document généré pour décision d'architecture. Le choix retenu sera reporté dans \texttt{MASTERING\_PLATFORM\_PLAN.md} avant tout code.}
+\end{center}
+
+\end{document}

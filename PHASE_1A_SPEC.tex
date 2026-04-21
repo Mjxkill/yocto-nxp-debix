@@ -1,0 +1,1197 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2cm]{geometry}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{siunitx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{pifont}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage[colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!60!black]{hyperref}
+
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, calc, fit, backgrounds}
+
+% Couleurs
+\definecolor{chw}{HTML}{B71C1C}
+\definecolor{cdsp}{HTML}{1565C0}
+\definecolor{ca53}{HTML}{2E7D32}
+\definecolor{cusb}{HTML}{6A1B9A}
+\definecolor{cnpu}{HTML}{E65100}
+\definecolor{cfx}{HTML}{00838F}
+\definecolor{cbuf}{HTML}{FFB300}
+\definecolor{ccomp}{HTML}{455A64}
+\definecolor{ctest}{HTML}{00695C}
+\definecolor{codebg}{HTML}{F5F5F5}
+
+% Styles TikZ
+\tikzset{
+  hw/.style={draw, fill=chw!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  dsp/.style={draw, fill=cdsp!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  a53/.style={draw, fill=ca53!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  comp/.style={draw, fill=ccomp!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=6mm, minimum width=12mm, inner sep=2pt},
+  buf/.style={draw, fill=cbuf!25, font=\sffamily\scriptsize, minimum height=5mm, minimum width=6mm, inner sep=1pt, align=center},
+  pcm/.style={draw, fill=yellow!30, font=\sffamily\scriptsize, minimum height=5mm, rounded corners=1pt, align=center},
+  dai/.style={draw, fill=chw!20, font=\sffamily\footnotesize, align=center, minimum height=8mm, minimum width=14mm, rounded corners=2pt},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+  arrmulti/.style={-{Stealth[length=2mm]}, line width=1.2pt},
+  zone/.style={draw, dashed, rounded corners=6pt, inner sep=8pt},
+  pipe/.style={draw, dotted, rounded corners=4pt, inner sep=6pt, fill=cdsp!5}
+}
+
+% Code listings
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!30},
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  breaklines=true,
+  columns=flexible,
+  keepspaces=true,
+  tabsize=2,
+  inputencoding=utf8,
+  extendedchars=true,
+  literate={é}{{\'e}}1 {è}{{\`e}}1 {à}{{\`a}}1 {ê}{{\^e}}1 {â}{{\^a}}1 {ô}{{\^o}}1 {ù}{{\`u}}1 {û}{{\^u}}1 {î}{{\^\i}}1 {ï}{{\"\i}}1 {ç}{{\c c}}1 {É}{{\'E}}1 {È}{{\`E}}1 {À}{{\`A}}1
+}
+
+\title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
+  \Large Architecture C --- Spécification complète Phase 1a\\[4pt]
+  \large Structure DSP, tests, livrables et procédure d'exécution}
+\author{Document de référence technique}
+\date{2026-04-21}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\clearpage
+
+% =======================================================================
+\section{Rappel : Architecture C}
+
+\subsection{Décision validée}
+Architecture retenue par l'utilisateur (voir \texttt{DSP\_ARCHITECTURES.pdf} --- comparatif 3 archis). Architecture C dite "équilibrée" car elle répartit la charge entre les 3 étages (codec TAC5212, DSP HiFi4, Cortex-A53 userspace) selon leurs forces.
+
+\subsection{Principe directeur}
+\begin{itemize}[leftmargin=*, itemsep=2pt]
+  \item \textbf{Codec TAC5212} (I\textsuperscript{2}C) : pré-conditionnement per-channel --- AGC, HPF, biquads, gain/phase calibration, DVC. \textit{Décharge le DSP du traitement par canal.}
+  \item \textbf{DSP HiFi4 (SOF)} : ce qui DOIT être en basse latence --- routage matrice, chaîne master stéréo, tap NPU. \textit{Latence déterministe.}
+  \item \textbf{A53 userspace} : USB gadget bridges, JACK+LV2 pour les effets send (reverb, chorus, flanger, delay), service NPU, UI Flutter. \textit{Latence non critique.}
+\end{itemize}
+
+\subsection{Vue macro système}
+
+\begin{center}
+\begin{tikzpicture}[node distance=5mm and 12mm]
+
+\node[hw]                   (mics)  {8 mics / lines};
+\node[hw, below=2mm of mics](tac)   {4× TAC5212\\AGC + 3 biquads/ch\\+ HPF + phase cal\\+ DVC};
+
+\node[dsp, right=18mm of tac, minimum width=60mm, minimum height=55mm] (dsp) {};
+\node[anchor=north] at (dsp.north) {\textbf{\textcolor{cdsp}{DSP HiFi4 (SOF, Phase 1a)}}};
+\node[dsp, fill=cdsp!25] (eq) at ($(dsp.west)+(1.2,1.8)$) {8× eq\_iir\\(fine EQ)};
+\node[dsp, fill=cdsp!25, right=5mm of eq] (matrix) {Routing\\fixe Phase 1a};
+\node[dsp, fill=cdsp!25, below=3mm of matrix] (master) {Master chain\\(mbdrc + vol\\+ drc lim)};
+\node[dsp, fill=cdsp!25, left=5mm of master] (tap) {NPU tap};
+\node[dsp, fill=cdsp!25, below=3mm of master] (mux) {mux 8ch\\(merge master\\+ monitor)};
+
+\node[a53, right=22mm of dsp, minimum width=55mm, minimum height=55mm] (a53) {};
+\node[anchor=north] at (a53.north) {\textbf{\textcolor{ca53}{A53 userspace}}};
+\node[a53, fill=cfx!25] (fx) at ($(a53.west)+(1.1,1.6)$) {JACK + 4 LV2\\(Phase 3)\\Reverb Chorus\\Flanger Delay};
+\node[a53, fill=cusb!25, below=3mm of fx] (usb) {UAC2 gadgets\\(Phase 2)\\8+8 + 2+2};
+\node[a53, fill=cnpu!25, below=3mm of usb] (npu) {NPU service\\(Phase 4)};
+
+\node[hw, left=14mm of mux] (hp) {HP / monitors\\(4× TAC5212 DAC)};
+
+\draw[arrmulti] (mics) -- (tac);
+\draw[arrmulti] (tac.east) -- node[above, font=\scriptsize, align=center]{SAI7 TDM\\8ch 32b 48k} (eq.west);
+\draw[arr] (eq) -- (matrix);
+\draw[arr] (matrix.south) -- (master.north);
+\draw[arr] (master) -- (mux);
+\draw[arr] (master.west) -- (tap.east);
+\draw[arrmulti] (mux.west) -- node[above, font=\scriptsize]{SAI7 TX} (hp);
+\draw[arr, dashed] (matrix.west) to[bend right=20] (mux);
+
+\draw[arrmulti, <->, dashed] (matrix.east) -- node[above, font=\scriptsize]{(Phase 2--3)} (usb.west);
+\draw[arr, dashed, red!70!black] (tap.south) to[bend left=10] (npu.west);
+\draw[arr, dashed, red!70!black] (npu.north west) to[bend right=20] node[right, font=\scriptsize, text=red!70!black]{ALSA ctrl} (master.south east);
+
+\end{tikzpicture}
+\end{center}
+\textit{\small En Phase 1a, seule la partie DSP (bleu) + TAC5212 (rouge) est implémentée. La partie A53 (vert) arrive en Phase 2+.}
+
+\subsection{Contraintes héritées}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Sample rate & 48 kHz \\
+Format & s32le \\
+Nb canaux TDM & 8 (TAC5212 $\times$4 daisy-chain) \\
+DSP period SOF & 2 ms \\
+Latence mic\,$\rightarrow$\,HP direct & $\leq$ 4 ms \\
+Latence round-trip USB (plus tard) & $\leq$ 10 ms \\
+IPC SOF & IPC3 (hérité platform i.MX8MP) \\
+Null-test bypass & bit-perfect requis pour T4 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\clearpage
+% =======================================================================
+\section{Phase 1a --- Objectifs et scope}
+
+\subsection{Objectifs}
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item Exposer \textbf{4 PCMs ALSA fonctionnels} sur la carte SOF (\texttt{softac5212tdm}) :
+    \begin{center}
+    \begin{tabularx}{0.95\textwidth}{llll}
+      \toprule
+      \textbf{Nom PCM} & \textbf{Type} & \textbf{Ch} & \textbf{Accès userspace typique} \\
+      \midrule
+      \texttt{SAI\_Capture} & capture & 8 & \texttt{arecord -D plughw:softac5212tdm,SAI\_Capture} \\
+      \texttt{SAI\_Playback} & playback & 8 & \texttt{aplay -D plughw:softac5212tdm,SAI\_Playback} \\
+      \texttt{Source\_Play} & playback & 2 & \texttt{aplay -D plughw:softac5212tdm,Source\_Play} \\
+      \texttt{Master\_Tap} & capture & 2 & \texttt{arecord -D plughw:softac5212tdm,Master\_Tap} \\
+      \bottomrule
+    \end{tabularx}
+    \end{center}
+    Ces \textbf{noms} sont explicitement déclarés dans la topology via \texttt{PCM\_DUPLEX\_ADD} / \texttt{PCM\_CAPTURE\_ADD} / \texttt{PCM\_PLAYBACK\_ADD}. On retrouve ces identifiants côté board dans \texttt{arecord -l}, \texttt{/proc/asound/softac5212tdm/}, et dans les scripts de test.
+  \item Implanter la \textbf{chaîne master stéréo} complète (multiband\_drc + volume + drc limiter) avec modes bypass.
+  \item Garantir \textbf{latence mic\,$\rightarrow$\,HP direct $\leq$ 4 ms}.
+  \item Fournir un \textbf{preset bypass bit-perfect} pour le null-test.
+  \item Exposer tous les paramètres via \textbf{ALSA controls} pour pilotage live (UI + NPU).
+  \item Configurer les \textbf{4 codecs TAC5212} au boot (biquads flat, AGC off, HPF 12 Hz, DVC 0 dB).
+  \item Fournir un \textbf{script de test automatisé} couvrant T1\,$\rightarrow$\,T9.
+\end{enumerate}
+
+\subsection{Baseline existante --- point de départ}
+\textbf{La topology actuellement déployée sur la board fonctionne en duplex}. Rappel :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Fichier actif : \texttt{sof-imx8mp-tac5212-drc2ms.m4} (variante 2 ms)
+  \item Déployé en : \texttt{/lib/firmware/imx/sof-tplg/sof-imx8mp-tac5212.tplg}
+  \item Validé utilisateur : \texttt{sox -c 8 -t alsa plughw:2,0 -c 8 -t alsa plughw:2,0 remix 8 7 6 5 4 3 2 1} tourne en loopback 8 canaux sans clic ni xrun
+  \item Structure : 1 pipeline capture avec DRC + 1 pipeline playback passthrough, exposé en 1 PCM duplex (ID 0)
+\end{itemize}
+La topology Phase 1a (\texttt{sof-imx8mp-tac5212-masterlite.m4}) \textbf{étend} cette baseline --- elle garde le couple capture/playback SAI (qui marche) et \textbf{ajoute} les pipelines master chain + master tap.
+
+\subsection{Hors scope Phase 1a}
+\begin{itemize}[leftmargin=*, itemsep=2pt]
+  \item \textcolor{red!70!black}{Matrice N\,$\times$\,M avec gain par cellule} $\rightarrow$ reporté Phase 1b.
+  \item USB gadgets UAC2 $\rightarrow$ Phase 2.
+  \item Effets send (reverb\ldots) $\rightarrow$ Phase 3.
+  \item NPU inférence + training $\rightarrow$ Phase 4.
+  \item Harmonizer, Flutter UI avancée $\rightarrow$ Phase 5.
+\end{itemize}
+
+\subsection{Stratégie incrémentale d'exécution}
+Phase 1a découpée en 3 étapes, \textbf{chacune validée par l'utilisateur avant la suivante} :
+\begin{center}
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Étape} & \textbf{Livrables} \\
+\midrule
+\textbf{1a.1 MVP} & PIPE\_1 (capture dry mics), PIPE\_3+5 (Source\_Play $\rightarrow$ master chain $\rightarrow$ Master\_Tap), PIPE\_6 (SAI\_Playback 8ch direct). Permet tests T1, T2, T3, T4, T6, T7. \\
+\textbf{1a.2 Monitor} & Ajout PIPE\_2 (mic\,$\rightarrow$\,HP direct 4 ms). Permet test T8 (latence). \\
+\textbf{1a.3 Merge} & Ajout PIPE\_4 via \texttt{mux} pour merge master (2ch, slots TDM 1-2) + monitor (6ch, slots 3-8). Phase 1a complète. Permet tests T5, T9. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\clearpage
+% =======================================================================
+\section{Structure DSP détaillée}
+
+\subsection{PCMs ALSA exposés}
+Côté host A53 (kernel ALSA), la carte \texttt{softac5212tdm} expose 4 devices PCM :
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+\textbf{Nom PCM} & \textbf{Type} & \textbf{Canaux} & \textbf{Rôle} \\
+\midrule
+\texttt{SAI\_Capture} & capture & 8 & Mics bruts post-TAC5212 ADC (avec eq\_iir flat par défaut) \\
+\texttt{SAI\_Playback} & playback & 8 & Écriture directe vers TAC5212 DAC (monitoring depuis A53) \\
+\texttt{Source\_Play} & playback & 2 & Entrée stéréo master chain (source pour test \texttt{aplay}) \\
+\texttt{Master\_Tap} & capture & 2 & Sortie post master chain (NPU + null-test) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Un 5\textsuperscript{e} PCM \texttt{Source\_Play} est ajouté en Phase 1a (vs. le plan initial 3 PCMs) pour permettre le test \texttt{aplay fichier.wav} sans signal mic live.
+
+\subsection{Inventaire des 6 pipelines SOF}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Pipeline} & \textbf{Période} & \textbf{Description} \\
+\midrule
+PIPE\_1 & 2 ms & Capture dry --- SAI7 RX $\rightarrow$ host \texttt{SAI\_Capture} (8ch) \\
+PIPE\_2 & 2 ms & Monitor direct mic\,$\rightarrow$\,HP low-latency 4 ms --- SAI7 RX $\rightarrow$ eq\_iir\,$\times$\,8 $\rightarrow$ PIPE\_4 (via buffer) \\
+PIPE\_3 & 2 ms & Master chain stéréo --- host \texttt{Source\_Play} $\rightarrow$ multiband\_drc $\rightarrow$ volume $\rightarrow$ drc $\rightarrow$ PIPE\_4 et PIPE\_5 \\
+PIPE\_4 & 2 ms & Merge master + monitor --- \texttt{mux} (2ch master sur slots 1-2 + 6ch monitor sur slots 3-8) $\rightarrow$ SAI7 TX (8ch) \\
+PIPE\_5 & 2 ms & Master tap host --- PIPE\_3 output (2ch) $\rightarrow$ host \texttt{Master\_Tap} \\
+PIPE\_6 & 2 ms & Playback host direct --- host \texttt{SAI\_Playback} (8ch) $\rightarrow$ SAI7 TX (via \texttt{mux} slot override ou pipeline alternatif) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textit{\small PIPE\_6 est utilisé en 1a.1 (MVP) comme alternative simple à PIPE\_4, puis remplacé/coexistant en 1a.3.}
+
+\subsection{Schéma détaillé des pipelines (Phase 1a complète)}
+
+\begin{center}
+\begin{tikzpicture}[node distance=3mm and 7mm]
+
+% PIPE 1 - dry capture
+\node[dai] (saiRx) {SAI7 RX\\8ch TDM};
+\node[buf, right=6mm of saiRx] (b1) {buf};
+\node[pcm, right=6mm of b1] (pcmCap) {SAI\_Capture\\cap 8ch};
+
+\node[pipe, fit=(saiRx) (b1) (pcmCap), label={[anchor=north west, font=\sffamily\bfseries\small, inner sep=2pt]north west:PIPE\_1}] {};
+
+% PIPE 2 - low-latency monitor
+\node[buf, below=18mm of saiRx] (b2a) {buf};
+\node[comp, right=4mm of b2a] (eqm) {eq\_iir×8};
+\node[buf, right=4mm of eqm] (b2b) {buf};
+
+% PIPE 3 - master chain
+\node[pcm, below=20mm of b2a] (pcmSrc) {Source\_Play\\play 2ch};
+\node[buf, right=4mm of pcmSrc] (b3a) {buf};
+\node[comp, right=4mm of b3a, fill=cdsp!30] (mbdrc) {multiband\_drc};
+\node[buf, right=4mm of mbdrc] (b3b) {buf};
+\node[comp, right=4mm of b3b, fill=cdsp!30] (vol) {volume};
+\node[buf, right=4mm of vol] (b3c) {buf};
+\node[comp, right=4mm of b3c, fill=cdsp!30] (drclim) {drc (lim)};
+\node[buf, right=4mm of drclim] (b3d) {buf};
+
+% PIPE 5 - master tap
+\node[pcm, below=10mm of b3d] (pcmTap) {Master\_Tap\\cap 2ch};
+
+% PIPE 4 - mux merge
+\node[comp, right=6mm of b3d, fill=cdsp!30, minimum width=18mm, minimum height=20mm] (muxc) {mux\\2ch master\\$\oplus$\\6ch monitor};
+\node[buf, right=4mm of muxc] (b4) {buf};
+\node[dai, right=4mm of b4] (saiTx) {SAI7 TX\\8ch TDM};
+
+% PIPE 6 - direct playback
+\node[pcm, above=6mm of saiTx] (pcmPb) {SAI\_Playback\\play 8ch};
+
+% pipe zones
+\node[pipe, fit=(b2a) (eqm) (b2b), label={[anchor=north west, font=\sffamily\bfseries\small, inner sep=2pt]north west:PIPE\_2}] {};
+\node[pipe, fit=(pcmSrc) (b3a) (mbdrc) (b3b) (vol) (b3c) (drclim) (b3d), label={[anchor=north west, font=\sffamily\bfseries\small, inner sep=2pt]north west:PIPE\_3}] {};
+\node[pipe, fit=(pcmTap), label={[anchor=north, font=\sffamily\bfseries\small, inner sep=1pt]north:PIPE\_5}] {};
+\node[pipe, fit=(muxc) (b4) (saiTx), label={[anchor=north west, font=\sffamily\bfseries\small, inner sep=2pt]north west:PIPE\_4}] {};
+\node[pipe, fit=(pcmPb), label={[anchor=south, font=\sffamily\bfseries\small, inner sep=1pt]south:PIPE\_6}] {};
+
+% Arrows
+\draw[arrmulti] (saiRx) -- (b1);
+\draw[arrmulti] (b1) -- (pcmCap);
+
+% SAI RX shared to PIPE_2
+\draw[arrmulti] (saiRx.south) |- (b2a.west);
+
+\draw[arr] (b2a) -- (eqm);
+\draw[arr] (eqm) -- (b2b);
+\draw[arrmulti] (b2b.east) -| node[above, font=\scriptsize, pos=0.1, align=center]{6ch monitor\\(slots 3-8)} ($(muxc.north west)+(0,2mm)$);
+
+\draw[arr] (pcmSrc) -- (b3a);
+\draw[arr] (b3a) -- (mbdrc);
+\draw[arr] (mbdrc) -- (b3b);
+\draw[arr] (b3b) -- (vol);
+\draw[arr] (vol) -- (b3c);
+\draw[arr] (b3c) -- (drclim);
+\draw[arr] (drclim) -- (b3d);
+\draw[arr] (b3d) -- node[above, font=\scriptsize]{2ch master} (muxc);
+
+\draw[arr] (drclim.south) |- (pcmTap.west);
+
+\draw[arr] (muxc) -- (b4);
+\draw[arr] (b4) -- (saiTx);
+
+\draw[arr] (pcmPb.south) -- node[right, font=\scriptsize]{override} (saiTx.north);
+
+\end{tikzpicture}
+\end{center}
+
+\clearpage
+\subsection{Détail de la chaîne master (PIPE\_3)}
+
+\begin{center}
+\begin{tikzpicture}[node distance=6mm]
+
+\node[comp, fill=cdsp!30, minimum width=30mm] (mbdrc) {\textbf{multiband\_drc}\\3 bandes L-R linked\\bypass: \texttt{process\_enabled=0}\\$\Rightarrow$ \texttt{audio\_stream\_copy}};
+\node[comp, fill=cdsp!30, minimum width=30mm, right=14mm of mbdrc] (vol) {\textbf{volume}\\DVC stereo\\bypass: \texttt{gain=0\,dB}\\$\Rightarrow$ mul par 1.0 fixed-pt};
+\node[comp, fill=cdsp!30, minimum width=30mm, right=14mm of vol] (drc) {\textbf{drc}\\peak limiter \\bypass: \texttt{enabled=0}\\$\Rightarrow$ \texttt{drc\_default\_pass}};
+
+\node[buf, left=6mm of mbdrc] (bi) {buf in\\2ch};
+\node[buf, right=6mm of drc] (bo) {buf out\\2ch};
+
+\draw[arr] (bi) -- (mbdrc);
+\draw[arr] (mbdrc) -- node[above, font=\scriptsize]{2ch 32b} (vol);
+\draw[arr] (vol) -- node[above, font=\scriptsize]{2ch 32b} (drc);
+\draw[arr] (drc) -- (bo);
+
+\node[below=1mm of mbdrc, font=\scriptsize\itshape, align=center]{crossover LR4 4 bandes\\+ DRC par bande (linked L-R)};
+\node[below=1mm of vol, font=\scriptsize\itshape, align=center]{soft-ramp DVC,\\-$\infty$..+6 dB};
+\node[below=1mm of drc, font=\scriptsize\itshape, align=center]{threshold +\\attack/release\\makeup gain};
+
+\end{tikzpicture}
+\end{center}
+
+\textbf{Chaque composant a un flag de bypass bit-perfect} (prouvé par lecture du code):
+\begin{itemize}[leftmargin=*, itemsep=2pt]
+  \item \texttt{multiband\_drc\_default\_pass} dans \texttt{multiband\_drc\_generic.c:14} $=$ \texttt{audio\_stream\_copy(src,0,sink,0,ch*frames)}
+  \item \texttt{drc\_default\_pass} dans \texttt{drc\_generic.c:473} $=$ idem
+  \item \texttt{volume} à 0 dB (gain 0x40000000 en Q2.30) $=$ multiplication par 1.0, pas de loss
+\end{itemize}
+
+Le null-test T4 compare la sortie de \texttt{Master\_Tap} en mode bypass avec le signal envoyé à \texttt{Source\_Play}. Différence attendue : \textbf{0 dBFS (silence parfait)}. Si ce n'est pas le cas, il y a un bug dans le pipeline ou un composant a un side-effect non documenté.
+
+\subsection{Détail du merge \texttt{mux} (PIPE\_4)}
+
+Le composant \texttt{mux} (IPC3-compatible, voir \texttt{src/audio/mux/mux.c}) utilise une lookup table qui mappe des triplets \texttt{(stream\_id, in\_ch, out\_ch)} vers le sink. Config Phase 1a :
+
+\begin{center}
+\begin{tikzpicture}[node distance=3mm]
+
+\node[buf] (m2ch) {2ch master};
+\node[buf, below=10mm of m2ch] (m8ch) {6ch monitor\\(canaux 1-6 issus des mics 3-8 par ex.)};
+
+\coordinate (midleft) at ($(m2ch)!0.5!(m8ch)$);
+\node[comp, right=18mm of midleft, minimum width=22mm, minimum height=18mm, fill=cdsp!30, align=center] (mux) {\textbf{mux}\\lookup table};
+
+\node[dai, right=14mm of mux, minimum height=22mm] (dai) {SAI TX 8ch\\\\slot 0: L master\\slot 1: R master\\slot 2: mon1\\slot 3: mon2\\\ldots\\slot 7: mon6};
+
+\draw[arrmulti] (m2ch) -- (mux);
+\draw[arrmulti] (m8ch) -- (mux);
+\draw[arrmulti] (mux) -- (dai);
+
+\node[right=14mm of dai, font=\sffamily\scriptsize, align=left]{
+$\leftarrow$ TAC\#1 HP out L\\
+$\leftarrow$ TAC\#1 HP out R\\
+$\leftarrow$ TAC\#2 out 1\\
+$\leftarrow$ TAC\#2 out 2\\
+$\leftarrow$ TAC\#3 out 1\\
+$\leftarrow$ TAC\#3 out 2\\
+$\leftarrow$ TAC\#4 out 1\\
+$\leftarrow$ TAC\#4 out 2};
+
+\end{tikzpicture}
+\end{center}
+
+Lookup table (\texttt{sof\_mux\_config}) :
+\begin{center}
+\begin{tabular}{cccl}
+\toprule
+\texttt{stream\_id} & \texttt{in\_ch} & \texttt{out\_ch} & Commentaire \\
+\midrule
+0 & 0 & 0 & Master L $\rightarrow$ slot TDM 0 \\
+0 & 1 & 1 & Master R $\rightarrow$ slot TDM 1 \\
+1 & 0 & 2 & Monitor 1 $\rightarrow$ slot TDM 2 \\
+1 & 1 & 3 & Monitor 2 $\rightarrow$ slot TDM 3 \\
+1 & 2 & 4 & Monitor 3 $\rightarrow$ slot TDM 4 \\
+1 & 3 & 5 & Monitor 4 $\rightarrow$ slot TDM 5 \\
+1 & 4 & 6 & Monitor 5 $\rightarrow$ slot TDM 6 \\
+1 & 5 & 7 & Monitor 6 $\rightarrow$ slot TDM 7 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Stream 0 = sortie master chain (2ch). Stream 1 = 6 premiers canaux du monitor mic (on laisse tomber les 2 derniers mics sur ce merge, ou on garde les 8 via un mapping différent --- décision Phase 1a.3).
+
+\clearpage
+% =======================================================================
+\section{Construction du fichier topology \texttt{sof-imx8mp-tac5212-masterlite.m4}}
+
+\subsection{Principe}
+La topology Phase 1a est décomposée en \textbf{4 pipelines} correspondant aux 4 PCMs. L'avantage : chaque pipeline est indépendant, on peut les activer/désactiver un par un pendant le développement.
+
+\subsection{Mapping pipeline $\leftrightarrow$ PCM}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lllX}
+\toprule
+\textbf{Pipeline SOF} & \textbf{PCM exposé} & \textbf{PCM ID} & \textbf{Rôle} \\
+\midrule
+PIPE 1 + DAI\_ADD capture & \texttt{SAI\_Capture} & 0 (via DUPLEX) & Dry mics 8ch \\
+PIPE 6 + DAI\_ADD playback & \texttt{SAI\_Playback} & 0 (via DUPLEX) & Direct 8ch vers DAC \\
+PIPE 3 (master chain in) & \texttt{Source\_Play} & 1 & Entrée stéréo master \\
+PIPE 5 (master chain out) & \texttt{Master\_Tap} & 2 & Sortie post-master (NPU) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Squelette m4 complet (Phase 1a.1 MVP)}
+
+Fichier : \texttt{sof/tools/topology/topology1/sof-imx8mp-tac5212-masterlite.m4}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+#
+# Topology Phase 1a MVP - 4 PCMs : SAI_Capture, SAI_Playback,
+# Source_Play, Master_Tap + master chain stereo (mbdrc + volume + drc)
+#
+include(`utils.m4')
+include(`dai.m4')
+include(`pipeline.m4')
+include(`sai.m4')
+include(`pcm.m4')
+include(`buffer.m4')
+include(`common/tlv.m4')
+include(`sof/tokens.m4')
+include(`platform/imx/imx8.m4')
+
+# ---------------------------------------------------------------------
+# PIPE 1 : Dry mics capture (8ch) - baseline drc2ms equivalent
+# ---------------------------------------------------------------------
+PIPELINE_PCM_ADD(sof/pipe-passthrough-capture.m4,
+    1, 0, 8, s32le,
+    2000, 0, 0,
+    48000, 48000, 48000)
+
+# ---------------------------------------------------------------------
+# PIPE 6 : Direct playback (8ch) - baseline drc2ms equivalent
+# ---------------------------------------------------------------------
+PIPELINE_PCM_ADD(sof/pipe-passthrough-playback.m4,
+    6, 1, 8, s32le,
+    2000, 0, 0,
+    48000, 48000, 48000)
+
+# ---------------------------------------------------------------------
+# PIPE 3 : Master chain input side (HOST -> mbdrc -> volume -> drc -> buf)
+# Utilise un pipeline CUSTOM local qui instancie la chaîne stéréo
+# ---------------------------------------------------------------------
+PIPELINE_PCM_ADD(sof-imx8mp-tac5212-pipe-masterchain.m4,
+    3, 2, 2, s32le,
+    2000, 0, 0,
+    48000, 48000, 48000)
+
+# ---------------------------------------------------------------------
+# PIPE 5 : Master chain output side (buf -> HOST Master_Tap)
+# Lit depuis le buffer de sortie de PIPE 3 via DAPM link
+# ---------------------------------------------------------------------
+PIPELINE_PCM_ADD(sof-imx8mp-tac5212-pipe-mastertap.m4,
+    5, 3, 2, s32le,
+    2000, 0, 0,
+    48000, 48000, 48000)
+
+# ---------------------------------------------------------------------
+# DAI_ADD : SAI7 RX + TX (identiques a drc2ms.m4 qui fonctionne)
+# ---------------------------------------------------------------------
+DAI_ADD(sof/pipe-dai-capture.m4,
+    1, SAI, 7, tac5212-hifi,
+    PIPELINE_SINK_1, 2, s32le,
+    2000, 0, 0, SCHEDULE_TIME_DOMAIN_DMA)
+
+DAI_ADD(sof/pipe-dai-playback.m4,
+    6, SAI, 7, tac5212-hifi,
+    PIPELINE_SOURCE_6, 2, s32le,
+    2000, 0, 0, SCHEDULE_TIME_DOMAIN_DMA)
+
+# ---------------------------------------------------------------------
+# PCM exports (les noms declares ici apparaissent dans /proc/asound/)
+# ---------------------------------------------------------------------
+# PCM 0 duplex : SAI_Capture (cap) + SAI_Playback (play)
+PCM_DUPLEX_ADD(TAC5212_SAI, 0, PIPELINE_PCM_6, PIPELINE_PCM_1)
+
+# PCM 1 playback only : Source_Play (entree master chain)
+PCM_PLAYBACK_ADD(Source_Play, 1, PIPELINE_PCM_3)
+
+# PCM 2 capture only : Master_Tap (sortie post master chain)
+PCM_CAPTURE_ADD(Master_Tap, 2, PIPELINE_PCM_5)
+
+# ---------------------------------------------------------------------
+# Graph : connecter le buffer sink de PIPE 3 au source de PIPE 5
+# (master chain output -> master tap input)
+# ---------------------------------------------------------------------
+SectionGraph."master-chain-to-tap" {
+    index "0"
+    lines [
+        `dapm(PIPELINE_SINK_5, PIPELINE_SOURCE_3)'
+    ]
+}
+
+# ---------------------------------------------------------------------
+# DAI config SAI7 TDM 8 slots x 32 bits @ 48kHz (identique drc2ms.m4)
+# ---------------------------------------------------------------------
+DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
+    SAI_CONFIG(DSP_A, SAI_CLOCK(mclk, 12288000, codec_mclk_in),
+        SAI_CLOCK(bclk, 12288000, codec_consumer),
+        SAI_CLOCK(fsync, 48000, codec_consumer),
+        SAI_TDM(8, 32, 255, 255),
+        SAI_CONFIG_DATA(SAI, 7, 0)))
+\end{lstlisting}
+
+\subsection{Pipelines m4 custom à créer (Phase 1a.1)}
+
+Deux pipelines custom n'existent pas en upstream SOF et doivent être écrits dans \texttt{meta-local/recipes-kernel/linux/files/} (OU dans \texttt{sof/tools/topology/topology1/sof/} si acceptable). Règle : on ne touche PAS les upstream \texttt{sof/pipe-*.m4}.
+
+\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4}}
+Pipeline d'entrée de la chaîne master. Squelette :
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# Master chain input: host PCM -> mbdrc -> volume -> drc -> buf (shared)
+include(`utils.m4')
+include(`buffer.m4')
+include(`pcm.m4')
+include(`pipeline.m4')
+include(`bytecontrol.m4')
+include(`multiband_drc.m4')  # multiband_drc widget macro
+include(`volume.m4')          # volume widget macro
+include(`drc.m4')             # drc widget macro
+
+# Host PCM playback endpoint
+W_PCM_PLAYBACK(PCM_ID, Source Play, 2, 0, SCHEDULE_CORE)
+
+# Components
+define(MBDRC_priv, concat(`mbdrc_bytes_', PIPELINE_ID))
+define(MBDRC_CTRL, concat(`mbdrc_control_', PIPELINE_ID))
+include(`mbdrc_coef_default.m4')
+C_CONTROLBYTES(MBDRC_CTRL, PIPELINE_ID, ..., MBDRC_priv)
+W_MULTIBAND_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+    LIST(`   ', "MBDRC_CTRL"))
+
+W_VOLUME(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE, 0, 0)
+
+define(DRC_priv, concat(`drc_bytes_', PIPELINE_ID))
+define(DRC_CTRL, concat(`drc_control_', PIPELINE_ID))
+include(`drc_coef_limiter_default.m4')
+C_CONTROLBYTES(DRC_CTRL, PIPELINE_ID, ..., DRC_priv)
+W_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+    LIST(`   ', "DRC_CTRL"))
+
+# Buffers
+W_BUFFER(0, COMP_BUFFER_SIZE(2, ...))  # host buffer
+W_BUFFER(1, COMP_BUFFER_SIZE(2, ...))  # between mbdrc and volume
+W_BUFFER(2, COMP_BUFFER_SIZE(2, ...))  # between volume and drc
+W_BUFFER(3, COMP_BUFFER_SIZE(2, ...))  # OUTPUT (shared with PIPE 5)
+
+# Graph: host -> B0 -> mbdrc -> B1 -> volume -> B2 -> drc -> B3
+P_GRAPH(pipe-master-chain, PIPELINE_ID,
+    LIST(`  ',
+        `dapm(N_BUFFER(0), N_PCMP(PCM_ID))',
+        `dapm(N_MULTIBAND_DRC(0), N_BUFFER(0))',
+        `dapm(N_BUFFER(1), N_MULTIBAND_DRC(0))',
+        `dapm(N_VOLUME(0), N_BUFFER(1))',
+        `dapm(N_BUFFER(2), N_VOLUME(0))',
+        `dapm(N_DRC(0), N_BUFFER(2))',
+        `dapm(N_BUFFER(3), N_DRC(0))'))
+
+# Export: buffer 3 est le SOURCE de la pipeline (visible au graph externe)
+indir(`define', concat(`PIPELINE_SOURCE_', PIPELINE_ID), N_BUFFER(3))
+indir(`define', concat(`PIPELINE_PCM_', PIPELINE_ID), Source Play PCM_ID)
+
+# PCM capabilities
+PCM_CAPABILITIES(Source Play PCM_ID, CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT),
+    PCM_MIN_RATE, PCM_MAX_RATE, 2, 2, 2, 16, 192, 16384, 65536, 65536)
+\end{lstlisting}
+
+\paragraph{\texttt{sof-imx8mp-tac5212-pipe-mastertap.m4}}
+Pipeline de sortie côté Master\_Tap, simple capture depuis un buffer externe :
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# Master tap: buf (shared) -> host PCM Master_Tap
+include(`utils.m4')
+include(`buffer.m4')
+include(`pcm.m4')
+include(`pipeline.m4')
+
+# Host PCM capture endpoint
+W_PCM_CAPTURE(PCM_ID, Master Tap, 0, 2, SCHEDULE_CORE)
+
+# Buffer (sera lie au N_BUFFER(3) de la masterchain via DAPM externe)
+W_BUFFER(0, COMP_BUFFER_SIZE(2, ...))
+
+# Graph: buf -> host
+P_GRAPH(pipe-master-tap, PIPELINE_ID,
+    LIST(`   ',
+        `dapm(N_PCMC(PCM_ID), N_BUFFER(0))'))
+
+# Export: buffer 0 est le SINK de la pipeline (attendu par le graph externe)
+indir(`define', concat(`PIPELINE_SINK_', PIPELINE_ID), N_BUFFER(0))
+indir(`define', concat(`PIPELINE_PCM_', PIPELINE_ID), Master Tap PCM_ID)
+
+PCM_CAPABILITIES(Master Tap PCM_ID, CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT),
+    PCM_MIN_RATE, PCM_MAX_RATE, 2, 2, 2, 16, 192, 16384, 65536, 65536)
+\end{lstlisting}
+
+\subsection{Évolutions 1a.2 et 1a.3}
+
+\paragraph{1a.2 --- Ajout PIPE 2 (monitor direct mic $\rightarrow$ HP)}
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Nouveau pipeline \texttt{sof-imx8mp-tac5212-pipe-monitor.m4} : SAI RX $\rightarrow$ eq\_iir$\times$8 $\rightarrow$ buf partagé avec PIPE 4
+  \item Attach au scheduling de PIPE 1 via \texttt{PIPELINE\_SCHED\_COMP\_1} (pattern kwd)
+  \item Ajouter dans le graph : \texttt{dapm(PIPELINE\_SINK\_2, PIPELINE\_SOURCE\_1)} pour partager SAI RX
+\end{itemize}
+
+\paragraph{1a.3 --- Ajout PIPE 4 (mux merge master + monitor)}
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Nouveau pipeline \texttt{sof-imx8mp-tac5212-pipe-muxout.m4} : 2ch master + 6ch monitor $\rightarrow$ \texttt{mux} $\rightarrow$ SAI TX
+  \item Remplace ou coexiste avec PIPE 6 (SAI\_Playback direct)
+  \item Lookup table \texttt{mux} configurée via bytes control (cf. section 3.6 de ce document)
+\end{itemize}
+
+\clearpage
+% =======================================================================
+\section{Budget latence}
+
+\subsection{Chemins audio et latences attendues}
+
+\begin{center}
+\begin{tabular}{lrl}
+\toprule
+\textbf{Chemin} & \textbf{Latence} & \textbf{Contrainte} \\
+\midrule
+Mic $\rightarrow$ HP direct (PIPE\_2 $\rightarrow$ mux $\rightarrow$ SAI TX) & \textbf{4{,}0~ms} & $\leq$ 4~ms \ding{51} \\
+Mic $\rightarrow$ \texttt{SAI\_Capture} host (PIPE\_1) & 4{,}0~ms & N/A \\
+\texttt{Source\_Play} $\rightarrow$ HP (PIPE\_3 $\rightarrow$ PIPE\_4) & 8{,}0~ms & libre (playback mastering) \\
+\texttt{Source\_Play} $\rightarrow$ \texttt{Master\_Tap} (PIPE\_3 $\rightarrow$ PIPE\_5) & 8{,}0~ms & tolérable pour NPU (update 10 Hz) \\
+Mic $\rightarrow$ \texttt{Master\_Tap} (si matrice Phase 1b) & 6--8~ms & tolérable \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Décomposition mic\,$\rightarrow$\,HP direct (objectif 4 ms)}
+
+\begin{center}
+\begin{tikzpicture}[node distance=2mm]
+\node[draw, fill=cdsp!15, minimum width=20mm, minimum height=8mm, font=\sffamily\footnotesize, align=center] (s1) {TAC5212 ADC};
+\node[draw, fill=chw!15, right=1mm of s1, minimum width=18mm, minimum height=8mm, font=\sffamily\footnotesize, align=center] (s2) {DMA SAI RX};
+\node[draw, fill=cdsp!15, right=1mm of s2, minimum width=28mm, minimum height=8mm, font=\sffamily\footnotesize, align=center] (s3) {Pipeline 2~ms\\(eq\_iir + mux)};
+\node[draw, fill=chw!15, right=1mm of s3, minimum width=18mm, minimum height=8mm, font=\sffamily\footnotesize, align=center] (s4) {DMA SAI TX};
+\node[draw, fill=cdsp!15, right=1mm of s4, minimum width=20mm, minimum height=8mm, font=\sffamily\footnotesize, align=center] (s5) {TAC5212 DAC};
+
+\node[below=1mm of s1, font=\sffamily\scriptsize] {$<$100~\textmu s};
+\node[below=1mm of s2, font=\sffamily\scriptsize] {1 burst 64 smp};
+\node[below=1mm of s3, font=\sffamily\scriptsize] {1 cycle $=$ 2~ms};
+\node[below=1mm of s4, font=\sffamily\scriptsize] {1 burst 64 smp};
+\node[below=1mm of s5, font=\sffamily\scriptsize] {$<$100~\textmu s};
+
+\node[below=8mm of s3, font=\sffamily] {\textbf{Total $\approx$ 4~ms} (2 cycles DSP period de 2~ms)};
+\end{tikzpicture}
+\end{center}
+
+\textbf{Marge de manœuvre} : aucune. Si on ajoute un composant dans PIPE\_2 (ex. compresseur per-ch), on dépasse 4~ms. Le fine-EQ par canal (3 biquads IIR) est acceptable car négligeable en temps de calcul ($\ll$ 100~\textmu s par canal).
+
+Si T8 échoue (mic$\rightarrow$HP $>$ 4~ms mesuré), mitigation :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item passer la DSP period à 1~ms $\rightarrow$ 2~ms total, mais charge CPU doublée
+  \item retirer eq\_iir de PIPE\_2 et le faire uniquement dans PIPE\_1 (capture) $\rightarrow$ perte d'EQ sur monitoring
+  \item laisser TAC5212 faire toute l'EQ fine (3 biquads par canal en hard) et supprimer eq\_iir du DSP
+\end{itemize}
+
+\clearpage
+% =======================================================================
+\section{Tests T1--T9 --- commandes complètes}
+
+Scripts et binaires stockés dans \texttt{/root/tests/} sur la board (convention projet). WAVs de référence générés avec \texttt{sox} sur la board.
+
+\subsection{T1 --- Capture dry 8ch}
+\textbf{But} : vérifier que \texttt{SAI\_Capture} expose bien les 8 canaux mics bruts, sans glitch.
+\begin{lstlisting}[language=bash]
+# Génère un signal sur IN1 (ch1) via phone/PC branché
+arecord -D plughw:softac5212tdm,SAI_Capture -c 8 -r 48000 -f S32_LE \
+        -d 5 /root/tests/out/dry8.wav
+sox /root/tests/out/dry8.wav -n stat   # RMS / peak par canal
+\end{lstlisting}
+\textbf{Pass si} : ch1 a du signal ($>$ -40~dBFS), ch2--8 au noise floor ($<$ -100~dBFS), 0 xrun dans \texttt{dmesg}.
+
+\subsection{T2 --- Playback master}
+\textbf{But} : jouer un tone stéréo à travers la chaîne master.
+\begin{lstlisting}[language=bash]
+sox -n -r 48000 -c 2 -b 32 /root/tests/in/tone440.wav synth 3 sine 440 \
+    vol -10dB
+aplay -D plughw:softac5212tdm,Source_Play /root/tests/in/tone440.wav
+\end{lstlisting}
+\textbf{Pass si} : tone audible sur TAC\#1 HP OUT, pas de clic, pas d'xrun.
+
+\subsection{T3 --- Master tap $=$ master chain output}
+\textbf{But} : vérifier que \texttt{Master\_Tap} capte bien le signal processé.
+\begin{lstlisting}[language=bash]
+arecord -D plughw:softac5212tdm,Master_Tap -c 2 -r 48000 -f S32_LE \
+        -d 5 /root/tests/out/tap.wav &
+sleep 1
+aplay -D plughw:softac5212tdm,Source_Play /root/tests/in/tone440.wav
+wait
+sox /root/tests/out/tap.wav -n stat
+\end{lstlisting}
+\textbf{Pass si} : tap.wav contient le tone 440 Hz à niveau cohérent avec la chaîne (vol 0 dB + mbdrc \& drc configurés).
+
+\subsection{T4 --- Null test bypass}
+\textbf{But} : prouver que la chaîne master en bypass est bit-perfect.
+\begin{lstlisting}[language=bash]
+# Activer bypass
+amixer -c softac5212tdm cset name='Master MBDRC Bypass' on
+amixer -c softac5212tdm cset name='Master Volume' 0dB
+amixer -c softac5212tdm cset name='Master Limiter Bypass' on
+
+# Jouer et capturer
+arecord -D plughw:softac5212tdm,Master_Tap -c 2 -r 48000 -f S32_LE \
+        -d 5 /root/tests/out/bypass.wav &
+sleep 1
+aplay -D plughw:softac5212tdm,Source_Play /root/tests/in/tone440.wav
+wait
+
+# Null test : somme de tone440 + bypass inversé
+sox -m -v 1 /root/tests/in/tone440.wav -v -1 /root/tests/out/bypass.wav \
+    /root/tests/out/null.wav
+sox /root/tests/out/null.wav -n stat 2>&1 | grep 'RMS.*amplitude'
+\end{lstlisting}
+\textbf{Pass si} : RMS de null.wav $<$ -140~dBFS (bruit de quantification numérique). \textbf{Fail} si $>$ -80~dBFS.
+
+\subsection{T5 --- Duplex stress 30 min}
+\textbf{But} : stabilité sur long cours.
+\begin{lstlisting}[language=bash]
+# Fichier de 30 min stéréo
+sox -n -r 48000 -c 2 -b 32 /root/tests/in/stress.wav synth 1800 pinknoise vol -20dB
+arecord -D plughw:softac5212tdm,SAI_Capture -c 8 -r 48000 -f S32_LE \
+        -d 1800 /root/tests/out/stress_cap.wav &
+arecord -D plughw:softac5212tdm,Master_Tap -c 2 -r 48000 -f S32_LE \
+        -d 1800 /root/tests/out/stress_tap.wav &
+aplay -D plughw:softac5212tdm,Source_Play /root/tests/in/stress.wav &
+wait
+dmesg | grep -i xrun | wc -l   # doit retourner 0
+\end{lstlisting}
+\textbf{Pass si} : 0 xrun sur 30 min, \texttt{stat} des 3 fichiers cohérent.
+
+\subsection{T6 --- ALSA controls live}
+\textbf{But} : modifier volume pendant playback sans glitch.
+\begin{lstlisting}[language=bash]
+aplay -D plughw:softac5212tdm,Source_Play /root/tests/in/tone440.wav &
+sleep 1
+amixer -c softac5212tdm cset name='Master Volume' -20dB
+sleep 1
+amixer -c softac5212tdm cset name='Master Volume' 0dB
+wait
+\end{lstlisting}
+\textbf{Pass si} : volume chute de 20 dB à l'oreille, remonte, pas de clic.
+
+\subsection{T7 --- Bytes control mbdrc}
+\textbf{But} : pousser une config \texttt{multiband\_drc} différente.
+\begin{lstlisting}[language=bash]
+# Preset "heavy compression" préparé
+sof-ctl -D softac5212tdm -n 'Master MBDRC Config' -b -s /root/tests/presets/mbdrc_heavy.bin
+
+arecord -D plughw:softac5212tdm,Master_Tap -c 2 -r 48000 -f S32_LE \
+        -d 5 /root/tests/out/tap_heavy.wav &
+sleep 1
+aplay -D plughw:softac5212tdm,Source_Play /root/tests/in/tone440.wav
+wait
+
+# Comparer dynamique
+sox /root/tests/out/tap_heavy.wav -n stat | grep 'Maximum'
+\end{lstlisting}
+\textbf{Pass si} : peak du WAV "heavy" $<$ peak "default" (compression plus forte).
+
+\subsection{T8 --- Latence mic$\rightarrow$HP $\leq$ 4 ms}
+\textbf{But} : mesurer physiquement la latence.
+\begin{lstlisting}[language=bash]
+# Cable loopback : OUT1 (TAC#1 HP) --> IN2 (TAC#1 mic 2)
+# Envoie un click (impulsion) via Source_Play, capture via SAI_Capture ch2
+
+sox -n -r 48000 -c 2 -b 32 /root/tests/in/click.wav synth 0.001 square 1000 \
+    vol -6dB pad 1 0
+
+arecord -D plughw:softac5212tdm,SAI_Capture -c 8 -r 48000 -f S32_LE \
+        -d 3 /root/tests/out/loop.wav &
+sleep 0.1
+aplay -D plychw:softac5212tdm,Source_Play /root/tests/in/click.wav
+wait
+
+# Calcule le delay par cross-correlation
+python3 /root/tests/measure_latency.py /root/tests/in/click.wav \
+        /root/tests/out/loop.wav --channel 1
+\end{lstlisting}
+\textbf{Pass si} : script Python reporte delay $\leq$ 4{,}2~ms (marge 5\%).
+
+\subsection{T9 --- Charge CPU DSP}
+\textbf{But} : mesurer l'occupation CPU HiFi4 en fonctionnement nominal.
+\begin{lstlisting}[language=bash]
+# Avec SOF-logger, lire les traces contenant CPC (cycles per chunk)
+sof-logger -f /lib/firmware/imx/sof/sof-imx8m.ldc \
+           -o /tmp/sof.log -r 5 &
+LOGPID=$!
+
+# Charger le DSP : aplay + arecord + arecord master
+aplay -D plughw:softac5212tdm,Source_Play /root/tests/in/stress.wav &
+arecord -D plughw:softac5212tdm,SAI_Capture -c 8 -r 48000 -f S32_LE \
+        -d 10 /dev/null &
+arecord -D plughw:softac5212tdm,Master_Tap -c 2 -r 48000 -f S32_LE \
+        -d 10 /dev/null &
+wait
+
+kill $LOGPID
+grep CPC /tmp/sof.log | awk '{print $NF}' | sort -u | tail
+\end{lstlisting}
+\textbf{Pass si} : utilisation rapportée $<$ 30\% de la capacité HiFi4.
+
+\subsection{Script unique \texttt{test-phase1a.sh}}
+Un script orchestre T1--T9 séquentiellement, produit un rapport Markdown. Exit 0 si tous passent.
+
+\clearpage
+% =======================================================================
+\section{Livrables --- fichiers et leur localisation}
+
+\subsection{Arborescence des fichiers Phase 1a}
+
+\begin{lstlisting}[language=bash]
+/home/michael/yocto-nxp-debix/
++-- sof/                                    # sous-module SOF, branche feature
+|   +-- app/boards/imx8mp_evk_mimx8ml8_adsp.conf   # override Kconfig si besoin
+|   +-- tools/topology/topology1/
+|       +-- sof-imx8mp-tac5212-masterlite.m4       # LA topology Phase 1a
+|
++-- meta-local/
+|   +-- recipes-kernel/linux/files/
+|   |   +-- tac5212.c                       # driver codec existant
+|   |   +-- tac5212-register-map.h          # map des registres (Phase 1a)
+|   +-- recipes-support/
+|   |   +-- tac5212-init/
+|   |   |   +-- tac5212-init_1.0.bb
+|   |   |   +-- files/
+|   |   |       +-- tac5212-init.c          # service boot I2C
+|   |   |       +-- tac5212-init.service    # systemd unit
+|   |   |       +-- default.conf            # preset biquad+AGC+DVC
+|   |   +-- sof-presets/
+|   |   |   +-- sof-presets_1.0.bb
+|   |   |   +-- files/
+|   |   |       +-- mbdrc_default.bin       # preset mbdrc par defaut
+|   |   |       +-- mbdrc_heavy.bin         # preset mbdrc compression forte
+|   |   |       +-- drc_limiter_default.bin # preset final limiter
+|   |   +-- phase1a-tests/
+|   |       +-- phase1a-tests_1.0.bb
+|   |       +-- files/
+|   |           +-- test-phase1a.sh         # orchestrateur T1-T9
+|   |           +-- measure_latency.py      # calcul delay par xcorr
+|   |           +-- t1_capture_dry.sh       # T1 standalone
+|   |           +-- t2_playback_master.sh
+|   |           +-- ...
+|   +-- recipes-core/images/
+|       +-- imx-image-full.bbappend         # IMAGE_INSTALL += new packages
+|
++-- PHASE_1A_SPEC.pdf                       # CE DOCUMENT
++-- PHASE_1A_SPEC.tex
++-- MASTERING_PLATFORM_PLAN.md              # plan vivant
++-- DSP_ARCHITECTURES.pdf                   # comparatif A/B/C
+\end{lstlisting}
+
+\subsection{Fichiers SOF à créer / modifier}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Fichier} & \textbf{Action} \\
+\midrule
+\texttt{sof/tools/topology/topology1/sof-imx8mp-tac5212-masterlite.m4} & CRÉER (nouvelle topology Phase 1a) \\
+\texttt{sof/app/boards/imx8mp\_evk\_mimx8ml8\_adsp.conf} & MODIFIER (ajouter \texttt{CONFIG\_COMP\_MULTIBAND\_DRC=y} et \texttt{CONFIG\_COMP\_MUX=y} si pas déjà présent ; laisser IPC3 par défaut) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Rappel règle projet} : ne JAMAIS modifier les fichiers upstream \texttt{sof/tools/topology/topology1/sof/*.m4}. Si on a besoin d'un pipeline custom inconnu en amont, il vit dans \texttt{meta-local/recipes-kernel/linux/files/} sous un nom unique.
+
+\subsection{Fichiers Yocto à créer}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Fichier} & \textbf{Rôle} \\
+\midrule
+\texttt{meta-local/recipes-support/tac5212-init/tac5212-init\_1.0.bb} & Recette paquet service I\textsuperscript{2}C \\
+\texttt{meta-local/recipes-support/tac5212-init/files/tac5212-init.c} & Service C --- écrit les biquads/AGC/DVC au boot \\
+\texttt{meta-local/recipes-support/tac5212-init/files/tac5212-init.service} & systemd unit (Type=oneshot, avant sof-firmware) \\
+\texttt{meta-local/recipes-support/tac5212-init/files/default.conf} & Preset biquad/AGC/DVC au format texte \\
+\texttt{meta-local/recipes-support/sof-presets/files/mbdrc\_default.bin} & Bytes blob mbdrc (format SOF IPC3) \\
+\texttt{meta-local/recipes-support/sof-presets/files/mbdrc\_heavy.bin} & Preset compression forte (pour T7) \\
+\texttt{meta-local/recipes-support/sof-presets/files/drc\_limiter\_default.bin} & Preset limiter -0{,}1 dBFS ceiling \\
+\texttt{meta-local/recipes-support/phase1a-tests/files/test-phase1a.sh} & Orchestrateur de tests \\
+\texttt{meta-local/recipes-support/phase1a-tests/files/measure\_latency.py} & Script Python pour T8 (cross-correlation) \\
+\texttt{meta-local/recipes-core/images/imx-image-full.bbappend} & \texttt{IMAGE\_INSTALL += tac5212-init sof-presets phase1a-tests} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\clearpage
+% =======================================================================
+\section{Commandes de build et déploiement}
+
+\subsection{Build topology uniquement (cas courant Phase 1a)}
+
+Quand on modifie juste le \texttt{.m4} de la topology, on ne reconstruit pas le firmware SOF complet --- seulement le \texttt{.tplg}.
+
+\begin{lstlisting}[language=bash]
+cd /home/michael/yocto-nxp-debix/sof/tools/topology/topology1
+
+# 1. Preprocess m4
+m4 -I . -I m4 -I common -I platform/common -I sof \
+    sof-imx8mp-tac5212-masterlite.m4 \
+    > /tmp/sof-imx8mp-tac5212-masterlite.conf
+
+# 2. Compile conf -> tplg
+alsatplg -c /tmp/sof-imx8mp-tac5212-masterlite.conf \
+         -o /tmp/sof-imx8mp-tac5212-masterlite.tplg
+
+# 3. Deploy (le kernel charge /lib/firmware/imx/sof-tplg/sof-imx8mp-tac5212.tplg)
+scp /tmp/sof-imx8mp-tac5212-masterlite.tplg \
+    root@192.168.0.9:/lib/firmware/imx/sof-tplg/sof-imx8mp-tac5212.tplg
+
+# 4. Reboot (chargement tplg se fait au probe driver SOF)
+ssh root@192.168.0.9 systemctl reboot
+
+# 5. Verifier
+ssh root@192.168.0.9 "dmesg | grep -i 'sof\|tplg' | tail -20"
+\end{lstlisting}
+
+\textbf{Piège sed} : si on crée une variante par sed \texttt{'s/8000/4000/g'}, attention, le pattern matche aussi \texttt{48000} et \texttt{12288000}. Toujours utiliser \texttt{Edit} avec un pattern précis.
+
+\subsection{Build firmware SOF complet (cas où on modifie Kconfig ou sources)}
+
+Si on ajoute \texttt{CONFIG\_COMP\_MULTIBAND\_DRC} dans le board config, il faut rebuilder le firmware \texttt{.ri} :
+
+\begin{lstlisting}[language=bash]
+cd /home/michael/yocto-nxp-debix
+
+# 1. Build firmware (Zephyr west)
+west build -d /tmp/build-imx8m -b imx8mp_evk/mimx8ml8/adsp sof/app
+
+# 2. Sign avec rimage
+/tmp/build-rimage/rimage -o /tmp/build-imx8m/zephyr/zephyr.ri -e \
+    -k sof/keys/otc_private_key.pem \
+    -c sof/tools/rimage/config/imx8m.toml \
+    /tmp/build-imx8m/zephyr/zephyr.elf
+
+# 3. CRITICAL: concat xman + ri (sinon IPC 108/20 error)
+cat /tmp/build-imx8m/zephyr/zephyr.ri.xman \
+    /tmp/build-imx8m/zephyr/zephyr.ri \
+    > /tmp/build-imx8m/zephyr/zephyr.ri.full
+
+# 4. Deploy (fichier cible: sof-imx8m.ri, SANS 'p')
+scp /tmp/build-imx8m/zephyr/zephyr.ri.full \
+    root@192.168.0.9:/lib/firmware/imx/sof/sof-imx8m.ri
+
+# 5. Reboot
+ssh root@192.168.0.9 systemctl reboot
+
+# 6. Verifier hash change
+ssh root@192.168.0.9 "dmesg | grep 'Firmware info'"
+\end{lstlisting}
+
+\subsection{Build complet Yocto (intégration dans l'image)}
+
+Pour les paquets Yocto (service \texttt{tac5212-init}, presets, tests) :
+
+\begin{lstlisting}[language=bash]
+cd /home/michael/yocto-nxp-debix
+
+# Initialiser environnement (une fois par session)
+EULA=1 DISTRO=fsl-imx-xwayland MACHINE=imx8mpevk \
+    source imx-setup-release.sh -b Model_AB_Infinity
+
+# Rebuild d'un paquet uniquement
+bitbake tac5212-init
+bitbake phase1a-tests
+bitbake sof-presets
+
+# Full image (pour deploy complet SD)
+bitbake imx-image-full
+
+# Rebuild complet si recette cassée
+bitbake -c cleansstate <recipe>   # JAMAIS cleanall (cf. memoire projet)
+bitbake <recipe>
+\end{lstlisting}
+
+\subsection{Deploy paquet seul sur la board}
+
+\begin{lstlisting}[language=bash]
+# Trouver le .deb produit
+find Model_AB_Infinity/tmp/deploy/deb/imx8mpevk -name 'tac5212-init_*.deb'
+
+# scp + install sur la board
+scp Model_AB_Infinity/tmp/deploy/deb/imx8mpevk/tac5212-init_*.deb \
+    root@192.168.0.9:/tmp/
+ssh root@192.168.0.9 "dpkg -i /tmp/tac5212-init_*.deb && \
+                      systemctl daemon-reload && \
+                      systemctl restart tac5212-init"
+\end{lstlisting}
+
+\subsection{Deploy full image (rare, SD card)}
+
+\begin{lstlisting}[language=bash]
+# Flash SD
+dd if=Model_AB_Infinity/tmp/deploy/images/imx8mpevk/imx-image-full-imx8mpevk.wic \
+   of=/dev/sdX bs=4M status=progress conv=fsync
+sync
+\end{lstlisting}
+
+\clearpage
+% =======================================================================
+\section{Protocole d'exécution Phase 1a}
+
+\subsection{Règles durables}
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item \textbf{Aucune modification de source SOF sans \texttt{critic\_analyze} préalable.}
+  \item \textbf{Un changement = un commit = une validation utilisateur.}
+  \item \textbf{Backup systématique} avant toute édition d'un fichier existant (\texttt{cp fichier.m4 /tmp/fichier.m4.bak}).
+  \item \textbf{Jamais toucher \texttt{sof/tools/topology/topology1/sof/*.m4}} (fichiers upstream SOF). Nos pipelines custom vont dans \texttt{meta-local/} ou dans un fichier topology unique \texttt{sof-imx8mp-tac5212-masterlite.m4}.
+  \item \textbf{Tests stockés dans \texttt{/root/tests/}} sur la board, \textbf{jamais dans \texttt{/tmp/}} (mémoire projet).
+\end{enumerate}
+
+\subsection{Séquence 1a.1 --- MVP}
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item Design \texttt{sof-imx8mp-tac5212-masterlite.m4} minimal (PIPE\_1 + PIPE\_3 + PIPE\_5 + PIPE\_6).
+  \item \texttt{critic\_analyze} sur le diff topology.
+  \item Build topology (m4 + alsatplg), deploy, reboot.
+  \item Exécuter T1 (capture dry).
+  \item Exécuter T2 (playback master avec preset par défaut).
+  \item Exécuter T3 (master tap reçoit bien le signal).
+  \item Exécuter T4 (null test bypass).
+  \item Exécuter T6 (alsactrl live).
+  \item Exécuter T7 (bytes control mbdrc).
+  \item Validation utilisateur $\rightarrow$ commit MVP.
+\end{enumerate}
+
+\subsection{Séquence 1a.2 --- Monitor direct}
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item Ajouter PIPE\_2 (SAI RX shared $\rightarrow$ eq\_iir$\times$8 $\rightarrow$ buf partagé avec PIPE\_4).
+  \item Pattern DAPM cross-pipeline (\texttt{PIPELINE\_SCHED\_COMP\_1}) comme dans kwd.
+  \item \texttt{critic\_analyze} sur le diff.
+  \item Build + deploy + reboot.
+  \item Exécuter T8 (latence mic$\rightarrow$HP).
+  \item Validation utilisateur.
+\end{enumerate}
+
+\subsection{Séquence 1a.3 --- Merge mux}
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item Remplacer PIPE\_6 direct-playback par PIPE\_4 avec \texttt{mux} (2ch master + 6ch monitor).
+  \item Préparer la lookup table \texttt{mux}.
+  \item \texttt{critic\_analyze}.
+  \item Build + deploy + reboot.
+  \item Exécuter T5 (stress 30 min) + T9 (CPU).
+  \item Validation utilisateur $\rightarrow$ Phase 1a OK, passage à Phase 1b.
+\end{enumerate}
+
+\subsection{Critères de sortie Phase 1a}
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item T1--T9 tous passent ;
+  \item \texttt{test-phase1a.sh} exit 0 ;
+  \item 0 xrun sur un run de 30 min ;
+  \item Latence mic$\rightarrow$HP $\leq$ 4 ms mesurée (T8) ;
+  \item CPU DSP $<$ 30\% (T9) ;
+  \item Documentation à jour : \texttt{MASTERING\_PLATFORM\_PLAN.md} marque Phase 1a comme \emph{done}.
+\end{itemize}
+
+\clearpage
+% =======================================================================
+\section{Vue courte des phases suivantes}
+
+\subsection{Phase 1b --- Matrice complète}
+Remplacer le routing fixe Phase 1a par une vraie matrice N\,$\times$\,M via composants \texttt{mixer} parallèles (un par bus de sortie) $+$ gains configurables via controls ALSA.
+
+Pré-requis : valider Phase 1a stable + Phase 2 USB opérationnelle (car la matrice a plus de sens quand il y a plus d'inputs).
+
+\subsection{Phase 2 --- USB gadgets}
+2 gadgets UAC2 via \texttt{configfs} sur les deux contrôleurs USB du i.MX8MP :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item USB1 : 8in/8out pour DAW ASIO
+  \item USB2 : 2in/2out pour iOS
+\end{itemize}
+Bridges ALSA entre les gadgets et le DSP via \texttt{alsaloop} (ou bridge C custom si latence serrée).
+
+\subsection{Phase 3 --- Effets send (A53 JACK)}
+Serveur JACK2 avec 4 plugins LV2 (reverb, chorus, flanger, delay). Bridges ALSA $\leftrightarrow$ DSP via 4 PCMs capture + 4 PCMs playback supplémentaires.
+
+Sélection des plugins à faire parmi :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Reverb : \texttt{dragonfly-reverb}, \texttt{calf-reverb}
+  \item Chorus : \texttt{calf-multichorus}
+  \item Flanger : \texttt{calf-flanger}
+  \item Delay : \texttt{x42-delay}, \texttt{calf-delay}
+\end{itemize}
+
+\subsection{Phase 4 --- NPU mastering}
+Training d'un modèle TFLite (from scratch) pour le mastering assisté :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Input : FFT du master (2048 pts, 20 ms)
+  \item Output : gains EQ 8-10 bandes + seuils mbdrc par bande + amount exciter
+  \item Update rate : 10 Hz
+\end{itemize}
+
+\subsection{Phase 5 --- Harmonizer + polish}
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Harmonizer pitch-shift : plugin LV2 \texttt{rubberband} chaîné en A53
+  \item Exciter : plugin LV2 ou module SOF custom (à décider sur CPU budget)
+  \item Flutter UI avancée : presets, scenes, métering en temps réel
+\end{itemize}
+
+\clearpage
+% =======================================================================
+\section{Annexe --- composants SOF mobilisés}
+
+\subsection{Liste et rôles}
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Composant} & \textbf{Kconfig} & \textbf{Rôle Phase 1a} \\
+\midrule
+\texttt{dai-copier} & natif & Interface SAI7 RX/TX $\leftrightarrow$ buffers DSP \\
+\texttt{host-copier} & natif & Interface HOST PCM $\leftrightarrow$ buffers DSP \\
+\texttt{eq\_iir} & \texttt{COMP\_IIR} & 3 biquads IIR/ch (fine EQ, flat par défaut) \\
+\texttt{mux} & \texttt{COMP\_MUX} & Merge 2ch master + 6ch monitor $\rightarrow$ 8ch SAI TX \\
+\texttt{multiband\_drc} & \texttt{COMP\_MULTIBAND\_DRC} & Compresseur multibande stéréo (bypass bit-perfect dispo) \\
+\texttt{volume} & natif & Digital Volume Control master (0 dB bit-perfect) \\
+\texttt{drc} & \texttt{COMP\_DRC} & Final limiter (bypass bit-perfect dispo) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Bypass bit-perfect --- preuves code}
+\begin{center}
+\begin{tabularx}{\textwidth}{lll}
+\toprule
+\textbf{Composant} & \textbf{Fichier} & \textbf{Fonction bypass} \\
+\midrule
+\texttt{multiband\_drc} & \texttt{multiband\_drc\_generic.c:14} & \texttt{multiband\_drc\_default\_pass} ($\equiv$ \texttt{audio\_stream\_copy}) \\
+\texttt{drc} & \texttt{drc\_generic.c:473} & \texttt{drc\_default\_pass} ($\equiv$ \texttt{audio\_stream\_copy}) \\
+\texttt{volume} & \texttt{volume.c} & gain Q2.30 $=$ \texttt{0x40000000} $=$ 1{,}0 $\Rightarrow$ multiplication par 1 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{ALSA controls exposés Phase 1a}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Nom} & \textbf{Type} & \textbf{Plage / effet} \\
+\midrule
+\texttt{SAI EQ Ch<N> Coeffs} & bytes blob & 3 biquads IIR (coefficients normalisés) \\
+\texttt{Master Volume} & integer TLV dB & -$\infty$..+6 dB, 0.5 dB step \\
+\texttt{Master MBDRC Config} & bytes blob & Structure \texttt{sof\_multiband\_drc\_config} \\
+\texttt{Master MBDRC Bypass} & switch 0/1 & Active \texttt{multiband\_drc\_default\_pass} \\
+\texttt{Master Limiter Config} & bytes blob & Structure \texttt{sof\_drc\_config} \\
+\texttt{Master Limiter Bypass} & switch 0/1 & Active \texttt{drc\_default\_pass} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Références datasheet TAC5212}
+Voir \texttt{tac5212.pdf} dans la racine projet. Sections clés :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item §7.3.9.1 ADC signal chain (biquads, AGC, HPF, gain cal)
+  \item §7.3.9.2 DAC signal chain (biquads, DRC DAC, volume, interpolation)
+  \item §8.2 Programmable coefficient registers
+\end{itemize}
+
+\vfill
+\begin{center}
+\textit{Document de référence Phase 1a. Tout écart à cette spec doit être tracé dans \texttt{MASTERING\_PLATFORM\_PLAN.md} et re-soumis à \texttt{critic\_analyze}.}
+\end{center}
+
+\end{document}
