@@ -66,14 +66,37 @@
 }
 
 \title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
-  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.4}\\[4pt]
+  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.5}\\[4pt]
   \large Structure DSP, tests, livrables et procédure d'exécution}
 \author{Document de référence technique}
-\date{2026-04-21 --- rev V2.4}
+\date{2026-04-21 --- rev V2.5}
 
 \begin{document}
 \maketitle
 \tableofcontents
+\clearpage
+
+% =======================================================================
+\section*{Changelog V2.4 $\rightarrow$ V2.5}
+\addcontentsline{toc}{section}{Changelog V2.4 $\rightarrow$ V2.5}
+
+V2.4 corrigeait l'erreur kernel \texttt{-22} via \texttt{W\_MUXDEMUX} cross-pipeline (pattern architecturalement confirmé par 5 workers sur 5). Mais l'investigation ffae75ee a trouvé \textbf{3 bugs d'exécution} dans le squelette V2.4 :
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Ref} & \textbf{Sévérité} & \textbf{Correction V2.5} \\
+\midrule
+K6 & Critique & \texttt{demux\_route\_default.m4} n'existe pas dans le fork. V2.5 crée le fichier blob dans \texttt{meta-local/sof-presets/} (\texttt{sof\_mux\_config} minimal : 1 stream, route 2ch identité). \\
+K7 & Critique & Double sink même pipeline : V2.4 avait B4 ET B5 sinks du mux dans PIPE 3. \texttt{demux\_process} (\texttt{mux.c:248-260}) démultiplexe par \texttt{pipeline\_id} ; 2 buffers même pipeline écrasent \texttt{sinks\_stream[]}. V2.5 supprime B4 --- le mux n'a plus qu'1 sink cross-pipeline (B5 de PIPE 5). \\
+K8 & Critique & Buffers terminaux sans consommateur : B4 same-pipeline sans downstream → back-pressure fatale (\texttt{demux\_trigger} n'active \texttt{overrun\_permitted=true} QUE pour sinks cross-pipeline, \texttt{mux.c:453}). V2.5 : seul B5 cross-pipeline subsiste, overrun OK. \\
+Scope & Info & \textbf{Implication fonctionnelle} : en Phase 1a.1 MVP, le signal master-processé sort uniquement vers \texttt{Master\_Tap} (pour NPU). Le monitor master$\rightarrow$HP arrive en Phase 1a.3 (mux merge avec SAI\_Playback 8ch). Cohérent avec l'incrément initial : 1a.1 = master chain + tap, 1a.3 = merge vers SAI. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Les 3 fixes K1/K2/K3 de V2.4 restent valides (pattern mux demux cross-pipeline architecturalement correct). V2.5 est purement une correction de squelette m4.
+
 \clearpage
 
 % =======================================================================
@@ -702,13 +725,15 @@ DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
 
 Deux pipelines custom n'existent pas en upstream SOF et doivent être écrits dans \texttt{meta-local/recipes-kernel/linux/files/} (OU dans \texttt{sof/tools/topology/topology1/sof/} si acceptable). Règle : on ne touche PAS les upstream \texttt{sof/pipe-*.m4}.
 
-\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2.4}
-Pipeline d'entrée de la chaîne master, calqué sur \texttt{pipe-volume-playback.m4} (W\_PGA), \texttt{pipe-multiband-drc-playback.m4} (mbdrc), et \texttt{pipe-amp-ref-capture.m4} (W\_MUXDEMUX comme tap cross-pipeline). Valeurs : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz). \textbf{[V2.4]} Ajout du mux demux après le DRC pour exporter le signal vers PIPE 5 Master\_Tap via un lien DAPM widget-to-buffer (autorisé par IPC3).
+\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2.5}
+Pipeline d'entrée de la chaîne master. Valeurs : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz). \textbf{[V2.5]} MUXDEMUX a 1 seul sink cross-pipeline (via export \texttt{PIPELINE\_DEMUX\_3}) --- pas de buffer local B4 (supprimé pour éviter K7/K8). Le monitor master$\rightarrow$HP local est reporté à Phase 1a.3.
 
 \begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
-# Master chain input V2.4 : host PCM -> mbdrc -> pga -> drc -> muxdemux -> (2 sinks)
+# Master chain input V2.5 : host PCM -> mbdrc -> pga -> drc -> muxdemux -> (cross-pipe B5)
 # Patterns: pipe-volume-playback.m4 (PGA) + pipe-multiband-drc-playback.m4 (mbdrc)
-#        + pipe-amp-ref-capture.m4 (muxdemux cross-pipeline tap)
+#        + pipe-amp-ref-capture.m4 (muxdemux, 1 sink cross-pipeline uniquement)
+# [V2.5] Suppression B4 local pour eviter K7 (double sink same pipeline)
+#        et K8 (buffer sans consommateur -> back-pressure).
 # PIPELINE_CHANNELS = 2, PIPELINE_FORMAT = s32le, SCHEDULE_PERIOD = 2000us
 include(`utils.m4')
 include(`buffer.m4')
@@ -822,17 +847,12 @@ W_BUFFER(3, COMP_BUFFER_SIZE(2,
     COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
     COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
     PLATFORM_COMP_MEM_CAP)
-# [V2.4] B4 = demux out monitor, B5 = demux out tap (vers PIPE 5)
-W_BUFFER(4, COMP_BUFFER_SIZE(2,
-    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
-    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
-    PLATFORM_COMP_MEM_CAP)
-W_BUFFER(5, COMP_BUFFER_SIZE(2,
-    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
-    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
-    PLATFORM_COMP_MEM_CAP)
+# [V2.5] Pas de buffer sink local au demux (suppression B4/B5 local).
+# L'unique sink du demux est B0 de PIPE 5, accessible cross-pipeline
+# via le SectionGraph top-level de masterlite.m4.
 
-# Graph : host -> B0 -> mbdrc -> B1 -> pga -> B2 -> drc -> B3 -> demux -> B4+B5
+# Graph : host -> B0 -> mbdrc -> B1 -> pga -> B2 -> drc -> B3 -> demux
+#         (puis demux -> PIPELINE_SINK_5 via dapm top-level dans masterlite.m4)
 P_GRAPH(pipe-master-chain, PIPELINE_ID,
     LIST(`  ',
         `dapm(N_BUFFER(0), N_PCMP(PCM_ID))',
@@ -842,9 +862,7 @@ P_GRAPH(pipe-master-chain, PIPELINE_ID,
         `dapm(N_BUFFER(2), N_PGA(0))',
         `dapm(N_DRC(0), N_BUFFER(2))',
         `dapm(N_BUFFER(3), N_DRC(0))',
-        `dapm(N_MUXDEMUX(0), N_BUFFER(3))',
-        `dapm(N_BUFFER(4), N_MUXDEMUX(0))',
-        `dapm(N_BUFFER(5), N_MUXDEMUX(0))'))
+        `dapm(N_MUXDEMUX(0), N_BUFFER(3))'))
 
 # Export SCHED_COMP pour permettre a PIPE 5 master tap de piggyback
 indir(`define', concat(`PIPELINE_SCHED_COMP_', PIPELINE_ID),
@@ -854,13 +872,13 @@ indir(`define', concat(`PIPELINE_SCHED_COMP_', PIPELINE_ID),
 W_PIPELINE(N_PCMP(PCM_ID), SCHEDULE_PERIOD, SCHEDULE_PRIORITY, SCHEDULE_CORE,
            SCHEDULE_TIME_DOMAIN, pipe_media_schedule_plat)
 
-# [V2.4] Export buffer 4 comme SOURCE monitor de la pipeline
-# (B5 est consomme par PIPE 5 via demux widget cross-pipeline)
-indir(`define', concat(`PIPELINE_SOURCE_', PIPELINE_ID), N_BUFFER(4))
+# [V2.5] Pas d'export PIPELINE_SOURCE local (master chain n'a pas de sink
+# local consommateur en Phase 1a.1 MVP). Le monitor master->HP sera ajoute
+# en Phase 1a.3 via mux merge.
 indir(`define', concat(`PIPELINE_PCM_', PIPELINE_ID), Source Play PCM_ID)
 
-# [V2.4] Export MUXDEMUX widget pour lien cross-pipeline depuis le top-level
-# Pattern: sof/pipe-amp-ref-capture.m4:109
+# [V2.4+V2.5] Export MUXDEMUX widget pour lien cross-pipeline depuis le top-level
+# (sink unique = B0 de PIPE 5 Master_Tap, via dapm dans masterlite.m4)
 indir(`define', concat(`PIPELINE_DEMUX_', PIPELINE_ID), N_MUXDEMUX(0))
 
 # PCM capabilities : 2ch s32le @ 48k, 192..16384 bytes period, 65536 buf
@@ -957,6 +975,30 @@ IPC4 & Q1.23 & \texttt{0x800000} = 8\,388\,608 \\
 Définition dans \texttt{sof/src/audio/volume/volume.h:103} : \texttt{VOL\_ZERO\_DB = BIT(VOL\_QXY\_Y)}. Sur IPC3 (notre cas), \texttt{VOL\_QXY\_Y = 16} donc \texttt{BIT(16) = 0x10000}.
 
 Tout preset \texttt{bytes blob} qui force "0 dB" doit utiliser \texttt{0x10000}, pas \texttt{0x40000000}. Les scripts de test qui appellent \texttt{amixer cset name='Master Volume' 0dB} s'en fichent (la macro dB $\rightarrow$ Q8.16 est dans le kernel), mais les blobs binaires bruts doivent être conformes.
+
+\subsection{Fichier blob demux à créer (V2.5, K6)}
+
+Le squelette V2.5 inclut \texttt{demux\_route\_default.m4} qui n'existe pas upstream. À créer en local dans \texttt{sof/tools/topology/topology1/m4/} (ou dans \texttt{meta-local/recipes-kernel/linux/files/} si on veut éviter de toucher le fork). Contenu minimal (1 stream, route 2ch identité) :
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+divert(-1)
+
+# demux_route_default.m4
+# Route matrix pour mux en mode demux :
+# 1 seul stream consommateur (cross-pipeline vers PIPE 5 Master_Tap)
+# Route identite 2ch -> 2ch (mask: in_ch0 -> out_ch0, in_ch1 -> out_ch1)
+
+define(`DEMUX_priv',
+MUXDEMUX_CONFIG(DEMUX_priv, 1,
+    ROUTE_MATRIX(PIPELINE_ID, 1, 2, 0, 0, 0, 0, 0, 0)
+))
+
+divert(0)dnl
+\end{lstlisting}
+
+\texttt{ROUTE\_MATRIX(stream\_id, mask\_ch0, mask\_ch1, ...)} : chaque byte est un mask. \texttt{1} = out\_ch0, \texttt{2} = out\_ch1. Donc ch0 entrée → ch0 sortie, ch1 entrée → ch1 sortie. Duplication pure stéréo.
+
+Le stream\_id = PIPELINE\_ID = 3 (pipeline source) par convention upstream dans \texttt{pipe-amp-ref-capture.m4}.
 
 \subsection{Évolutions 1a.2 et 1a.3}
 
