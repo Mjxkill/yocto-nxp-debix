@@ -66,14 +66,57 @@
 }
 
 \title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
-  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.3}\\[4pt]
+  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.4}\\[4pt]
   \large Structure DSP, tests, livrables et procédure d'exécution}
 \author{Document de référence technique}
-\date{2026-04-21 --- rev V2.3}
+\date{2026-04-21 --- rev V2.4}
 
 \begin{document}
 \maketitle
 \tableofcontents
+\clearpage
+
+% =======================================================================
+\section*{Changelog V2.3 $\rightarrow$ V2.4}
+\addcontentsline{toc}{section}{Changelog V2.3 $\rightarrow$ V2.4}
+
+V2.3 passait \texttt{m4 | alsatplg} mais le \textbf{kernel rejetait au load} avec :
+\begin{verbatim}
+sof_ipc3_route_setup: route BUF3.3 -> BUF5.0 failed (-22)
+\end{verbatim}
+
+\textbf{Cause racine} : SOF IPC3 interdit les liens DAPM entre 2 \texttt{W\_BUFFER} de pipelines différentes. Les buffers SOF sont mono-consommateur, ils ne peuvent pas être "sources" pour une autre pipeline. Le risque N3 flaggé en V2.1/V2.2/V2.3 s'est matérialisé.
+
+\textbf{Correction V2.4} : introduction d'un composant \texttt{W\_MUXDEMUX} (mux en mode demux) à la fin de la master chain de PIPE 3. Ce composant a la capability multi-sink DAPM cross-pipeline (contrairement aux buffers). Le lien devient \texttt{dapm(BUF, WIDGET\_MUX)} au lieu de \texttt{dapm(BUF, BUF)} --- autorisé par IPC3.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Ref} & \textbf{Sévérité} & \textbf{Correction V2.4} \\
+\midrule
+K1 & Critique & Ajout \texttt{W\_MUXDEMUX(0, 1, PIPELINE\_FORMAT, 2, 2, SCHEDULE\_CORE, LIST(...))} après le DRC dans \texttt{pipe-masterchain.m4}. Mode demux (\$2=1) avec 1 input et 2 sinks (B4 monitor + B5 vers tap). Pattern identique à \texttt{sof/pipe-amp-ref-capture.m4:80} (use case echo-reference). \\
+K2 & Critique & Ajout \texttt{indir('define', PIPELINE\_DEMUX\_<id>, N\_MUXDEMUX(0))} pour exporter le widget mux demux vers le top-level, permettant le \texttt{dapm} cross-pipeline. Pattern identique à \texttt{pipe-amp-ref-capture.m4:109}. \\
+K3 & Critique & Dans \texttt{masterlite.m4}, changement du SectionGraph : \texttt{dapm(PIPELINE\_SINK\_5, PIPELINE\_SOURCE\_3)} devient \texttt{dapm(PIPELINE\_SINK\_5, PIPELINE\_DEMUX\_3)}. Le lien pointe vers un WIDGET (le mux) et non un buffer --- IPC3 l'autorise. Pattern prouvé par \texttt{sof-smart-amplifier.m4:204} et \texttt{sof-mt8195-mt6359-rt1019-rt5682.m4:130}. \\
+K4 & Medium & Ajout \texttt{C\_CONTROLBYTES(DEMUX, ...)} avec blob \texttt{sof\_mux\_config} généré par \texttt{ROUTE\_MATRIX} macro de \texttt{muxdemux.m4}. Route identique sur les 2 sinks (tap = copie pure du signal master post-DRC). \\
+K5 & Medium & Ajout \texttt{include('muxdemux.m4')} dans pipe-masterchain.m4. Composant \texttt{CONFIG\_COMP\_MUX=y} déjà activé dans board config V2.3. \\
+Latency & Info & Master\_Tap latency passe de 8 ms à 10 ms (+1 cycle DSP via le mux). Acceptable car NPU update rate = 10 Hz ($\approx$100 ms de cycle), +2 ms insignifiant. Chemin principal mic$\rightarrow$HP (PIPE 2) reste à 4 ms --- non affecté. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsubsection*{Preuves upstream du pattern (fork Mjxkill/sof feature/sdma-ap2ap-phase1)}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \texttt{sof/tools/topology/topology1/m4/muxdemux.m4} : définit \texttt{W\_MUXDEMUX}, \texttt{N\_MUXDEMUX}, \texttt{ROUTE\_MATRIX}, UUIDs mux/demux.
+  \item \texttt{sof/tools/topology/topology1/sof/pipe-amp-ref-capture.m4} : use case \textbf{identique} au nôtre --- capture avec demux pour envoyer à la fois user space ET une autre pipeline FW. Ligne 3 docstring : "capture with demux for both echo reference to user space and the feedback to smart amplifier FW algorithm".
+  \item \texttt{sof/tools/topology/topology1/sof-smart-amplifier.m4:204} : pattern top-level \texttt{dapm(N\_SMART\_REF\_BUF, N\_SMART\_DEMUX)} --- buffer d'une pipeline vers mux widget d'une autre pipeline. Fonctionne upstream.
+  \item \texttt{sof/tools/topology/topology1/sof-mt8195-mt6359-rt1019-rt5682.m4:130} : même pattern \texttt{dapm(N\_AEC\_REF\_BUF, PIPELINE\_DEMUX\_1)}.
+\end{itemize}
+
+\subsubsection*{Validation empirique prévue}
+
+V2.4 est validée par \textbf{test de chargement kernel} (pas seulement par m4+alsatplg). Critère de succès : \texttt{dmesg | grep sof\_ipc3\_route\_setup} ne montre pas d'erreur \texttt{-22} après deploy du nouveau tplg.
+
 \clearpage
 
 % =======================================================================
@@ -632,16 +675,15 @@ PCM_CAPTURE_ADD (Master_Tap,   2, PIPELINE_PCM_5)
 PCM_PLAYBACK_ADD(SAI_Playback, 3, PIPELINE_PCM_6)
 
 # ---------------------------------------------------------------------
-# Graph : connecter le buffer sink de PIPE 3 a la source de PIPE 5
-# [V2.2 H3-NEW] pas de backticks autour de dapm() au top-level :
-# m4 a besoin d'expanser PIPELINE_SINK_5 -> N_BUFFER(0) de pipe-mastertap
-# et PIPELINE_SOURCE_3 -> N_BUFFER(3) de pipe-masterchain.
-# Pattern confirme dans sof-imx8mp-wm8960-kwd.m4:75-83
+# Graph : connecter le buffer sink de PIPE 5 au demux widget de PIPE 3
+# [V2.4 K3] le source est un WIDGET (muxdemux), pas un buffer :
+# IPC3 autorise dapm(BUF, WIDGET) cross-pipeline mais pas dapm(BUF, BUF).
+# Pattern: sof-smart-amplifier.m4:204 dapm(N_SMART_REF_BUF, N_SMART_DEMUX)
 # ---------------------------------------------------------------------
 SectionGraph."master-chain-to-tap" {
     index "0"
     lines [
-        dapm(PIPELINE_SINK_5, PIPELINE_SOURCE_3)
+        dapm(PIPELINE_SINK_5, PIPELINE_DEMUX_3)
     ]
 }
 
@@ -660,12 +702,13 @@ DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
 
 Deux pipelines custom n'existent pas en upstream SOF et doivent être écrits dans \texttt{meta-local/recipes-kernel/linux/files/} (OU dans \texttt{sof/tools/topology/topology1/sof/} si acceptable). Règle : on ne touche PAS les upstream \texttt{sof/pipe-*.m4}.
 
-\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2.3}
-Pipeline d'entrée de la chaîne master, calqué sur les patterns canoniques \texttt{sof/pipe-volume-playback.m4} (W\_PGA + tokens) et \texttt{sof/pipe-multiband-drc-playback.m4} (multiband\_drc coef + MULTIBAND\_DRC\_priv). Valeurs : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz). \textbf{[V2.3]} Corrections L1/L2/L3 des noms d'includes et macros + convention \texttt{MY\_} pour les \texttt{CTRL} locaux.
+\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2.4}
+Pipeline d'entrée de la chaîne master, calqué sur \texttt{pipe-volume-playback.m4} (W\_PGA), \texttt{pipe-multiband-drc-playback.m4} (mbdrc), et \texttt{pipe-amp-ref-capture.m4} (W\_MUXDEMUX comme tap cross-pipeline). Valeurs : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz). \textbf{[V2.4]} Ajout du mux demux après le DRC pour exporter le signal vers PIPE 5 Master\_Tap via un lien DAPM widget-to-buffer (autorisé par IPC3).
 
 \begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
-# Master chain input V2.3 : host PCM -> mbdrc -> pga -> drc -> buf
-# Patterns canoniques: pipe-volume-playback.m4 + pipe-multiband-drc-playback.m4
+# Master chain input V2.4 : host PCM -> mbdrc -> pga -> drc -> muxdemux -> (2 sinks)
+# Patterns: pipe-volume-playback.m4 (PGA) + pipe-multiband-drc-playback.m4 (mbdrc)
+#        + pipe-amp-ref-capture.m4 (muxdemux cross-pipeline tap)
 # PIPELINE_CHANNELS = 2, PIPELINE_FORMAT = s32le, SCHEDULE_PERIOD = 2000us
 include(`utils.m4')
 include(`buffer.m4')
@@ -676,6 +719,7 @@ include(`mixercontrol.m4')
 include(`multiband_drc.m4')
 include(`pga.m4')
 include(`drc.m4')
+include(`muxdemux.m4')            # [V2.4] demux pour tap cross-pipeline
 include(`common/tlv.m4')
 
 # --- Mixer control "Master Volume" (C_CONTROLMIXER) ---
@@ -744,7 +788,24 @@ C_CONTROLBYTES(MY_DRC_CTRL, PIPELINE_ID,
 W_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
     LIST(`   ', "MY_DRC_CTRL"))
 
-# --- Buffers : host | mbdrc-out | pga-out | drc-out (shared avec PIPE 5) ---
+# --- [V2.4] MUX DEMUX : 1 input (DRC out) -> 2 sinks identiques ---
+# mode demux = $2=1. Route matrix configuree via preset blob bytes control.
+# Le blob duplique le signal 2ch vers stream 0 (monitor) et stream 1 (tap).
+define(DEMUX_priv,    concat(`demux_priv_',  PIPELINE_ID))
+define(MY_DEMUX_CTRL, concat(`demux_ctrl_',  PIPELINE_ID))
+include(`demux_route_default.m4')
+C_CONTROLBYTES(MY_DEMUX_CTRL, PIPELINE_ID,
+    CONTROLBYTES_OPS(bytes, 258 binds the control to bytes get/put handlers, 258, 258),
+    CONTROLBYTES_EXTOPS(258 binds the control to bytes get/put handlers, 258, 258),
+    , , ,
+    CONTROLBYTES_MAX(, 304),
+    ,
+    DEMUX_priv)
+# W_MUXDEMUX(index, mux_or_demux, format, periods_sink, periods_source, core, kcontrols)
+W_MUXDEMUX(0, 1, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+    LIST(`   ', "MY_DEMUX_CTRL"))
+
+# --- Buffers : host | mbdrc | pga | drc | demux-in | demux-out-monitor | demux-out-tap ---
 W_BUFFER(0, COMP_BUFFER_SIZE(3,
     COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
     COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
@@ -761,8 +822,17 @@ W_BUFFER(3, COMP_BUFFER_SIZE(2,
     COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
     COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
     PLATFORM_COMP_MEM_CAP)
+# [V2.4] B4 = demux out monitor, B5 = demux out tap (vers PIPE 5)
+W_BUFFER(4, COMP_BUFFER_SIZE(2,
+    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_COMP_MEM_CAP)
+W_BUFFER(5, COMP_BUFFER_SIZE(2,
+    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_COMP_MEM_CAP)
 
-# Graph : host -> B0 -> mbdrc -> B1 -> pga -> B2 -> drc -> B3
+# Graph : host -> B0 -> mbdrc -> B1 -> pga -> B2 -> drc -> B3 -> demux -> B4+B5
 P_GRAPH(pipe-master-chain, PIPELINE_ID,
     LIST(`  ',
         `dapm(N_BUFFER(0), N_PCMP(PCM_ID))',
@@ -771,7 +841,10 @@ P_GRAPH(pipe-master-chain, PIPELINE_ID,
         `dapm(N_PGA(0), N_BUFFER(1))',
         `dapm(N_BUFFER(2), N_PGA(0))',
         `dapm(N_DRC(0), N_BUFFER(2))',
-        `dapm(N_BUFFER(3), N_DRC(0))'))
+        `dapm(N_BUFFER(3), N_DRC(0))',
+        `dapm(N_MUXDEMUX(0), N_BUFFER(3))',
+        `dapm(N_BUFFER(4), N_MUXDEMUX(0))',
+        `dapm(N_BUFFER(5), N_MUXDEMUX(0))'))
 
 # Export SCHED_COMP pour permettre a PIPE 5 master tap de piggyback
 indir(`define', concat(`PIPELINE_SCHED_COMP_', PIPELINE_ID),
@@ -781,9 +854,14 @@ indir(`define', concat(`PIPELINE_SCHED_COMP_', PIPELINE_ID),
 W_PIPELINE(N_PCMP(PCM_ID), SCHEDULE_PERIOD, SCHEDULE_PRIORITY, SCHEDULE_CORE,
            SCHEDULE_TIME_DOMAIN, pipe_media_schedule_plat)
 
-# Export buffer 3 comme SOURCE de la pipeline pour le graph externe
-indir(`define', concat(`PIPELINE_SOURCE_', PIPELINE_ID), N_BUFFER(3))
+# [V2.4] Export buffer 4 comme SOURCE monitor de la pipeline
+# (B5 est consomme par PIPE 5 via demux widget cross-pipeline)
+indir(`define', concat(`PIPELINE_SOURCE_', PIPELINE_ID), N_BUFFER(4))
 indir(`define', concat(`PIPELINE_PCM_', PIPELINE_ID), Source Play PCM_ID)
+
+# [V2.4] Export MUXDEMUX widget pour lien cross-pipeline depuis le top-level
+# Pattern: sof/pipe-amp-ref-capture.m4:109
+indir(`define', concat(`PIPELINE_DEMUX_', PIPELINE_ID), N_MUXDEMUX(0))
 
 # PCM capabilities : 2ch s32le @ 48k, 192..16384 bytes period, 65536 buf
 PCM_CAPABILITIES(Source Play PCM_ID, CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT),
@@ -793,6 +871,8 @@ undefine(`MY_MULTIBAND_DRC_CTRL')
 undefine(`MULTIBAND_DRC_priv')
 undefine(`MY_DRC_CTRL')
 undefine(`DRC_priv')
+undefine(`MY_DEMUX_CTRL')
+undefine(`DEMUX_priv')
 undefine(`DEF_PGA_TOKENS')
 undefine(`DEF_PGA_CONF')
 \end{lstlisting}
