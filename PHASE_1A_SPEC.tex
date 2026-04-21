@@ -66,14 +66,40 @@
 }
 
 \title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
-  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.1}\\[4pt]
+  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.2}\\[4pt]
   \large Structure DSP, tests, livrables et procédure d'exécution}
 \author{Document de référence technique}
-\date{2026-04-21 --- rev V2.1}
+\date{2026-04-21 --- rev V2.2}
 
 \begin{document}
 \maketitle
 \tableofcontents
+\clearpage
+
+% =======================================================================
+\section*{Changelog V2.1 $\rightarrow$ V2.2}
+\addcontentsline{toc}{section}{Changelog V2.1 $\rightarrow$ V2.2}
+
+V2.2 intègre la \textbf{3\textsuperscript{e} investigation critic} (job \texttt{800fdc1f}) qui a remonté \textbf{7 bugs de syntaxe m4} dans le squelette V2.1 --- tous des erreurs de signature de macro ou de quotage. Le pattern canonique retenu pour référence est \texttt{sof/tools/topology/topology1/sof/pipe-volume-playback.m4} (qui compile et fonctionne upstream).
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Ref} & \textbf{Sévérité} & \textbf{Correction V2.2} \\
+\midrule
+C1-NEW & Critique & Signature \texttt{W\_PGA} réelle (\texttt{m4/pga.m4:10-55}) = 7 args : \texttt{(index, format, periods\_sink, periods\_source, data\_config, core, kcontrol\_list)}. V2.1 n'en passait que 6. V2.2 ajoute le prélude canonique \texttt{W\_VENDORTUPLES(DEF\_PGA\_TOKENS,...)} + \texttt{W\_DATA(DEF\_PGA\_CONF, DEF\_PGA\_TOKENS)} et appelle W\_PGA avec DEF\_PGA\_CONF en \$5. \\
+C2-NEW & Critique & \texttt{define(PGA\_NAME, 'Master Volume')} faisait que \texttt{SectionWidget} se nommait "Master Volume" au lieu de \texttt{PGA3.0}, cassant le DAPM qui référence \texttt{N\_PGA(0)} $\rightarrow$ \texttt{PGA3.0}. V2.2 supprime ce \texttt{define} (pattern \texttt{pipe-volume-playback.m4} n'en utilise pas). \\
+C3-NEW & Critique & \texttt{TLV\_DB\_SCALE\_WTYPE(...)} est une macro inexistante (\texttt{grep -r TLV\_DB\_SCALE sof/} = 0 match). V2.2 utilise un commentaire libre \texttt{TLV 32 steps from -64dB to 0dB for 2dB}, conforme au pattern upstream. \\
+H1-NEW & Haute & Référence kcontrol \texttt{"PGA\_NAME"} ne matchait pas le nom \texttt{SectionControlMixer} créé par C\_CONTROLMIXER (\texttt{"<PIPELINE\_ID> Master Volume"}). V2.2 utilise \texttt{"PIPELINE\_ID Master Volume"}. \\
+H2-NEW & Haute & \texttt{PIPELINE\_PCM\_ADD} pour PIPE 3 n'avait que 11 args $\rightarrow$ \texttt{SCHEDULE\_TIME\_DOMAIN} devenait chaîne vide (pipeline.m4:82 fait \texttt{define(SCHEDULE\_TIME\_DOMAIN, \$12)}). V2.2 ajoute \texttt{SCHEDULE\_TIME\_DOMAIN\_TIMER} comme 12\textsuperscript{e} arg. \\
+H3-NEW & Haute & SectionGraph top-level avec \texttt{`dapm(...)'} (backticks) empêchait l'expansion macro. V2.2 enlève les backticks autour de \texttt{dapm()} (pattern \texttt{sof-imx8mp-wm8960-kwd.m4:75-83}). \\
+H4 & Haute & Réconciliation changelog $\leftrightarrow$ code : V2.2 confirme que \textbf{PIPE 3 a son propre W\_PIPELINE} (scheduler autonome TIMER) et \textbf{PIPE 5 piggyback sur PIPELINE\_SCHED\_COMP\_3}. Le changelog V2.1 mentionnant "piggyback sur SCHED\_COMP\_1" était incohérent ; la bonne approche est celle du code. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Faux positif écarté} : gemini-3-pro a prétendu \texttt{VOL\_ZERO\_DB = 0x800000} en IPC3. Vérification directe (\texttt{sof/src/audio/volume/volume.h:41-63,103}) : en IPC3, \texttt{VOL\_QXY\_Y = 16} $\rightarrow$ \texttt{BIT(16) = 0x10000}. Les 4 autres workers (kimi, claude-code, minimax, glm-5.1) ont tous confirmé 0x10000. V2.1 avait raison, pas besoin de modifier.
+
 \clearpage
 
 % =======================================================================
@@ -530,12 +556,15 @@ PIPELINE_PCM_ADD(sof/pipe-passthrough-playback.m4,
 
 # ---------------------------------------------------------------------
 # PIPE 3 : Master chain input side (Source_Play PCM 1)
-# pipeline CUSTOM local : HOST -> mbdrc -> volume -> drc -> buf
+# pipeline CUSTOM local : HOST -> mbdrc -> pga -> drc -> buf
+# [V2.2 H2-NEW] 12e arg = SCHEDULE_TIME_DOMAIN_TIMER (PIPE 3 a son
+# propre W_PIPELINE scheduler autonome, qui exportera SCHED_COMP_3)
 # ---------------------------------------------------------------------
 PIPELINE_PCM_ADD(sof-imx8mp-tac5212-pipe-masterchain.m4,
     3, 1, 2, s32le,
     2000, 0, 0,
-    48000, 48000, 48000)
+    48000, 48000, 48000,
+    SCHEDULE_TIME_DOMAIN_TIMER)
 
 # ---------------------------------------------------------------------
 # PIPE 5 : Master chain output side (Master_Tap PCM 2)
@@ -573,11 +602,15 @@ PCM_PLAYBACK_ADD(SAI_Playback, 3, PIPELINE_PCM_6)
 
 # ---------------------------------------------------------------------
 # Graph : connecter le buffer sink de PIPE 3 a la source de PIPE 5
+# [V2.2 H3-NEW] pas de backticks autour de dapm() au top-level :
+# m4 a besoin d'expanser PIPELINE_SINK_5 -> N_BUFFER(0) de pipe-mastertap
+# et PIPELINE_SOURCE_3 -> N_BUFFER(3) de pipe-masterchain.
+# Pattern confirme dans sof-imx8mp-wm8960-kwd.m4:75-83
 # ---------------------------------------------------------------------
 SectionGraph."master-chain-to-tap" {
     index "0"
     lines [
-        `dapm(PIPELINE_SINK_5, PIPELINE_SOURCE_3)'
+        dapm(PIPELINE_SINK_5, PIPELINE_SOURCE_3)
     ]
 }
 
@@ -596,11 +629,12 @@ DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
 
 Deux pipelines custom n'existent pas en upstream SOF et doivent être écrits dans \texttt{meta-local/recipes-kernel/linux/files/} (OU dans \texttt{sof/tools/topology/topology1/sof/} si acceptable). Règle : on ne touche PAS les upstream \texttt{sof/pipe-*.m4}.
 
-\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2.1}
-Pipeline d'entrée de la chaîne master. Valeurs concrètes : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz). \textbf{[V2.1]} Utilise \texttt{W\_PGA} (pas \texttt{W\_VOLUME}) + \texttt{C\_CONTROLMIXER} pour exposer "Master Volume". Exporte \texttt{PIPELINE\_SCHED\_COMP\_<id>} + appelle \texttt{W\_PIPELINE(...)}.
+\paragraph{\texttt{sof-imx8mp-tac5212-pipe-masterchain.m4} V2.2}
+Pipeline d'entrée de la chaîne master, calqué sur le pattern canonique \texttt{sof/tools/topology/topology1/sof/pipe-volume-playback.m4} (qui compile upstream). Valeurs : 2 canaux, s32le, 96 frames/period (2 ms @ 48 kHz). \textbf{[V2.2]} \texttt{W\_PGA} avec 7 args conformes + prélude \texttt{W\_VENDORTUPLES}/\texttt{W\_DATA}, sans \texttt{define(PGA\_NAME)}, TLV en commentaire libre, kcontrol ref en \texttt{"PIPELINE\_ID Master Volume"}.
 
 \begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
-# Master chain input V2.1: host PCM -> mbdrc -> pga -> drc -> buf
+# Master chain input V2.2 : host PCM -> mbdrc -> pga -> drc -> buf
+# Pattern canonique : pipe-volume-playback.m4
 # PIPELINE_CHANNELS = 2, PIPELINE_FORMAT = s32le, SCHEDULE_PERIOD = 2000us
 include(`utils.m4')
 include(`buffer.m4')
@@ -609,11 +643,33 @@ include(`pipeline.m4')
 include(`bytecontrol.m4')
 include(`mixercontrol.m4')
 include(`multiband_drc.m4')
-include(`pga.m4')             # [V2.1] W_PGA pas W_VOLUME
+include(`pga.m4')
 include(`drc.m4')
-include(`common/tlv.m4')      # [V2.1] pour TLV_DB_SCALE
+include(`common/tlv.m4')
 
-# Host PCM playback endpoint (2ch, 3 periodes de sink)
+# --- Mixer control "Master Volume" (C_CONTROLMIXER) ---
+# [V2.2 C3-NEW] TLV en texte libre (TLV_DB_SCALE_WTYPE n'existe pas)
+# [V2.2 C2-NEW] pas de define(PGA_NAME, ...)
+C_CONTROLMIXER(Master Volume, PIPELINE_ID,
+    CONTROLMIXER_OPS(volsw, 256 binds the mixer control to volume get/put handlers, 256, 256),
+    CONTROLMIXER_MAX(, 32),
+    false,
+    CONTROLMIXER_TLV(TLV 32 steps from -64dB to 0dB for 2dB, vtlv_m64s2),
+    Channel register and shift for Front Left/Right,
+    VOLUME_CHANNEL_MAP)
+
+# --- PGA volume token configuration (prelude canonique) ---
+# [V2.2 C1-NEW] W_VENDORTUPLES + W_DATA requis pour DEF_PGA_CONF en $5 de W_PGA
+define(DEF_PGA_TOKENS, concat(`pga_tokens_', PIPELINE_ID))
+define(DEF_PGA_CONF,   concat(`pga_conf_',   PIPELINE_ID))
+
+W_VENDORTUPLES(DEF_PGA_TOKENS, sof_volume_tokens,
+LIST(`		', `SOF_TKN_VOLUME_RAMP_STEP_TYPE	"2"'
+     `		', `SOF_TKN_VOLUME_RAMP_STEP_MS		"20"'))
+
+W_DATA(DEF_PGA_CONF, DEF_PGA_TOKENS)
+
+# --- Host PCM playback endpoint ---
 W_PCM_PLAYBACK(PCM_ID, Source Play, 2, 0, SCHEDULE_CORE)
 
 # --- multiband_drc ---
@@ -630,20 +686,13 @@ C_CONTROLBYTES(MBDRC_CTRL, PIPELINE_ID,
 W_MULTIBAND_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
     LIST(`   ', "MBDRC_CTRL"))
 
-# --- PGA (Programmable Gain Amplifier = volume DVC) [V2.1] ---
-# W_PGA signature: (index, format, periods_sink, periods_source, kcontrol_list, core)
-define(PGA_NAME, `Master Volume')
-C_CONTROLMIXER(Master Volume, PIPELINE_ID,
-    CONTROLMIXER_OPS(volsw, 256 binds mixer control to volume get/put, 256, 256),
-    CONTROLMIXER_MAX(, 32),
-    false,
-    CONTROLMIXER_TLV(TLV_DB_SCALE_WTYPE(vtlv_m64s2, -6400, 50, 1), vtlv_m64s2),
-    Channel register and shift for Front Left/Right,
-    LIST(`      ', KCONTROL_CHANNEL(FL, 1, 0), KCONTROL_CHANNEL(FR, 1, 1)))
-W_PGA(0, PIPELINE_FORMAT, 2, 2,
-    LIST(`       ', "PGA_NAME"),
-    SCHEDULE_CORE)
-undefine(`PGA_NAME')
+# --- PGA (Programmable Gain Amplifier = volume DVC) ---
+# [V2.2 C1-NEW] W_PGA signature: (index, format, periods_sink, periods_source,
+#                                 DEF_PGA_CONF, core, kcontrol_list)
+# [V2.2 H1-NEW] kcontrol ref = "PIPELINE_ID Master Volume" (nom auto-genere
+#                              par C_CONTROLMIXER)
+W_PGA(0, PIPELINE_FORMAT, 2, 2, DEF_PGA_CONF, SCHEDULE_CORE,
+    LIST(`		', "PIPELINE_ID Master Volume"))
 
 # --- drc (final limiter) ---
 define(DRC_priv, concat(`drc_bytes_', PIPELINE_ID))
@@ -659,7 +708,7 @@ C_CONTROLBYTES(DRC_CTRL, PIPELINE_ID,
 W_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
     LIST(`   ', "DRC_CTRL"))
 
-# --- Buffers : host | mbdrc-out | pga-out | drc-out(shared) ---
+# --- Buffers : host | mbdrc-out | pga-out | drc-out (shared avec PIPE 5) ---
 W_BUFFER(0, COMP_BUFFER_SIZE(3,
     COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
     COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
@@ -688,12 +737,11 @@ P_GRAPH(pipe-master-chain, PIPELINE_ID,
         `dapm(N_DRC(0), N_BUFFER(2))',
         `dapm(N_BUFFER(3), N_DRC(0))'))
 
-# [V2.1] Export SCHED_COMP pour permettre aux autres pipelines
-# (ex: PIPE 5 master tap) de piggyback sur notre scheduler
+# Export SCHED_COMP pour permettre a PIPE 5 master tap de piggyback
 indir(`define', concat(`PIPELINE_SCHED_COMP_', PIPELINE_ID),
       N_PCMP(PCM_ID))
 
-# [V2.1] Widget scheduler explicite
+# Widget scheduler explicite (PIPE 3 autonome, driven par TIMER)
 W_PIPELINE(N_PCMP(PCM_ID), SCHEDULE_PERIOD, SCHEDULE_PRIORITY, SCHEDULE_CORE,
            SCHEDULE_TIME_DOMAIN, pipe_media_schedule_plat)
 
@@ -709,6 +757,8 @@ undefine(`MBDRC_CTRL')
 undefine(`MBDRC_priv')
 undefine(`DRC_CTRL')
 undefine(`DRC_priv')
+undefine(`DEF_PGA_TOKENS')
+undefine(`DEF_PGA_CONF')
 \end{lstlisting}
 
 \paragraph{\texttt{sof-imx8mp-tac5212-pipe-mastertap.m4} V2.1}
