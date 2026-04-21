@@ -66,14 +66,44 @@
 }
 
 \title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
-  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.5}\\[4pt]
+  \Large Architecture C --- Spécification complète Phase 1a \textbf{V2.6}\\[4pt]
   \large Structure DSP, tests, livrables et procédure d'exécution}
 \author{Document de référence technique}
-\date{2026-04-21 --- rev V2.5}
+\date{2026-04-21 --- rev V2.6}
 
 \begin{document}
 \maketitle
 \tableofcontents
+\clearpage
+
+% =======================================================================
+\section*{Changelog V2.5 $\rightarrow$ V2.6}
+\addcontentsline{toc}{section}{Changelog V2.5 $\rightarrow$ V2.6}
+
+Investigation V2.5 (job \texttt{cdd3c7ab}) : 1 seul vrai bug critique trouvé en consensus (4 workers sur 5) --- le reste est faux positif dû au fait que les modifications SOF n'étaient pas pushées dans le fork.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Ref} & \textbf{Sévérité} & \textbf{Correction V2.6} \\
+\midrule
+B1 & Critique & \texttt{ROUTE\_MATRIX(PIPELINE\_ID, ...)} $\rightarrow$ \texttt{ROUTE\_MATRIX(5, ...)}. Le 1\textsuperscript{er} arg de \texttt{ROUTE\_MATRIX} est le \texttt{stream\_id} = \texttt{pipeline\_id} du SINK (Master\_Tap = PIPE 5), pas celui de la pipeline hôte du mux (PIPE 3). Raison : \texttt{demux\_process} dans \texttt{mux.c:248-260} appelle \texttt{get\_stream\_index(sink->pipeline\_id)} au runtime et cherche \texttt{streams[].pipeline\_id == 5}. Avec \texttt{3}, aucun match $\rightarrow$ retour \texttt{-EINVAL} et data non routée. Pattern identique à \texttt{pipe-amp-ref-capture.m4:53-61} qui utilise \texttt{SMART\_PB\_PPL\_ID} (ID du SINK). \\
+Fork push & Prérequis & Les modifications V2.3+ (board config CONFIG\_COMP\_MUX=y, fichiers \texttt{pipe-masterchain.m4}, \texttt{pipe-mastertap.m4}, \texttt{masterlite.m4}, \texttt{demux\_route\_default.m4}) doivent être \textbf{commitées et pushées} dans le fork \texttt{Mjxkill/sof} branche \texttt{feature/sdma-ap2ap-phase1} pour que les investigations futures voient l'état réel. Les faux positifs V2.5 "CONFIG\_COMP\_MUX manquant" / "fichiers masterchain manquants" viennent de cette absence de push. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsubsection*{Faux positifs V2.5 écartés}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{"CONFIG\_COMP\_MUX=y manquant dans imx8mp\_evk\_mimx8ml8\_adsp.conf"} (gemini, claude-code) : FAUX. La modif est locale, non pushée. Le fichier contient bien la ligne chez nous.
+  \item \textbf{"Fichiers pipe-masterchain.m4 / pipe-mastertap.m4 / masterlite.m4 / demux\_route\_default.m4 manquants"} : FAUX. Ils existent localement. À pusher.
+  \item \textbf{"Pipeline sans sink DAPM local risque scheduling"} (gemini, claude-code) : risque THÉORIQUE. Pas de preuve kernel de crash. À valider empiriquement lors du load tplg.
+  \item \textbf{"DAPM direction inversée dans SectionGraph"} (glm-5.1) : FAUX. Le pattern \texttt{dapm(sink, source)} est correct (cf. \texttt{utils.m4:36} + 4 patterns upstream). V2.5 écrit \texttt{dapm(PIPELINE\_SINK\_5, PIPELINE\_DEMUX\_3)} = sink=PIPE5.B0, source=MUXDEMUX3.0 $\rightarrow$ le signal va du mux vers le buffer PIPE 5. Correct.
+\end{itemize}
+
+Architecture V2.4 (mux demux cross-pipeline) + correction squelette V2.5 (K6/K7/K8) + fix pipeline\_id V2.6 = squelette final prêt pour test empirique \texttt{m4 | alsatplg | kernel load}.
+
 \clearpage
 
 % =======================================================================
@@ -983,22 +1013,27 @@ Le squelette V2.5 inclut \texttt{demux\_route\_default.m4} qui n'existe pas upst
 \begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
 divert(-1)
 
-# demux_route_default.m4
+# demux_route_default.m4 V2.6
 # Route matrix pour mux en mode demux :
 # 1 seul stream consommateur (cross-pipeline vers PIPE 5 Master_Tap)
+# [V2.6 B1] stream_id = 5 (pipeline_id du SINK = Master_Tap), pas 3.
+# Raison : demux_process(mux.c:248-260) fait
+#   get_stream_index(sink->pipeline_id) -> cherche streams[].pipeline_id == 5
 # Route identite 2ch -> 2ch (mask: in_ch0 -> out_ch0, in_ch1 -> out_ch1)
 
 define(`DEMUX_priv',
 MUXDEMUX_CONFIG(DEMUX_priv, 1,
-    ROUTE_MATRIX(PIPELINE_ID, 1, 2, 0, 0, 0, 0, 0, 0)
+    ROUTE_MATRIX(5, 1, 2, 0, 0, 0, 0, 0, 0)
 ))
 
 divert(0)dnl
 \end{lstlisting}
 
-\texttt{ROUTE\_MATRIX(stream\_id, mask\_ch0, mask\_ch1, ...)} : chaque byte est un mask. \texttt{1} = out\_ch0, \texttt{2} = out\_ch1. Donc ch0 entrée → ch0 sortie, ch1 entrée → ch1 sortie. Duplication pure stéréo.
+\texttt{ROUTE\_MATRIX(stream\_id, mask\_ch0, mask\_ch1, ..., mask\_ch7)} : 9 args. Le \texttt{stream\_id} est le \texttt{pipeline\_id} du buffer sink connecté. Les 8 masks sont bit-fields d'output channels (\texttt{1} = out\_ch0, \texttt{2} = out\_ch1, \texttt{4} = out\_ch2, etc.).
 
-Le stream\_id = PIPELINE\_ID = 3 (pipeline source) par convention upstream dans \texttt{pipe-amp-ref-capture.m4}.
+Configuration retenue : ch0 entrée → ch0 sortie (mask=1), ch1 entrée → ch1 sortie (mask=2), autres canaux inutilisés (mask=0). Duplication stéréo pure vers PIPE 5.
+
+Pattern upstream : \texttt{pipe-amp-ref-capture.m4:53-61} utilise \texttt{SMART\_PB\_PPL\_ID} (ID de la pipeline playback sink), pas \texttt{PIPELINE\_ID} (ID de la capture).
 
 \subsection{Évolutions 1a.2 et 1a.3}
 
