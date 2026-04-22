@@ -1,0 +1,593 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2cm]{geometry}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{siunitx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{pifont}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage[colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!60!black]{hyperref}
+
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, calc, fit, backgrounds}
+
+\definecolor{chw}{HTML}{B71C1C}
+\definecolor{cdsp}{HTML}{1565C0}
+\definecolor{ca53}{HTML}{2E7D32}
+\definecolor{cusb}{HTML}{6A1B9A}
+\definecolor{cnpu}{HTML}{E65100}
+\definecolor{cfx}{HTML}{00838F}
+\definecolor{cbuf}{HTML}{FFB300}
+\definecolor{ccomp}{HTML}{455A64}
+\definecolor{codebg}{HTML}{F5F5F5}
+\definecolor{cbug}{HTML}{C62828}
+\definecolor{cok}{HTML}{2E7D32}
+
+\tikzset{
+  hw/.style={draw, fill=chw!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  dsp/.style={draw, fill=cdsp!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  a53/.style={draw, fill=ca53!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  pcm/.style={draw, fill=yellow!30, font=\sffamily\scriptsize, minimum height=5mm, rounded corners=1pt, align=center},
+  fx/.style={draw, fill=cfx!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  usb/.style={draw, fill=cusb!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+  arrmulti/.style={-{Stealth[length=2mm]}, line width=1.2pt}
+}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!30},
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  breaklines=true,
+  columns=flexible,
+  keepspaces=true,
+  tabsize=2,
+  inputencoding=utf8,
+  extendedchars=true,
+  literate={é}{{\'e}}1 {è}{{\`e}}1 {à}{{\`a}}1 {ê}{{\^e}}1 {â}{{\^a}}1 {ô}{{\^o}}1 {ù}{{\`u}}1 {û}{{\^u}}1 {î}{{\^\i}}1 {ï}{{\"\i}}1 {ç}{{\c c}}1 {É}{{\'E}}1 {È}{{\`E}}1 {À}{{\`A}}1 {→}{{$\to$}}1 {↓}{{$\downarrow$}}1 {←}{{$\leftarrow$}}1 {✓}{{\checkmark}}1 {✗}{{\texttimes}}1
+}
+
+\title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
+  \Large Spécification Phase 1a --- \textbf{V4.2}\\[4pt]
+  \large Console numérique 8 canaux end-to-end\\
+  \normalsize Intègre investigations V4 (854s) + V4.1 (790s)}
+\author{Document de référence technique}
+\date{2026-04-22 --- rev V4.2}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\clearpage
+
+% =======================================================================
+\section{Ce qui change depuis V4.1}
+
+V4.1 a été soumis à l'investigation finale (6 workers : gemini 114s, kimi 363s, glm 438s, minimax 633s, claude-code 643s, qwen 785s). \textbf{Verdict unanime : GO pour Phase 1a.1 MVP} --- le squelette passe la gate \texttt{m4 | alsatplg}. V4.2 intègre les micro-fixes recommandés et clarifie la stratégie T5b.
+
+\subsection{Micro-fixes V4.2}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Fix} & \textbf{Correction V4.2} \\
+\midrule
+F1 & \texttt{CONFIG\_DRC\_MAX\_PRE\_DELAY\_FRAMES = 512} (et non 256 comme dit V4.1 \S5). Pre-delay par défaut = \texttt{DRC\_DEFAULT\_PRE\_DELAY\_FRAMES = 256} qui correspond à \texttt{CONFIG\_DRC\_MAX\_PRE\_DELAY\_FRAMES >> 1}. \\
+F2 & Ajout 12e arg \texttt{SCHEDULE\_TIME\_DOMAIN\_DMA} à \texttt{PIPELINE\_PCM\_ADD} pour hygiène et cohérence avec \texttt{DAI\_ADD} (claude-code, pattern masterlite). \\
+F3 & Stratégie T5b formalisée : topology variante \texttt{masterV42-T5.m4} qui OMET le widget \texttt{W\_DRC} de la chaîne pour le null test bit-perfect strict. C'est la \textbf{seule voie sample-exact} car \texttt{drc\_s32\_default} applique toujours le pre-delay même si \texttt{enabled=0}. \\
+F4 & Note CMakeLists : GLOB \texttt{sof/*.m4} (ligne 7 de \texttt{CMakeLists.txt}) capture automatiquement les fichiers pipeline, mais le top-level \texttt{masterV42.m4} doit être ajouté explicitement à \texttt{TPLGS} pour build standalone. La recipe Yocto \texttt{meta-local} peut aussi le compiler via invocation \texttt{m4 | alsatplg} directe (pattern baseline). \\
+F5 & Note DAI\_ADD : 12 args acceptés (pattern \texttt{DAI\_ADD\_SCHED} qui passe 12 args). Les 3 args manquants (\texttt{DAI\_CHANNELS}, \texttt{DAI\_RATE}, \texttt{DYNAMIC\_PIPE}) sont inutilisés par \texttt{pipe-dai-capture.m4}/\texttt{pipe-dai-playback.m4}. Pas de modification nécessaire. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Ce qui est confirmé unanimement par les 6 workers V4.1}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{Gate compile} : le squelette pass \texttt{m4 | alsatplg}
+  \item \texttt{multiband\_drc\_coef\_passthrough.m4} \textbf{existe} dans notre fork (70 lignes, 2 bands, \texttt{enable\_emp\_deemp=0})
+  \item \texttt{W\_PIPELINE} créé UNIQUEMENT par \texttt{pipe-dai-\{capture,playback\}.m4} via \texttt{DAI\_ADD} --- un seul scheduler widget par pipeline\_id
+  \item Pattern kcontrol \texttt{"PIPELINE\_ID Master Capture Volume"} \textbf{correct} : m4 expand \texttt{PIPELINE\_ID} dans les strings double-quotées
+  \item \texttt{W\_MULTIBAND\_DRC} / \texttt{W\_DRC} en \texttt{(2, 2)} confirmé par upstream
+  \item \texttt{W\_PGA} capture \texttt{(2, DAI\_PERIODS)}, playback \texttt{(DAI\_PERIODS, 2)}
+  \item Exports \texttt{PIPELINE\_SCHED\_COMP\_<id>} (capture) et \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_<id>} (playback) disponibles pour piggyback Phase 1a.2
+\end{itemize}
+
+\subsection{Bugs V4 corrigés en V4.1}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{\#} & \textbf{Sévérité} & \textbf{Correction V4.1} \\
+\midrule
+B1 & CRITICAL & \texttt{SOF\_DRC\_MAX\_BLOB\_SIZE} / \texttt{SOF\_MULTIBAND\_DRC\_MAX\_BLOB\_SIZE} sont des \texttt{\#define C} invisibles en m4. Remplacés par \texttt{1024} littéral (pattern upstream \texttt{pipe-drc-enabled-capture.m4:31}). \\
+B2 & CRITICAL & \texttt{W\_PIPELINE(N\_PCMC/N\_PCMP, ...)} ajouté en V4 est \textbf{redondant et buggué}. Le scheduler widget est créé par \texttt{pipe-dai-capture.m4} via \texttt{DAI\_ADD} sur le même pipeline\_id. Ajouter un W\_PIPELINE côté PCM crée un 2e scheduler $\to$ comportement indéfini. \textbf{Supprimé} en V4.1. \\
+B3 & CRITICAL & \texttt{multiband\_drc\_coef\_default.m4} est en mode ACTIF (emp\_deemp=1). Remplacé par \texttt{multiband\_drc\_coef\_passthrough.m4} qui existe upstream et est un vrai bypass. \\
+B4 & HIGH & \texttt{drc\_coef\_default.m4} est aussi en mode actif (\texttt{enabled=1}) et \textbf{aucun blob passthrough DRC n'existe upstream}. Pire : même avec \texttt{enabled=0}, \texttt{drc\_s32\_default} applique un pre-delay de 256 frames ($\sim$5.3 ms). Conséquence : T5 sample-perfect \textbf{impossible avec DRC dans la chaîne}. V4.1 adopte 3 stratégies (voir \S\ref{sec:t5}). \\
+B5 & HIGH & kcontrol PGA \texttt{"DEF\_PGA\_VOLUME"} ne matche pas le nom \texttt{SectionControlMixer} généré par \texttt{C\_CONTROLMIXER} = \texttt{"PIPELINE\_ID Master Capture Volume"}. Corrigé. \\
+B6 & MEDIUM & \texttt{CONTROLMIXER} channel map : \texttt{VOLUME\_CHANNEL\_MAP} upstream (FL/FR) suffit --- en mode linked, le PGA applique un gain unique aux 8 canaux. Pas besoin de 8 KCONTROL\_CHANNEL explicites. \\
+B7 & MEDIUM & \texttt{W\_PGA} periods : capture = \texttt{(2, DAI\_PERIODS, ...)}, playback = \texttt{(DAI\_PERIODS, 2, ...)} --- cohérence upstream \texttt{pipe-volume-capture.m4:47} et \texttt{pipe-volume-playback.m4}. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Ce qui est confirmé et inchangé}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Architecture console 8ch end-to-end, les 4 PCMs, phasage
+  \item Tous \texttt{SCHEDULE\_TIME\_DOMAIN\_DMA} via \texttt{DAI\_ADD} (pas de TIMER)
+  \item Pas de cross-pipeline en Phase 1a.1 MVP
+  \item Pattern \texttt{W\_VENDORTUPLES} / \texttt{W\_DATA} pour \texttt{DEF\_PGA\_CONF} validé par gemini-3-pro
+  \item \texttt{CONFIG\_COMP\_MIXER=y} pour Phase 1a.3 (mixer limité 2 sources)
+  \item Root cause V2.7 \texttt{-110} : \texttt{PIPELINE\_DEMUX\_3} fantôme + guard \texttt{is\_same\_sched} SCHEDULE\_TIME\_DOMAIN mismatch. Pas "W\_PIPELINE manquant" (erreur V3).
+\end{itemize}
+
+% =======================================================================
+\section{Architecture cible (identique V3/V4)}
+
+\begin{center}
+\begin{tikzpicture}[node distance=4mm and 8mm, scale=0.85, transform shape]
+
+\node[hw] (mics) {8 mics\\4× TAC5212 ADC};
+\node[hw, below=14mm of mics] (hp) {HP/monitors\\4× TAC5212 DAC};
+
+\node[dsp, right=16mm of mics, minimum width=22mm] (effin) {Effets IN\\8 canaux};
+\node[pcm, right=10mm of effin] (cap) {SAI\_Capture\\ALSA 8ch cap};
+\node[dsp, below=5mm of effin] (rout) {Routing 8×8};
+
+\node[dsp, below=5mm of rout, minimum width=26mm] (mixer) {MIXER 8ch};
+\node[pcm, right=10mm of mixer] (play) {SAI\_Playback\\ALSA 8ch play};
+\node[usb, below=4mm of play] (ios) {iOS 2IN\\(USB gadget)};
+
+\node[dsp, below=6mm of mixer, minimum width=22mm] (effout) {Effets OUT\\8 canaux};
+\node[pcm, right=10mm of effout] (hpmon) {HP\_Monitor\\ALSA 8ch cap};
+\node[usb, below=4mm of hpmon] (iosout) {iOS 2OUT\\(USB gadget)};
+
+\draw[arrmulti] (mics.east) -- (effin.west);
+\draw[arrmulti] (effin.east) -- (cap.west);
+\draw[arrmulti] (effin.south) -- (rout.north);
+\draw[arrmulti] (rout.south) -- (mixer.north);
+\draw[arrmulti] (play.west) -- (mixer.east);
+\draw[arrmulti] (ios.west) -| node[above, font=\tiny, pos=0.3]{upmix 2→8} (mixer.south east);
+\draw[arrmulti] (mixer.south) -- (effout.north);
+\draw[arrmulti] (effout.east) -- (hpmon.west);
+\draw[arrmulti] (effout.south east) |- node[above, font=\tiny, pos=0.8]{downmix 8→2} (iosout.west);
+\draw[arrmulti] (effout.west) -| (hp.north);
+
+\end{tikzpicture}
+\end{center}
+
+% =======================================================================
+\section{Phasage V4.1}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Phase} & \textbf{Livrables} & \textbf{Objectif} \\
+\midrule
+\textbf{1a.1 MVP} & 2 pipelines 8ch autonomes, effets linked (mbdrc+pga+drc), pas de cross-pipeline & Prouver passthrough + effets, trigger stable sans \texttt{-110} \\
+1a.2 & Tap HP\_Monitor via \textbf{option co-scheduled cross-pipeline same sched\_comp} & Capture post-effets OUT pour NPU \\
+1a.3 & Routing 8$\times$8 + mixer 2 sources (mics routés + Playback) + injection SAI\_Playback & iOS absorbé via routing slots 0-1, pas via mixer \\
+1a.4 & USB gadget iOS 2IN/2OUT & iOS connectable \\
+2 & USB ASIO gadget 8IN/8OUT & DAW sur host externe \\
+3 & Passage linked $\to$ per-channel & 8 instances effets \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% =======================================================================
+\section{Phase 1a.1 MVP --- squelette m4 final V4.1}
+
+\subsection{Architecture}
+
+\begin{center}
+\begin{tikzpicture}[node distance=4mm and 8mm]
+
+\node[hw] (mics) {mics\\(SAI RX 8ch)};
+\node[dsp, right=10mm of mics, minimum width=40mm, fill=cdsp!20] (effin) {mbdrc 8ch → pga 8ch → drc 8ch};
+\node[pcm, right=10mm of effin] (cap) {SAI\_Capture\\ALSA cap 8ch};
+
+\node[pcm, below=22mm of mics] (play) {SAI\_Playback\\ALSA play 8ch};
+\node[dsp, right=10mm of play, minimum width=40mm, fill=cdsp!20] (effout) {mbdrc 8ch → pga 8ch → drc 8ch};
+\node[hw, right=10mm of effout] (hp) {SAI TX 8ch\\→ HP};
+
+\draw[arrmulti] (mics) -- (effin);
+\draw[arrmulti] (effin) -- (cap);
+\draw[arrmulti] (play) -- (effout);
+\draw[arrmulti] (effout) -- (hp);
+
+\node[below=1mm of effin, font=\itshape\small]{Effets IN (linked, 1 gain × 8ch)};
+\node[below=1mm of effout, font=\itshape\small]{Effets OUT (linked, 1 gain × 8ch)};
+
+\end{tikzpicture}
+\end{center}
+
+\subsection{\texttt{sof-imx8mp-tac5212-masterV42.m4} (top-level)}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+#
+# Topology V4.2 Phase 1a.1 MVP : console 8ch end-to-end, linked effects.
+# 2 pipelines 8ch autonomes, SCHEDULE_TIME_DOMAIN_DMA partout (12e arg).
+# Le scheduler widget W_PIPELINE est créé par pipe-dai-{capture,playback}.m4.
+#
+include(`utils.m4')
+include(`dai.m4')
+include(`pipeline.m4')
+include(`sai.m4')
+include(`pcm.m4')
+include(`buffer.m4')
+include(`common/tlv.m4')
+include(`sof/tokens.m4')
+include(`platform/imx/imx8.m4')
+
+# PIPE 1 : SAI7 RX 8ch -> mbdrc -> pga -> drc -> SAI_Capture host
+# 12e arg SCHEDULE_TIME_DOMAIN_DMA ajouté V4.2 (hygiène, cohérence DAI_ADD)
+PIPELINE_PCM_ADD(sof/sof-imx8mp-tac5212-pipe-effects-capture.m4,
+    1, 0, 8, s32le,
+    1000, 0, 0,
+    48000, 48000, 48000,
+    SCHEDULE_TIME_DOMAIN_DMA)
+
+# PIPE 6 : SAI_Playback host -> mbdrc -> pga -> drc -> SAI7 TX 8ch
+PIPELINE_PCM_ADD(sof/sof-imx8mp-tac5212-pipe-effects-playback.m4,
+    6, 1, 8, s32le,
+    1000, 0, 0,
+    48000, 48000, 48000,
+    SCHEDULE_TIME_DOMAIN_DMA)
+
+# DAI_ADD crée aussi le W_PIPELINE pour pipeline_id via pipe-dai-*.m4
+DAI_ADD(sof/pipe-dai-capture.m4,
+    1, SAI, 7, tac5212-hifi,
+    PIPELINE_SINK_1, 2, s32le,
+    1000, 0, 0, SCHEDULE_TIME_DOMAIN_DMA)
+
+DAI_ADD(sof/pipe-dai-playback.m4,
+    6, SAI, 7, tac5212-hifi,
+    PIPELINE_SOURCE_6, 2, s32le,
+    1000, 0, 0, SCHEDULE_TIME_DOMAIN_DMA)
+
+PCM_CAPTURE_ADD(SAI_Capture, 0, PIPELINE_PCM_1)
+PCM_PLAYBACK_ADD(SAI_Playback, 1, PIPELINE_PCM_6)
+
+DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
+    SAI_CONFIG(DSP_A, SAI_CLOCK(mclk, 12288000, codec_mclk_in),
+        SAI_CLOCK(bclk, 12288000, codec_consumer),
+        SAI_CLOCK(fsync, 48000, codec_consumer),
+        SAI_TDM(8, 32, 255, 255),
+        SAI_CONFIG_DATA(SAI, 7, 0)))
+\end{lstlisting}
+
+\subsection{\texttt{sof-imx8mp-tac5212-pipe-effects-capture.m4}}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# Capture 8ch : DAI SAI RX -> B3 -> MBDRC -> B2 -> PGA -> B1 -> DRC -> B0 -> HOST
+# Pattern direct : pipe-volume-capture.m4 + pipe-drc-enabled-capture.m4 + mbdrc.
+
+include(`utils.m4')
+include(`buffer.m4')
+include(`pcm.m4')
+include(`dai.m4')
+include(`bytecontrol.m4')
+include(`mixercontrol.m4')
+include(`pipeline.m4')
+include(`multiband_drc.m4')
+include(`pga.m4')
+include(`drc.m4')
+
+# PGA volume kcontrol (nom complet = "<PIPELINE_ID> Master Capture Volume")
+C_CONTROLMIXER(Master Capture Volume, PIPELINE_ID,
+    CONTROLMIXER_OPS(volsw,
+        256 binds the mixer control to volume get/put handlers, 256, 256),
+    CONTROLMIXER_MAX(, 32),
+    false,
+    CONTROLMIXER_TLV(TLV 32 steps from -64dB to 0dB for 2dB, vtlv_m64s2),
+    Channel register and shift for Front Left/Right,
+    VOLUME_CHANNEL_MAP)
+
+# PGA vendor tuples (pattern pipe-volume-capture.m4)
+define(DEF_PGA_TOKENS, concat(`pga_tokens_', PIPELINE_ID))
+define(DEF_PGA_CONF,   concat(`pga_conf_',   PIPELINE_ID))
+W_VENDORTUPLES(DEF_PGA_TOKENS, sof_volume_tokens,
+LIST(`      ', `SOF_TKN_VOLUME_RAMP_STEP_TYPE  "0"'
+             , `SOF_TKN_VOLUME_RAMP_STEP_MS    "250"'))
+W_DATA(DEF_PGA_CONF, DEF_PGA_TOKENS)
+
+# MBDRC byte control + blob BYPASS (multiband_drc_coef_passthrough.m4 existe upstream)
+define(MULTIBAND_DRC_priv,    concat(`mbdrc_bytes_',   PIPELINE_ID))
+define(MY_MULTIBAND_DRC_CTRL, concat(`mbdrc_control_', PIPELINE_ID))
+include(`multiband_drc_coef_passthrough.m4')
+C_CONTROLBYTES(MY_MULTIBAND_DRC_CTRL, PIPELINE_ID,
+    CONTROLBYTES_OPS(bytes,
+        258 binds the control to bytes get/put handlers, 258, 258),
+    CONTROLBYTES_EXTOPS(
+        258 binds the control to bytes get/put handlers, 258, 258),
+    , , ,
+    CONTROLBYTES_MAX(, 1024),
+    ,
+    MULTIBAND_DRC_priv)
+
+# DRC byte control + blob (default ACTIF : pour T5 bit-perfect, voir section T5)
+define(DRC_priv,    concat(`drc_bytes_',   PIPELINE_ID))
+define(MY_DRC_CTRL, concat(`drc_control_', PIPELINE_ID))
+include(`drc_coef_default.m4')
+C_CONTROLBYTES(MY_DRC_CTRL, PIPELINE_ID,
+    CONTROLBYTES_OPS(bytes,
+        258 binds the control to bytes get/put handlers, 258, 258),
+    CONTROLBYTES_EXTOPS(
+        258 binds the control to bytes get/put handlers, 258, 258),
+    , , ,
+    CONTROLBYTES_MAX(, 1024),
+    ,
+    DRC_priv)
+
+# Host PCM endpoint
+W_PCM_CAPTURE(PCM_ID, SAI Capture, 0, 2, SCHEDULE_CORE)
+
+# Widgets : mbdrc -> pga -> drc
+W_MULTIBAND_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+    LIST(`      ', "MY_MULTIBAND_DRC_CTRL"))
+W_PGA(0, PIPELINE_FORMAT, 2, DAI_PERIODS, DEF_PGA_CONF, SCHEDULE_CORE,
+    LIST(`      ', "PIPELINE_ID Master Capture Volume"))
+W_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+    LIST(`      ', "MY_DRC_CTRL"))
+
+# Buffers : B0 host side, B3 DAI side
+W_BUFFER(0, COMP_BUFFER_SIZE(2,
+    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_HOST_MEM_CAP)
+W_BUFFER(1, COMP_BUFFER_SIZE(2,
+    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_COMP_MEM_CAP)
+W_BUFFER(2, COMP_BUFFER_SIZE(2,
+    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_COMP_MEM_CAP)
+W_BUFFER(3, COMP_BUFFER_SIZE(DAI_PERIODS,
+    COMP_SAMPLE_SIZE(DAI_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_DAI_MEM_CAP)
+
+# PAS DE W_PIPELINE ici (bug V4 B2).
+# Scheduler widget fourni par pipe-dai-capture.m4 lors de DAI_ADD.
+
+# Graph DAPM : capture = flux DAI -> HOST, dapm(sink, source)
+P_GRAPH(pipe-effects-capture, PIPELINE_ID,
+    LIST(`      ',
+    `dapm(N_PCMC(PCM_ID), N_BUFFER(0))',
+    `dapm(N_BUFFER(0), N_DRC(0))',
+    `dapm(N_DRC(0), N_BUFFER(1))',
+    `dapm(N_BUFFER(1), N_PGA(0))',
+    `dapm(N_PGA(0), N_BUFFER(2))',
+    `dapm(N_BUFFER(2), N_MULTIBAND_DRC(0))',
+    `dapm(N_MULTIBAND_DRC(0), N_BUFFER(3))'))
+
+# Exports pour DAI_ADD
+indir(`define', concat(`PIPELINE_SINK_', PIPELINE_ID), N_BUFFER(3))
+indir(`define', concat(`PIPELINE_PCM_',  PIPELINE_ID), SAI Capture PCM_ID)
+
+PCM_CAPABILITIES(SAI Capture PCM_ID, CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT),
+    PCM_MIN_RATE, PCM_MAX_RATE, 2, PIPELINE_CHANNELS, 2, 16,
+    192, 16384, 65536, 65536)
+
+undefine(`MY_MULTIBAND_DRC_CTRL') undefine(`MULTIBAND_DRC_priv')
+undefine(`MY_DRC_CTRL') undefine(`DRC_priv')
+undefine(`DEF_PGA_TOKENS') undefine(`DEF_PGA_CONF')
+\end{lstlisting}
+
+\subsection{\texttt{sof-imx8mp-tac5212-pipe-effects-playback.m4}}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# Playback 8ch : HOST -> B0 -> MBDRC -> B1 -> PGA -> B2 -> DRC -> B3 -> DAI SAI TX
+# Pattern direct : pipe-multiband-drc-playback.m4 + pga + drc chainage.
+
+include(`utils.m4')
+include(`buffer.m4')
+include(`pcm.m4')
+include(`dai.m4')
+include(`bytecontrol.m4')
+include(`mixercontrol.m4')
+include(`pipeline.m4')
+include(`multiband_drc.m4')
+include(`pga.m4')
+include(`drc.m4')
+
+C_CONTROLMIXER(Master Playback Volume, PIPELINE_ID,
+    CONTROLMIXER_OPS(volsw,
+        256 binds the mixer control to volume get/put handlers, 256, 256),
+    CONTROLMIXER_MAX(, 32),
+    false,
+    CONTROLMIXER_TLV(TLV 32 steps from -64dB to 0dB for 2dB, vtlv_m64s2),
+    Channel register and shift for Front Left/Right,
+    VOLUME_CHANNEL_MAP)
+
+define(DEF_PGA_TOKENS, concat(`pga_tokens_', PIPELINE_ID))
+define(DEF_PGA_CONF,   concat(`pga_conf_',   PIPELINE_ID))
+W_VENDORTUPLES(DEF_PGA_TOKENS, sof_volume_tokens,
+LIST(`      ', `SOF_TKN_VOLUME_RAMP_STEP_TYPE  "2"'
+             , `SOF_TKN_VOLUME_RAMP_STEP_MS    "20"'))
+W_DATA(DEF_PGA_CONF, DEF_PGA_TOKENS)
+
+# MBDRC bypass (blob passthrough upstream)
+define(MULTIBAND_DRC_priv,    concat(`mbdrc_bytes_',   PIPELINE_ID))
+define(MY_MULTIBAND_DRC_CTRL, concat(`mbdrc_control_', PIPELINE_ID))
+include(`multiband_drc_coef_passthrough.m4')
+C_CONTROLBYTES(MY_MULTIBAND_DRC_CTRL, PIPELINE_ID,
+    CONTROLBYTES_OPS(bytes,
+        258 binds the control to bytes get/put handlers, 258, 258),
+    CONTROLBYTES_EXTOPS(
+        258 binds the control to bytes get/put handlers, 258, 258),
+    , , , CONTROLBYTES_MAX(, 1024), ,
+    MULTIBAND_DRC_priv)
+
+# DRC default blob (actif, voir section T5)
+define(DRC_priv,    concat(`drc_bytes_',   PIPELINE_ID))
+define(MY_DRC_CTRL, concat(`drc_control_', PIPELINE_ID))
+include(`drc_coef_default.m4')
+C_CONTROLBYTES(MY_DRC_CTRL, PIPELINE_ID,
+    CONTROLBYTES_OPS(bytes,
+        258 binds the control to bytes get/put handlers, 258, 258),
+    CONTROLBYTES_EXTOPS(
+        258 binds the control to bytes get/put handlers, 258, 258),
+    , , , CONTROLBYTES_MAX(, 1024), ,
+    DRC_priv)
+
+# Host playback endpoint
+W_PCM_PLAYBACK(PCM_ID, SAI Playback, 2, 0, SCHEDULE_CORE)
+
+# Widgets : mbdrc -> pga (W_PGA periods inversés pour playback) -> drc
+W_MULTIBAND_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+    LIST(`      ', "MY_MULTIBAND_DRC_CTRL"))
+W_PGA(0, PIPELINE_FORMAT, DAI_PERIODS, 2, DEF_PGA_CONF, SCHEDULE_CORE,
+    LIST(`      ', "PIPELINE_ID Master Playback Volume"))
+W_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+    LIST(`      ', "MY_DRC_CTRL"))
+
+# Buffers : B0 host side, B3 DAI side
+W_BUFFER(0, COMP_BUFFER_SIZE(2,
+    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_HOST_MEM_CAP)
+W_BUFFER(1, COMP_BUFFER_SIZE(2,
+    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_COMP_MEM_CAP)
+W_BUFFER(2, COMP_BUFFER_SIZE(2,
+    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_COMP_MEM_CAP)
+W_BUFFER(3, COMP_BUFFER_SIZE(DAI_PERIODS,
+    COMP_SAMPLE_SIZE(DAI_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_DAI_MEM_CAP)
+
+# PAS DE W_PIPELINE ici (scheduler fourni par pipe-dai-playback.m4)
+
+# Graph DAPM : playback = flux HOST -> DAI, dapm(sink, source)
+P_GRAPH(pipe-effects-playback, PIPELINE_ID,
+    LIST(`      ',
+    `dapm(N_BUFFER(0), N_PCMP(PCM_ID))',
+    `dapm(N_MULTIBAND_DRC(0), N_BUFFER(0))',
+    `dapm(N_BUFFER(1), N_MULTIBAND_DRC(0))',
+    `dapm(N_PGA(0), N_BUFFER(1))',
+    `dapm(N_BUFFER(2), N_PGA(0))',
+    `dapm(N_DRC(0), N_BUFFER(2))',
+    `dapm(N_BUFFER(3), N_DRC(0))'))
+
+# Exports pour DAI_ADD
+indir(`define', concat(`PIPELINE_SOURCE_', PIPELINE_ID), N_BUFFER(3))
+indir(`define', concat(`PIPELINE_PCM_',    PIPELINE_ID), SAI Playback PCM_ID)
+
+PCM_CAPABILITIES(SAI Playback PCM_ID, CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT),
+    PCM_MIN_RATE, PCM_MAX_RATE, 2, PIPELINE_CHANNELS, 2, 16,
+    192, 16384, 65536, 65536)
+
+undefine(`MY_MULTIBAND_DRC_CTRL') undefine(`MULTIBAND_DRC_priv')
+undefine(`MY_DRC_CTRL') undefine(`DRC_priv')
+undefine(`DEF_PGA_TOKENS') undefine(`DEF_PGA_CONF')
+\end{lstlisting}
+
+\subsection{Board config Kconfig (inchangé V4)}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+CONFIG_IMX8M=y
+CONFIG_HAVE_AGENT=n
+CONFIG_FORMAT_CONVERT_HIFI3=n
+CONFIG_KPB_FORCE_COPY_TYPE_NORMAL=n
+
+# Phase 1a.1 MVP
+CONFIG_COMP_DRC=y
+CONFIG_COMP_VOLUME=y
+CONFIG_COMP_CROSSOVER=y
+CONFIG_COMP_MULTIBAND_DRC=y
+CONFIG_COMP_MUX=y
+
+# Ajouté V4 pour Phase 1a.3
+CONFIG_COMP_MIXER=y
+\end{lstlisting}
+
+% =======================================================================
+\section{Test T5 bit-perfect --- stratégie T5b recommandée}\label{sec:t5}
+
+\textbf{Précision V4.2} : \texttt{drc.h:26} définit \texttt{CONFIG\_DRC\_MAX\_PRE\_DELAY\_FRAMES = 512} et \texttt{drc.h:29} définit \texttt{DRC\_DEFAULT\_PRE\_DELAY\_FRAMES = CONFIG\_DRC\_MAX\_PRE\_DELAY\_FRAMES >> 1 = 256} frames. Le pre-delay effectif par défaut = 256 frames ($\sim$5.3 ms @48k) mais le max configurable est 512.
+
+Même avec \texttt{enabled=0} côté DRC, la fonction \texttt{drc\_s32\_default} (\texttt{drc\_generic.c:744-750}) appelle \texttt{drc\_delay\_input\_sample\_s32} qui applique le pre-delay. La fonction zero-latency \texttt{drc\_default\_pass = audio\_stream\_copy} (\texttt{drc\_generic.c:473}) n'est sélectionnée \textbf{que si \texttt{cd->config == NULL}} (\texttt{drc.c:362}). Dès qu'un blob est chargé, le pre-delay est inévitable.
+
+Trois stratégies T5 :
+
+\begin{enumerate}[leftmargin=*, itemsep=1pt]
+  \item \textbf{T5a compensé} : loopback HW, null test avec compensation de latence ($\sim$256 frames DRC + buffers). Tolérance $\pm$1 LSB. Faisable, pragmatique.
+  \item \textbf{T5b sans DRC \textcolor{cok}{(RECOMMANDÉ V4.2)}} : topology variante \texttt{sof-imx8mp-tac5212-masterV42-T5.m4} qui omet \texttt{W\_DRC} et le buffer associé. Graph réduit : \texttt{DAI RX $\to$ B2 $\to$ MBDRC $\to$ B1 $\to$ PGA $\to$ B0 $\to$ HOST}. Null test sample-perfect atteignable (MBDRC en passthrough blob + PGA bit-perfect à \texttt{VOL\_ZERO\_DB=0x10000}). \textbf{Seule voie sample-exact} confirmée par les 6 workers.
+  \item \textbf{T5c blob patché} : créer localement un \texttt{drc\_coef\_zerolatency.m4} avec \texttt{enabled=0} ET \texttt{pre\_delay\_time=0}. Mais \texttt{drc\_set\_pre\_delay\_time()} clampe à \texttt{DRC\_DIVISION\_FRAMES=32} min $\to$ delay minimum 32 frames garanti. Non sample-exact. Abandonné.
+\end{enumerate}
+
+\textbf{Choix V4.2} : \textbf{T5b} pour validation bit-perfect stricte de la gate. La topology MVP principale (\texttt{masterV42.m4}) reste avec DRC actif pour les tests T1-T4 (trigger, full-duplex, contrôles).
+
+% =======================================================================
+\section{Tests Phase 1a.1 MVP V4.2}
+
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item \textbf{T0 Compile} : \texttt{m4 -I. -I m4 -I sof -I common -I platform/common common/abi.m4 masterV42.m4 | alsatplg -c - -o masterV42.tplg} sans erreur, aucun widget orphelin. \textbf{Gate obligatoire} avant deploy.
+  \item \textbf{T0a Widget count} : \texttt{alsatplg --dump masterV42.tplg | grep -c "type: scheduler"} doit retourner \textbf{2} (preuve : 1 scheduler par pipeline, créé par pipe-dai-*.m4). Total $\sim$22 widgets.
+  \item \textbf{T1 Load} : kernel charge sans \texttt{-22} ni \texttt{-110}. Carte \texttt{softac5212tdm} + 2 PCMs visibles.
+  \item \textbf{T2 Playback} : \texttt{aplay -D plughw:softac5212tdm,1 -c 8 -f S32\_LE tone.wav}.
+  \item \textbf{T3 Capture} : \texttt{arecord -D plughw:softac5212tdm,0 -c 8 -f S32\_LE -d 3 mics.wav}.
+  \item \textbf{T4 Full-duplex} : T2 + T3 simultanés 60 s, pas de xrun.
+  \item \textbf{T5 Bit-perfect} : stratégie \textbf{T5b} avec topology variante \texttt{masterV42-T5.m4} (sans \texttt{W\_DRC}). Loopback HW TAC OUT $\to$ TAC IN, null test via \texttt{sox -m -v 1 in.wav -v -1 rec.wav null} $\to$ attendu $\leq 1$ LSB.
+  \item \textbf{T6 Contrôles} : \texttt{amixer controls | grep -E "Master|MBDRC|DRC"} liste "1 Master Capture Volume", "6 Master Playback Volume", 4 byte controls MBDRC/DRC. \texttt{amixer cset name='1 Master Capture Volume' 32} change le gain sans glitch.
+  \item \textbf{T7 Charge CPU} : lecture via \texttt{sof-logger -t /etc/sof/sof-logger.toml -f /lib/firmware/imx/sof/sof-imx8m.ldc} ou debugfs \texttt{/sys/kernel/debug/sof/etrace} des cycles \texttt{kcps} ou \texttt{cpc}. Attendu $<$ 30\%.
+\end{enumerate}
+
+% =======================================================================
+\section{Phase 1a.2 --- stratégie tap HP\_Monitor}
+
+L'investigation V4 a confirmé : \textbf{aucun exemple upstream} de \texttt{W\_PCM\_CAPTURE} comme sink d'un widget dans une pipeline PLAYBACK. Le framework IPC3 ne l'interdit pas explicitement (\texttt{host\_legacy.c} détermine direction par widget type, pas par position dans la chaîne), mais le pattern est non testé.
+
+\textbf{Stratégie V4.2 retenue} : \textbf{option co-scheduled cross-pipeline same sched\_comp} (pattern \texttt{sof-imx8mp-tac5212-masterlite.m4:49-56} confirmé upstream avec \texttt{PIPELINE\_SCHED\_COMP\_3}).
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Pipeline playback (PIPE 6) enrichie : \texttt{W\_MUXDEMUX} inséré en fin de chaîne effets alimente 2 sinks : B3 (vers DAI TX) et B4 (vers pipeline capture HP\_Monitor). Export \texttt{PIPELINE\_DEMUX\_6 = N\_MUXDEMUX(0)}.
+  \item Pipeline HP\_Monitor (PIPE 7) : pipeline capture avec 13e arg \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} (exporté par \texttt{pipe-dai-playback.m4:24}). Le \texttt{sched\_comp = N\_DAI\_OUT(6)} est partagé $\to$ guard \texttt{is\_same\_sched} (\texttt{pipeline-stream.c:505}) passe.
+  \item DAPM cross-pipeline : \texttt{SectionGraph} top-level avec \texttt{dapm(PIPELINE\_SINK\_7, PIPELINE\_DEMUX\_6)}. Le widget \texttt{PIPELINE\_DEMUX\_6} doit être \textbf{explicitement exporté} par le fichier playback (bug V2.7 à ne pas reproduire : \texttt{masterlite.m4:88} référencait \texttt{PIPELINE\_DEMUX\_3} non-exporté).
+\end{itemize}
+
+Fallback : loopback HW (câble TAC OUT $\to$ TAC IN) si le pattern cross-pipeline tap reste instable.
+
+% =======================================================================
+\section{Livrables Phase 1a.1 MVP V4.2}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \texttt{sof/tools/topology/topology1/sof-imx8mp-tac5212-masterV42.m4} (top-level)
+  \item \texttt{sof/tools/topology/topology1/sof/sof-imx8mp-tac5212-pipe-effects-capture.m4}
+  \item \texttt{sof/tools/topology/topology1/sof/sof-imx8mp-tac5212-pipe-effects-playback.m4}
+  \item \texttt{sof/tools/topology/topology1/sof-imx8mp-tac5212-masterV42-T5.m4} (variante T5 sans \texttt{W\_DRC})
+  \item Patch \texttt{sof/app/boards/imx8mp\_evk\_mimx8ml8\_adsp.conf} : \texttt{+CONFIG\_COMP\_MIXER=y}
+  \item Entrée \texttt{sof/tools/topology/topology1/CMakeLists.txt} \texttt{TPLGS} : ajouter \texttt{"sof-imx8mp-tac5212-masterV42;sof-imx8mp-tac5212-masterV42;-DSAI\_INDEX=7"} (ou compile via recipe Yocto meta-local directement)
+  \item \texttt{meta-local/recipes-kernel/linux/files/test-phase1a1-mvp.sh} (tests T0--T7)
+  \item Suppression des fichiers V2.7 buggés : \texttt{masterlite.m4}, \texttt{pipe-masterchain.m4}, \texttt{pipe-mastertap.m4}, \texttt{pipe-sai-merge.m4}, \texttt{mux\_route\_sai\_merge.m4}, \texttt{demux\_route\_default.m4}
+\end{itemize}
+
+% =======================================================================
+\section{Protocole}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Aucune modification source SOF sans \texttt{critic\_analyze} préalable (mode DOUX, fenêtre 2000 s post-analyze).
+  \item Un changement = un commit = validation utilisateur.
+  \item Gate \texttt{m4 | alsatplg} OBLIGATOIRE avant tout deploy sur board.
+  \item Si T0 échoue, retour à \texttt{critic\_analyze} avec l'erreur exacte \textbf{avant} de modifier le squelette.
+  \item Backup kernel+firmware baseline avant premier deploy (rescue).
+\end{itemize}
+
+\end{document}
