@@ -1,0 +1,525 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2cm]{geometry}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{siunitx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{pifont}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage[colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!60!black]{hyperref}
+
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, calc, fit, backgrounds}
+
+\definecolor{chw}{HTML}{B71C1C}
+\definecolor{cdsp}{HTML}{1565C0}
+\definecolor{ca53}{HTML}{2E7D32}
+\definecolor{cusb}{HTML}{6A1B9A}
+\definecolor{cnpu}{HTML}{E65100}
+\definecolor{cfx}{HTML}{00838F}
+\definecolor{cbuf}{HTML}{FFB300}
+\definecolor{ccomp}{HTML}{455A64}
+\definecolor{codebg}{HTML}{F5F5F5}
+\definecolor{cbug}{HTML}{C62828}
+\definecolor{cok}{HTML}{2E7D32}
+
+\tikzset{
+  hw/.style={draw, fill=chw!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  dsp/.style={draw, fill=cdsp!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  a53/.style={draw, fill=ca53!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  pcm/.style={draw, fill=yellow!30, font=\sffamily\scriptsize, minimum height=5mm, rounded corners=1pt, align=center},
+  fx/.style={draw, fill=cfx!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  buf/.style={draw, fill=cbuf!30, rounded corners=2pt, font=\sffamily\scriptsize, align=center, minimum height=6mm, inner sep=2pt},
+  demux/.style={draw, fill=cnpu!30, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  npu/.style={draw, fill=cnpu!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+  arrmulti/.style={-{Stealth[length=2mm]}, line width=1.2pt},
+  arrtap/.style={-{Stealth[length=2mm]}, line width=1.2pt, dashed, draw=cnpu}
+}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!30},
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  breaklines=true,
+  columns=flexible,
+  keepspaces=true,
+  tabsize=2,
+  inputencoding=utf8,
+  extendedchars=true,
+  literate={é}{{\'e}}1 {è}{{\`e}}1 {à}{{\`a}}1 {ê}{{\^e}}1 {â}{{\^a}}1 {ô}{{\^o}}1 {ù}{{\`u}}1 {û}{{\^u}}1 {î}{{\^\i}}1 {ï}{{\"\i}}1 {ç}{{\c c}}1 {É}{{\'E}}1 {È}{{\`E}}1 {À}{{\`A}}1 {→}{{$\to$}}1 {↓}{{$\downarrow$}}1 {←}{{$\leftarrow$}}1 {✓}{{\checkmark}}1 {✗}{{\texttimes}}1
+}
+
+\title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
+  \Large Spécification Phase 1a.2 --- \textbf{V1.5}\\[4pt]
+  \large Tap HP\_Monitor post-effets OUT\\
+  \normalsize Patch Device Tree (snd-soc-dummy BE DAI) + topology PIPE 7 autonome}
+\author{Document de référence technique}
+\date{2026-04-24 --- rev V1.5 (final)}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\clearpage
+
+% =======================================================================
+\section{Historique V1.2 $\to$ V1.5}
+
+\subsection{V1.2 : échec runtime}
+
+V1.2 testée sur board a échoué au runtime avec deux bugs distincts :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \texttt{aplay SAI\_Playback} : -22 EINVAL trigger START (IPC 0x60040000). Cause racine firmware = asymétrie IPC3 entre \texttt{pipeline\_comp\_prepare} (filtre par direction via \texttt{comp\_same\_dir}) et \texttt{pipeline\_comp\_trigger} (filtre par sched via \texttt{is\_same\_sched}). Piggyback cross-direction avec sched\_comp partagé de type DAI = PIPE 7 jamais prepared mais reçoit trigger $\to$ EINVAL.
+  \item \texttt{arecord HP\_Monitor} : "no backend DAIs enabled for HP\_Monitor". Cause = ASoC DPCM kernel ne trouve pas de BE DAI capture pour le FE HP\_Monitor (PIPE 7 dailess, chaîne DAPM remonte vers DAI playback).
+\end{itemize}
+
+\subsection{V1.5\_glm (candidate m4-only) : rejetée par investigation}
+
+Investigation V1.5\_glm (6 workers, job 87bb9b06, 5/6 avec rapport complet) a testé l'approche GLM Option A : PIPE 7 autonome TIMER + \texttt{VIRTUAL\_WIDGET(out\_drv)} + \texttt{PCM\_DUPLEX\_ADD}. \textbf{Verdict unanime NO-GO} (gemini, kimi, qwen, minimax, claude-code). Cause : \texttt{VIRTUAL\_WIDGET(out\_drv)} n'est PAS un BE DAI pour ASoC DPCM. Le framework (\texttt{sound/soc/soc-pcm.c:dpcm\_end\_walk\_at\_be}) n'accepte que les widgets \texttt{dai\_in/dai\_out/aif\_in/aif\_out} bound à un \texttt{snd\_soc\_dai\_link} via \texttt{snd\_soc\_dapm\_connect\_dai\_link\_widgets}. Le \texttt{out\_drv} n'est jamais bound à un BE. Le bug "no backend DAIs" persiste donc en V1.5\_glm.
+
+\subsection{V1.5 finale : patch Device Tree + topology}
+
+V1.5 adopte l'approche convergente des 5 workers : ajouter un \textbf{BE DAI dummy} côté Device Tree/machine driver (\texttt{snd-soc-dummy}), puis lier PIPE 7 à ce BE via \texttt{DAI\_ADD}. Cette approche est propre et attestée par la documentation ASoC DPCM.
+
+% =======================================================================
+\section{Architecture V1.5}
+
+\subsection{PCMs ALSA exposés (inchangé nomenclature utilisateur)}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Device} & \textbf{Direction} & \textbf{Rôle} \\
+\midrule
+\texttt{softac5212tdm} device 0 \texttt{IN\_Capture} & capture 8ch & Les 8 mics TAC5212 (après effets IN) \\
+\texttt{softac5212tdm} device 1 \texttt{OUT\_Monitor} & duplex 8ch & Playback : DAW $\to$ effets OUT $\to$ HP physiques \newline Capture : tap post-effets OUT pour NPU \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Pipelines SOF (3 au total)}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{PIPE 1} — Mics capture : SAI7 RX $\to$ mbdrc $\to$ pga $\to$ drc $\to$ PCM host \texttt{IN\_Capture}. \textbf{DAI réel SAI7} (inchangé Phase 1a.1).
+  \item \textbf{PIPE 6} — Playback : PCM host \texttt{OUT\_Monitor} $\to$ mbdrc $\to$ pga $\to$ drc $\to$ MUXDEMUX $\to$ SAI7 TX. \textbf{DAI réel SAI7 TX} + MUXDEMUX tap.
+  \item \textbf{PIPE 7} — HP\_Monitor tap capture : (cross-pipeline via MUXDEMUX de PIPE 6) $\to$ B0 $\to$ PCM host \texttt{OUT\_Monitor} (capture). \textbf{DAI dummy HP\_Monitor Tap} (nouveau V1.5).
+\end{itemize}
+
+\subsection{Modifications V1.5 vs V1.2 (4 couches)}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Couche} & \textbf{Fichier} & \textbf{Modification} \\
+\midrule
+Device Tree & \texttt{0003-imx8mp-evk-tac5212-tdm.patch} & Ajout d'un second \texttt{dai-link} \texttt{hp-monitor-tap} avec CPU DAI = \texttt{snd-soc-dummy}, capture-only, \texttt{dpcm\_capture=1} \\
+Machine driver & \texttt{fsl,imx-audio-card} ou \texttt{simple-audio-card} & Déclaration du BE DAI virtuel (snd-soc-dummy déjà présent dans le kernel, uniquement déclaration DT requise en cas idéal) \\
+Topology top-level & \texttt{masterV42-hpmon.m4} & Ajout \texttt{DAI\_ADD PIPE 7 DUMMY hp-monitor-tap} + \texttt{DAI\_CONFIG} dummy. Remplacement 3 PCMs $\to$ 2 PCMs avec PCM\_DUPLEX\_ADD (IN\_Capture + OUT\_Monitor duplex) \\
+Topology PIPE 7 & \texttt{pipe-hp-monitor-capture.m4} & Retrait du \texttt{VIRTUAL\_WIDGET out\_drv} (inutile maintenant). \texttt{W\_PIPELINE} créé automatiquement par \texttt{pipe-dai-capture.m4} via \texttt{DAI\_ADD}. Export \texttt{PIPELINE\_SINK\_7 = N\_BUFFER(0)} pour DAI + cross-pipeline \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Flux data et scheduling}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{Data} : MUXDEMUX de PIPE 6 copie le signal post-DRC vers 2 sinks : B4 intra (\texttt{SAI7.OUT} $\to$ HP physiques) + BUF7.0 cross-pipeline via \texttt{SectionGraph dapm(PIPELINE\_SINK\_7, PIPELINE\_DEMUX\_6)}.
+  \item \textbf{Scheduling} : PIPE 7 a maintenant son propre DAI (dummy) et donc son propre sched\_comp = \texttt{N\_DAI\_IN(7)}. \texttt{is\_same\_sched(PIPE 6, PIPE 7) = false} $\to$ trigger ne traverse plus cross-pipeline $\to$ bug -22 V1.2 neutralisé.
+  \item \textbf{BE DAI binding ASoC} : le FE capture \texttt{OUT\_Monitor} DPCM trouve le BE DAI \texttt{hp-monitor-tap} (dummy) via \texttt{snd\_soc\_dapm\_connect\_dai\_link\_widgets}. Bug "no backend DAIs" V1.2 résolu.
+\end{itemize}
+
+\subsection{Procédure de test (2 phases)}
+
+\textbf{Phase 1 — Modification DTB live sur la board} (itération rapide) :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \texttt{dtc -O dts} pour décompiler le DTB courant
+  \item Ajouter le noeud \texttt{hp-monitor-tap} + dummy DAI
+  \item \texttt{dtc -O dtb} pour recompiler
+  \item Flash nouveau DTB + topology + reboot
+  \item Tests T1-T5 (voir section tests)
+\end{itemize}
+
+\textbf{Phase 2 — Patch Yocto} (si phase 1 validée) :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Créer \texttt{meta-local/recipes-kernel/linux/files/0005-imx8mp-debix-hp-monitor-tap.patch}
+  \item Intégrer dans \texttt{linux-imx\_\%.bbappend}
+  \item \texttt{bitbake linux-imx -c cleansstate \&\& bitbake imx-image-full}
+  \item Commit + push
+\end{itemize}
+
+\subsection{Tests validation}
+
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item \textbf{T1} : \texttt{aplay -D plughw:softac5212tdm,1 tone.wav} $\to$ playback HP physiques (comme V4.2)
+  \item \textbf{T2} : \texttt{arecord -D plughw:softac5212tdm,0 -d 3 mics.wav} $\to$ 8 mics captures (inchangé)
+  \item \textbf{T3 (KEY)} : \texttt{arecord -D plughw:softac5212tdm,1 -d 3 hpmon\_solo.wav} \textbf{sans} aplay $\to$ doit ouvrir sans "no backend DAIs enabled" (valide binding BE dummy). Capture silencieuse (rien n'alimente le MUXDEMUX), c'est OK.
+  \item \textbf{T4} : \texttt{aplay -D plughw:softac5212tdm,1 tone.wav \&} + \texttt{arecord -D plughw:softac5212tdm,1 -d 5 hpmon\_with\_play.wav} $\to$ capture contient le signal post-effets
+  \item \textbf{T5} : Triplex 60s : aplay OUT\_Monitor + arecord IN\_Capture + arecord OUT\_Monitor simultanés $\to$ pas de xrun ni -22
+  \item \textbf{T6} : Null-test bit-perfect : comparer \texttt{tone.wav} original vs \texttt{hpmon\_with\_play.wav} avec MBDRC/DRC désactivés $\to$ identique à latence près
+\end{enumerate}
+
+% =======================================================================
+\section{Schéma fonctionnel V1.5}
+
+\begin{center}
+\begin{tikzpicture}[node distance=3mm and 7mm]
+
+\node[pcm] (incap)  {IN\_Capture\\ALSA cap 8ch\\dev 0};
+\node[pcm, below=14mm of incap] (outmon) {OUT\_Monitor\\ALSA duplex 8ch\\dev 1};
+
+\node[buf, right=7mm of incap] (b1h) {B1\\host};
+\node[dsp, right=5mm of b1h] (inmbdrc) {MBDRC};
+\node[dsp, right=5mm of inmbdrc] (inpga) {PGA};
+\node[dsp, right=5mm of inpga] (indrc) {DRC};
+\node[buf, right=5mm of indrc] (b1d) {B};
+\node[hw, right=5mm of b1d] (sairx) {SAI7 RX\\TDM 8ch\\(mics)};
+
+\node[buf, right=7mm of outmon] (b6h) {B0\\host};
+\node[dsp, right=5mm of b6h] (outmbdrc) {MBDRC};
+\node[dsp, right=5mm of outmbdrc] (outpga) {PGA};
+\node[dsp, right=5mm of outpga] (outdrc) {DRC};
+\node[demux, right=5mm of outdrc] (mux) {MUX\\DEMUX};
+
+\node[buf, right=7mm of mux, yshift=6mm] (b64) {B4};
+\node[hw, right=4mm of b64] (saitx) {SAI7 TX\\→ HP};
+
+\node[buf, right=7mm of mux, yshift=-6mm] (b70) {BUF7.0};
+\node[a53, right=4mm of b70] (dummy) {DAI dummy\\hp-monitor-tap\\(snd-soc-dummy)};
+\node[pcm, below=3mm of dummy, align=center] (cap2) {OUT\_Monitor\\capture side};
+
+\draw[arr] (sairx) -- (b1d);
+\draw[arr] (b1d) -- (indrc);
+\draw[arr] (indrc) -- (inpga);
+\draw[arr] (inpga) -- (inmbdrc);
+\draw[arr] (inmbdrc) -- (b1h);
+\draw[arr] (b1h) -- (incap);
+
+\draw[arr] (outmon) -- (b6h);
+\draw[arr] (b6h) -- (outmbdrc);
+\draw[arr] (outmbdrc) -- (outpga);
+\draw[arr] (outpga) -- (outdrc);
+\draw[arr] (outdrc) -- (mux);
+\draw[arrmulti] (mux) -| (b64);
+\draw[arr] (b64) -- (saitx);
+\draw[arrtap] (mux) -| (b70);
+\draw[arr] (b70) -- (dummy);
+\draw[arr] (dummy) -- (cap2);
+
+\node[below=20mm of outmbdrc, font=\itshape\small, align=center] {PIPE 6 playback effets OUT + MUXDEMUX tap (SAI7 TX sched\_comp)};
+\node[above=2mm of inmbdrc, font=\itshape\small, align=center] {PIPE 1 capture mics + effets IN (SAI7 RX sched\_comp)};
+\node[below=4mm of dummy, font=\itshape\small, align=center] {PIPE 7 capture tap\\DAI dummy sched\_comp\\(is\_same\_sched=false vs PIPE 6)};
+
+\end{tikzpicture}
+\end{center}
+
+% =======================================================================
+\section{Patch Device Tree}
+
+\subsection{Fichier patché}
+
+\texttt{arch/arm64/boot/dts/freescale/imx8mp-debix-model-a.dts} (ou le DTS utilisé par la machine actuelle). Le node \texttt{sound-tac5212} existant possède déjà un dai-link \texttt{tac5212-hifi} lié à SAI7. V1.5 ajoute un second dai-link virtuel pour le tap HP\_Monitor.
+
+\subsection{Diff attendu}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+// Avant (V4.2) : un seul dai-link tac5212-hifi -> SAI7 + TAC codec
+sound-tac5212 {
+    compatible = "simple-audio-card";
+    simple-audio-card,name = "sof-tac5212-tdm";
+    simple-audio-card,dai-link {
+        format = "dsp_a";
+        cpu    { sound-dai = <&sai7>; };
+        codec  { sound-dai = <&tac5212_0>; };
+    };
+};
+
+// Apres (V1.5) : ajout d'un second dai-link virtuel hp-monitor-tap
+// backed by snd-soc-dummy (kernel built-in at sound/soc/generic/simple-card.c)
+sound-tac5212 {
+    compatible = "simple-audio-card";
+    simple-audio-card,name = "sof-tac5212-tdm";
+
+    simple-audio-card,dai-link@0 {
+        reg = <0>;
+        format = "dsp_a";
+        cpu    { sound-dai = <&sai7>; };
+        codec  { sound-dai = <&tac5212_0>; };
+    };
+
+    simple-audio-card,dai-link@1 {
+        reg = <1>;
+        link-name = "hp-monitor-tap";
+        format = "dsp_a";
+        cpu    { sound-dai = <&hp_monitor_dummy>; };
+        codec  { sound-dai = <&hp_monitor_dummy>; };
+    };
+};
+
+hp_monitor_dummy: hp-monitor-dummy {
+    compatible = "linux,snd-soc-dummy";
+    #sound-dai-cells = <0>;
+};
+\end{lstlisting}
+
+\textbf{Note importante} : \texttt{simple-audio-card} ne supporte qu'un seul dai-link par node. Si c'est limitant, on bascule sur \texttt{fsl,imx-audio-card} ou \texttt{audio-graph-card} (multi-link natif). La vérification se fait via le binding Documentation kernel : \texttt{Documentation/devicetree/bindings/sound/simple-card.yaml}.
+
+Alternative la plus propre : \textbf{deux nodes séparés} \texttt{sound-tac5212} + \texttt{sound-hp-monitor}, chacun \texttt{simple-audio-card} avec 1 dai-link.
+
+\subsection{Procédure live sur la board (Phase 1)}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# Sur la board 192.168.0.9
+cd /boot
+cp imx8mp-debix-model-a.dtb imx8mp-debix-model-a.dtb.bak-v42
+
+# Decompilation
+dtc -I dtb -O dts -o /tmp/current.dts imx8mp-debix-model-a.dtb
+
+# Edition manuelle de /tmp/current.dts : ajout du dai-link hp-monitor-tap
+# et du node hp_monitor_dummy
+
+# Recompilation
+dtc -I dts -O dtb -o /boot/imx8mp-debix-model-a.dtb /tmp/current.dts
+
+# Reboot
+sync; reboot
+\end{lstlisting}
+
+\subsection{Intégration Yocto (Phase 2, si tests OK)}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Créer \texttt{meta-local/recipes-kernel/linux/files/0005-imx8mp-debix-hp-monitor-tap.patch} généré à partir du DTS modifié.
+  \item Ajouter le patch dans \texttt{linux-imx\_\%.bbappend} : \texttt{SRC\_URI += "file://0005-imx8mp-debix-hp-monitor-tap.patch"}.
+  \item \texttt{bitbake linux-imx -c cleansstate \&\& bitbake imx-image-full}.
+  \item Flash le nouveau dtb depuis \texttt{Model\_AB\_Infinity/tmp/deploy/images/imx8mpevk/}.
+\end{itemize}
+
+% =======================================================================
+\section{Squelette topology V1.5}
+
+\subsection{\texttt{sof-imx8mp-tac5212-masterV42-hpmon.m4} (top-level)}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# V1.5 : topology 3 pipelines + BE DAI dummy hp-monitor-tap
+# PIPE 1 mics capture (SAI7 RX) / PIPE 6 playback effets + MUXDEMUX tap (SAI7 TX)
+# PIPE 7 HP_Monitor capture via DAI dummy (sched_comp different de PIPE 6)
+
+include(`utils.m4')
+include(`dai.m4')
+include(`pipeline.m4')
+include(`sai.m4')
+include(`pcm.m4')
+include(`buffer.m4')
+include(`common/tlv.m4')
+include(`sof/tokens.m4')
+include(`platform/imx/imx8.m4')
+
+# PIPE 1 : capture 8ch avec effets IN (inchange Phase 1a.1)
+PIPELINE_PCM_ADD(sof/sof-imx8mp-tac5212-pipe-effects-capture.m4,
+    1, 0, 8, s32le,
+    2000, 0, 0,
+    48000, 48000, 48000,
+    SCHEDULE_TIME_DOMAIN_DMA)
+
+# PIPE 6 : playback 8ch effets OUT + MUXDEMUX tap
+PIPELINE_PCM_ADD(sof/sof-imx8mp-tac5212-pipe-effects-playback-tap.m4,
+    6, 1, 8, s32le,
+    2000, 0, 0,
+    48000, 48000, 48000,
+    SCHEDULE_TIME_DOMAIN_DMA)
+
+# DAI_ADD PIPE 6 (SAI7 TX reel) - AVANT PIPE 7 pour definir
+# PIPELINE_PLAYBACK_SCHED_COMP_6 utilise si besoin ulterieurement
+DAI_ADD(sof/pipe-dai-playback.m4,
+    6, SAI, 7, tac5212-hifi,
+    PIPELINE_SOURCE_6, 2, s32le,
+    2000, 0, 0, SCHEDULE_TIME_DOMAIN_DMA)
+
+# PIPE 7 : capture HP_Monitor via DAI dummy.
+# ATTENTION : on NE piggyback PAS (pas de 13e arg). PIPE 7 a son propre
+# sched_comp = N_DAI_IN(7) (cree par DAI_ADD DUMMY ci-dessous).
+# is_same_sched(PIPE 6, PIPE 7) = false -> trigger ne traverse pas
+# cross-pipeline -> bug V1.2 -22 EINVAL neutralise.
+PIPELINE_PCM_ADD(sof/sof-imx8mp-tac5212-pipe-hp-monitor-capture.m4,
+    7, 2, 8, s32le,
+    2000, 0, 0,
+    48000, 48000, 48000,
+    SCHEDULE_TIME_DOMAIN_TIMER)
+
+# DAI_ADD PIPE 7 : DAI virtuel DUMMY (aucun transfert hardware, juste
+# endpoint ASoC DPCM pour que le kernel trouve un BE DAI pour le FE
+# capture OUT_Monitor). Bound cote kernel au dai-link "hp-monitor-tap"
+# du DT, qui pointe snd-soc-dummy.
+DAI_ADD(sof/pipe-dai-capture.m4,
+    7, DUMMY, 0, hp-monitor-tap,
+    PIPELINE_SINK_7, 2, s32le,
+    2000, 0, 0, SCHEDULE_TIME_DOMAIN_TIMER)
+
+# DAI_ADD PIPE 1 (SAI7 RX reel, ordre indifferent)
+DAI_ADD(sof/pipe-dai-capture.m4,
+    1, SAI, 7, tac5212-hifi,
+    PIPELINE_SINK_1, 2, s32le,
+    2000, 0, 0, SCHEDULE_TIME_DOMAIN_DMA)
+
+# PCM ALSA exports - 2 devices :
+#   dev 0 IN_Capture  (capture only : 8 mics post-effets IN)
+#   dev 1 OUT_Monitor (duplex : aplay effets OUT -> HP / arecord tap post-effets OUT)
+PCM_CAPTURE_ADD(IN_Capture,  0, PIPELINE_PCM_1)
+PCM_DUPLEX_ADD(OUT_Monitor,  1, PIPELINE_PCM_6, PIPELINE_PCM_7)
+
+# Graph cross-pipeline : demux PIPE 6 -> buffer entree PIPE 7
+SectionGraph."pipe-tap-hpmon" {
+    index "0"
+    lines [
+        dapm(PIPELINE_SINK_7, PIPELINE_DEMUX_6)
+    ]
+}
+
+# SAI7 DAI config (inchange Phase 1a.1)
+DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
+    SAI_CONFIG(DSP_A, SAI_CLOCK(mclk, 12288000, codec_mclk_in),
+        SAI_CLOCK(bclk, 12288000, codec_consumer),
+        SAI_CLOCK(fsync, 48000, codec_consumer),
+        SAI_TDM(8, 32, 255, 255),
+        SAI_CONFIG_DATA(SAI, 7, 0)))
+
+# DAI config DUMMY : aucun transfert materiel. Obligatoire pour que le
+# kernel topology loader instancie le BE DAI cote SOF.
+DAI_CONFIG(DUMMY, 0, 1, hp-monitor-tap)
+\end{lstlisting}
+
+\subsection{\texttt{sof-imx8mp-tac5212-pipe-hp-monitor-capture.m4} (simplifié)}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# PIPE 7 : buffer d'entree cross-pipeline -> PCM host
+# Pas de VIRTUAL_WIDGET (inutile : le vrai DAI dummy est declare
+# par DAI_ADD DUMMY dans le top-level).
+# W_PIPELINE est cree automatiquement par pipe-dai-capture.m4
+# (le sched_comp sera N_DAI_IN(7)).
+
+include(`utils.m4')
+include(`buffer.m4')
+include(`pcm.m4')
+include(`pipeline.m4')
+
+# Host PCM endpoint (capture side de OUT_Monitor)
+W_PCM_CAPTURE(PCM_ID, HP Monitor Tap, 0, 2, SCHEDULE_CORE)
+
+# Buffer B0 : recoit le flux cross-pipeline depuis le MUXDEMUX de PIPE 6
+W_BUFFER(0, COMP_BUFFER_SIZE(2,
+    COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+    COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+    PLATFORM_HOST_MEM_CAP, SCHEDULE_CORE)
+
+# Graph : PCM_C <- B0 ; le lien B0 <- DAI dummy est defini dans
+# pipe-dai-capture.m4 (W_DAI_IN -> PIPELINE_SINK_N via PIPELINE_SINK_7)
+P_GRAPH(pipe-hp-monitor-capture, PIPELINE_ID,
+    LIST(`	',
+    `dapm(N_PCMC(PCM_ID), N_BUFFER(0))'))
+
+# Exports
+indir(`define', concat(`PIPELINE_SINK_', PIPELINE_ID), N_BUFFER(0))
+indir(`define', concat(`PIPELINE_PCM_',  PIPELINE_ID), HP Monitor PCM_ID)
+
+PCM_CAPABILITIES(HP Monitor PCM_ID, CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT),
+    PCM_MIN_RATE, PCM_MAX_RATE, 2, PIPELINE_CHANNELS, 2, 16,
+    192, 16384, 65536, 65536)
+\end{lstlisting}
+
+\subsection{\texttt{sof-imx8mp-tac5212-pipe-effects-playback-tap.m4} (inchangé V1.2)}
+
+Le MUXDEMUX à 2 sinks (B4 DAI local + BUF7.0 cross-pipeline) reste valide. Les fix B1/B2/B3 de V1.1 restent applicables (export \texttt{N\_MUXDEMUX(0)} comme \texttt{PIPELINE\_DEMUX\_6}, \texttt{W\_PIPELINE} explicite généré par \texttt{pipe-dai-playback.m4}, B5 supprimé). Voir annexe historique.
+
+\subsection{\texttt{m4/demux\_route\_hpmon.m4} (inchangé V1.2)}
+
+Route matrix identité 8ch vers 2 sinks (\texttt{ROUTE\_MATRIX(6, ...)} + \texttt{ROUTE\_MATRIX(7, ...)}). Respecte \texttt{mux\_mix\_check()}.
+
+% =======================================================================
+\section{Tests de validation V1.5}
+
+\subsection{Phase 1 — DTB live}
+
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item \textbf{T0 boot} : après reboot, \texttt{aplay -l} montre la carte \texttt{softac5212tdm} avec 2 devices (0 IN\_Capture, 1 OUT\_Monitor). \texttt{dmesg | grep -E "hp-monitor-tap|snd-soc-dummy"} confirme le BE DAI dummy chargé.
+  \item \textbf{T1 playback unchanged} : \texttt{aplay -D plughw:softac5212tdm,1 /home/root/tests/siren.wav} $\to$ HP audibles (regression check V4.2).
+  \item \textbf{T2 capture mics unchanged} : \texttt{arecord -D plughw:softac5212tdm,0 -c 8 -f S32\_LE -r 48000 -d 3 /tmp/mics.wav} $\to$ fichier non vide (regression check V4.2).
+  \item \textbf{T3 HP\_Monitor ouvre sans BE error (KEY)} : \texttt{arecord -D plughw:softac5212tdm,1 -c 8 -f S32\_LE -r 48000 -d 3 /tmp/hpmon\_solo.wav} sans aplay concurrent. \textbf{Doit passer sans} "no backend DAIs enabled". Capture silencieuse OK (rien n'alimente le MUXDEMUX si pas de playback).
+  \item \textbf{T4 duplex OUT\_Monitor} : \texttt{aplay -D plughw:softac5212tdm,1 siren.wav \&} puis \texttt{arecord -D plughw:softac5212tdm,1 -c 8 -f S32\_LE -r 48000 -d 5 /tmp/hpmon\_tap.wav}. Le wav doit contenir la sirène post-effets. \textbf{Pas de -22 EINVAL}.
+  \item \textbf{T5 triplex} : IN\_Capture + OUT\_Monitor playback + OUT\_Monitor capture en parallèle 60s, pas de xrun.
+  \item \textbf{T6 null-test} : désactiver MBDRC/DRC via \texttt{amixer cset} switch, rejouer le tone, comparer avec le tap à latence près. Si identique bit-perfect $\to$ tap bien post-chain.
+\end{enumerate}
+
+\subsection{Phase 2 — validation Yocto patch}
+
+Même batterie T0-T6 après \texttt{bitbake imx-image-full} + flash + reboot depuis l'image régénérée.
+
+% =======================================================================
+\section{Annexe historique (V1 $\to$ V1.5)}
+
+\subsection{V1 (investigation initiale)}
+
+5 workers convergents : architecture viable (MUXDEMUX dual-sink + piggyback scheduling) avec 3 bugs critiques dans le squelette m4. Solution m4-only envisagée.
+
+\paragraph{B1 CRITICAL} \texttt{PIPELINE\_DEMUX\_N} doit exporter le \textbf{widget MUXDEMUX} (\texttt{N\_MUXDEMUX(0)}) et non un buffer. IPC3 autorise \texttt{dapm(BUF, WIDGET)} cross-pipeline mais refuse \texttt{dapm(BUF, BUF)}.
+
+\paragraph{B2 CRITICAL} \texttt{W\_PIPELINE} doit être explicite pour PIPE 7. Le piggyback via 13e arg ne crée pas le widget scheduler.
+
+\paragraph{B3 CRITICAL} Buffer B5 redondant dans PIPE 6 causait collision \texttt{pipeline\_id=6} avec B4 dans \texttt{mux.c:156-167} \texttt{get\_stream\_index()}. Solution : supprimer B5, MUXDEMUX alimente directement \texttt{BUF7.0} de PIPE 7 via \texttt{SectionGraph}.
+
+\subsection{V1.1 (3 fixes B1-B3) $\to$ V1.2 (ordre m4)}
+
+Gemini-3-pro a identifié un bug d'ordre d'évaluation m4 dans \texttt{masterV42-hpmon.m4} : \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} utilisé par PIPELINE\_PCM\_ADD PIPE 7 n'était pas encore défini (le DAI\_ADD PIPE 6 qui le définit venait après). V1.2 a corrigé en plaçant \texttt{DAI\_ADD PIPE 6} avant \texttt{PIPELINE\_PCM\_ADD PIPE 7}.
+
+\subsection{V1.2 (déployée) $\to$ échec runtime}
+
+Deux bugs distincts émergent à l'exécution :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Firmware IPC3 : \texttt{pipeline\_comp\_prepare} utilise \texttt{comp\_same\_dir} (filtre direction) tandis que \texttt{pipeline\_comp\_trigger} utilise \texttt{is\_same\_sched} (filtre sched). Piggyback cross-direction DAI-sched = asymétrie = PIPE 7 jamais prepared mais reçoit trigger = -22.
+  \item Kernel ASoC DPCM : FE capture HP\_Monitor n'a aucun BE DAI associé (PIPE 7 dailess). La chaîne DAPM remonte vers DAI playback $\to$ rejet "no backend DAIs enabled".
+\end{itemize}
+
+\subsection{V1.5\_glm (candidate m4-only) $\to$ rejet unanime}
+
+Approche : PIPE 7 autonome TIMER + \texttt{VIRTUAL\_WIDGET(out\_drv)} + \texttt{PCM\_DUPLEX\_ADD}. Investigation 6 workers (87bb9b06), 5 rapports complets, verdict \textbf{unanime NO-GO}. Cause : \texttt{VIRTUAL\_WIDGET out\_drv} génère un widget DAPM type \texttt{snd\_soc\_dapm\_out\_drv} que \texttt{dpcm\_end\_walk\_at\_be} ne reconnaît pas comme endpoint BE. Seuls les widgets \texttt{dai\_in/dai\_out/aif\_in/aif\_out} bound à un \texttt{snd\_soc\_dai\_link} sont acceptés. Le bug "no backend DAIs" persisterait.
+
+\subsection{V1.5 finale}
+
+Adopte la conclusion convergente des 5 workers : ajouter un \textbf{vrai BE DAI dummy} via patch Device Tree (\texttt{hp-monitor-tap} dai-link + \texttt{hp\_monitor\_dummy} node \texttt{snd-soc-dummy}) + topology \texttt{DAI\_ADD DUMMY} dans le top-level. Sched\_comp de PIPE 7 devient \texttt{N\_DAI\_IN(7)} (différent de PIPE 6 \texttt{N\_DAI\_OUT(6)}), \texttt{is\_same\_sched=false}, trigger cross-pipeline neutralisé.
+
+% =======================================================================
+\section{Livrables V1.5}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \texttt{sof/tools/topology/topology1/sof-imx8mp-tac5212-masterV42-hpmon.m4} — top-level 3 pipelines + \texttt{DAI\_ADD DUMMY} + \texttt{PCM\_DUPLEX\_ADD OUT\_Monitor}
+  \item \texttt{sof/tools/topology/topology1/sof/sof-imx8mp-tac5212-pipe-effects-playback-tap.m4} — inchangé V1.2
+  \item \texttt{sof/tools/topology/topology1/sof/sof-imx8mp-tac5212-pipe-hp-monitor-capture.m4} — simplifié (retrait \texttt{VIRTUAL\_WIDGET})
+  \item \texttt{sof/tools/topology/topology1/m4/demux\_route\_hpmon.m4} — inchangé V1.2
+  \item \texttt{meta-local/recipes-kernel/linux/files/0005-imx8mp-debix-hp-monitor-tap.patch} — patch DT (après validation Phase 1)
+  \item \texttt{meta-local/recipes-kernel/linux/linux-imx\_\%.bbappend} — référence au patch
+\end{itemize}
+
+% =======================================================================
+\section{Protocole}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Phase 1 : modification DTB live sur board 192.168.0.9 (itération rapide) avant tout commit.
+  \item Phase 2 : patch Yocto intégré uniquement si T0-T6 verts en Phase 1.
+  \item Gate \texttt{m4 | alsatplg} OBLIGATOIRE avant deploy topology.
+  \item Backup \texttt{imx8mp-debix-model-a.dtb.bak-v42} systématique avant DTB patching.
+  \item Driver SAI \texttt{sof/src/drivers/imx/sai.c} INTOUCHABLE (7 jours travail utilisateur).
+  \item Aucune modification SOF source sans \texttt{critic\_analyze} préalable.
+\end{itemize}
+
+\end{document}
