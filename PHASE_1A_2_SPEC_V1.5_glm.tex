@@ -1,0 +1,651 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2cm]{geometry}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{siunitx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{pifont}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage[colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!60!black]{hyperref}
+
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, calc, fit, backgrounds}
+
+\definecolor{chw}{HTML}{B71C1C}
+\definecolor{cdsp}{HTML}{1565C0}
+\definecolor{ca53}{HTML}{2E7D32}
+\definecolor{cusb}{HTML}{6A1B9A}
+\definecolor{cnpu}{HTML}{E65100}
+\definecolor{cfx}{HTML}{00838F}
+\definecolor{cbuf}{HTML}{FFB300}
+\definecolor{ccomp}{HTML}{455A64}
+\definecolor{codebg}{HTML}{F5F5F5}
+\definecolor{cbug}{HTML}{C62828}
+\definecolor{cok}{HTML}{2E7D32}
+
+\tikzset{
+  hw/.style={draw, fill=chw!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  dsp/.style={draw, fill=cdsp!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  a53/.style={draw, fill=ca53!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  pcm/.style={draw, fill=yellow!30, font=\sffamily\scriptsize, minimum height=5mm, rounded corners=1pt, align=center},
+  fx/.style={draw, fill=cfx!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  buf/.style={draw, fill=cbuf!30, rounded corners=2pt, font=\sffamily\scriptsize, align=center, minimum height=6mm, inner sep=2pt},
+  demux/.style={draw, fill=cnpu!30, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  npu/.style={draw, fill=cnpu!15, rounded corners=2pt, font=\sffamily\footnotesize, align=center, minimum height=7mm, inner sep=3pt},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+  arrmulti/.style={-{Stealth[length=2mm]}, line width=1.2pt},
+  arrtap/.style={-{Stealth[length=2mm]}, line width=1.2pt, dashed, draw=cnpu}
+}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!30},
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  breaklines=true,
+  columns=flexible,
+  keepspaces=true,
+  tabsize=2,
+  inputencoding=utf8,
+  extendedchars=true,
+  literate={é}{{\'e}}1 {è}{{\`e}}1 {à}{{\`a}}1 {ê}{{\^e}}1 {â}{{\^a}}1 {ô}{{\^o}}1 {ù}{{\`u}}1 {û}{{\^u}}1 {î}{{\^\i}}1 {ï}{{\"\i}}1 {ç}{{\c c}}1 {É}{{\'E}}1 {È}{{\`E}}1 {À}{{\`A}}1 {→}{{$\to$}}1 {↓}{{$\downarrow$}}1 {←}{{$\leftarrow$}}1 {✓}{{\checkmark}}1 {✗}{{\texttimes}}1
+}
+
+\title{\textbf{Plateforme Mastering Live Debix}\\[6pt]
+  \Large Spécification Phase 1a.2 --- \textbf{V1.5\_glm}\\[4pt]
+  \large Tap HP\_Monitor post-effets OUT\\
+  \normalsize Proposition GLM Option A : m4-only, PIPE 7 autonome TIMER + VIRTUAL\_WIDGET + PCM\_DUPLEX\_ADD}
+\author{Document de référence technique}
+\date{2026-04-24 --- rev V1.5\_glm (candidate)}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\clearpage
+
+% =======================================================================
+\section{Ce qui change depuis V1.2}
+
+V1.2 testée sur board a échoué au runtime avec deux bugs distincts :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \texttt{aplay SAI\_Playback} : -22 EINVAL trigger START (IPC 0x60040000). Cause racine firmware = asymétrie IPC3 entre \texttt{pipeline\_comp\_prepare} (filtre par direction via \texttt{comp\_same\_dir}) et \texttt{pipeline\_comp\_trigger} (filtre par sched via \texttt{is\_same\_sched}). Piggyback cross-direction avec sched\_comp partagé de type DAI = PIPE 7 jamais prepared mais reçoit trigger $\to$ EINVAL.
+  \item \texttt{arecord HP\_Monitor} : "no backend DAIs enabled for HP\_Monitor". Cause = ASoC DPCM kernel ne trouve pas de BE DAI capture pour le FE HP\_Monitor (PIPE 7 dailess, chaîne DAPM remonte vers DAI playback).
+\end{itemize}
+
+Investigation V1.4 (6 workers) a proposé plusieurs fixes. Cette V1.5\_glm teste \textbf{l'Option A proposée par GLM} (la seule solution m4-only dans les findings) avant d'envisager un patch kernel.
+
+\subsection{Modifications V1.5\_glm vs V1.2}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Modif} & \textbf{Changement V1.5\_glm} \\
+\midrule
+M1 — PIPE 7 autonome & Retirer le 13e arg \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} de \texttt{PIPELINE\_PCM\_ADD PIPE 7}. Changer 12e arg en \texttt{SCHEDULE\_TIME\_DOMAIN\_TIMER}. Ainsi \texttt{is\_same\_sched = false} entre PIPE 6 et PIPE 7 $\to$ le trigger ne traverse plus cross-pipeline $\to$ bug -22 neutralisé. \\
+M2 — \texttt{W\_PIPELINE} local & Dans \texttt{pipe-hp-monitor-capture.m4}, changer \texttt{W\_PIPELINE(SCHED\_COMP, ...)} en \texttt{W\_PIPELINE(N\_PCMC(PCM\_ID), ...)}. Ajouter \texttt{indir(define, PIPELINE\_SCHED\_COMP\_7, N\_PCMC(PCM\_ID))} pour exporter un sched\_comp de type HOST (pattern \texttt{pipe-masterchain.m4:146-147}). \\
+M3 — \texttt{VIRTUAL\_WIDGET} & Ajouter \texttt{VIRTUAL\_WIDGET(OUT\_MONITOR\_TAP PIPELINE\_ID, out\_drv, PIPELINE\_ID)} dans \texttt{pipe-hp-monitor-capture.m4} pour servir de proxy BE DAPM côté kernel ASoC DPCM. Ajouter \texttt{dapm(OUT\_MONITOR\_TAP PIPELINE\_ID, N\_BUFFER(0))} en fin de graph. \\
+M4 — \texttt{PCM\_DUPLEX\_ADD} & Dans \texttt{masterV42-hpmon.m4}, remplacer les 3 \texttt{PCM\_CAPTURE\_ADD/PCM\_PLAYBACK\_ADD} par : \newline \texttt{PCM\_CAPTURE\_ADD(IN\_Capture, 0, PIPELINE\_PCM\_1)} \newline \texttt{PCM\_DUPLEX\_ADD(OUT\_Monitor, 1, PIPELINE\_PCM\_6, PIPELINE\_PCM\_7)} \\
+M5 — SectionGraph & Inchangé : \texttt{dapm(PIPELINE\_SINK\_7, PIPELINE\_DEMUX\_6)}. Le flux data passe toujours par \texttt{MUXDEMUX6.0} $\to$ \texttt{BUF7.0}. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Rationale GLM}
+
+\textbf{Pourquoi PIPE 7 autonome TIMER résout le bug -22} :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Avec \texttt{SCHED\_COMP = N\_PCMC(7)} (HOST type local), PIPE 7 ne partage plus le sched\_comp de PIPE 6 (\texttt{N\_DAI\_OUT(6)})
+  \item \texttt{pipeline\_is\_same\_sched\_comp(PIPE 6, PIPE 7) = false}
+  \item Guard \texttt{pipeline-stream.c:505} bloque la propagation trigger cross-pipeline
+  \item PIPE 7 est préparée et triggerée indépendamment (par PCM\_DUPLEX\_ADD via kernel DPCM)
+\end{itemize}
+
+\textbf{Pourquoi VIRTUAL\_WIDGET out\_drv résout "no backend DAIs enabled"} :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Le widget \texttt{snd\_soc\_dapm\_out\_drv} apparaît dans le DAPM routing table du kernel
+  \item ASoC DPCM trouve un endpoint BE virtuel pour router le FE capture HP\_Monitor
+  \item Pattern utilisé en production dans \texttt{pipe-detect.m4:93} pour le keyword-detect i.MX8MP
+\end{itemize}
+
+\textbf{Pourquoi PCM\_DUPLEX\_ADD simplifie l'exposition ALSA} :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Un seul device ALSA \texttt{OUT\_Monitor} avec 2 directions (playback + capture)
+  \item Pattern upstream validé \texttt{sof-smart-amplifier.m4:216}
+  \item Le kernel DPCM gère le scheduling des 2 streams indépendamment
+\end{itemize}
+
+\subsection{Risques identifiés (à valider par investigation)}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Risque} & \textbf{Description} \\
+\midrule
+R1 — \texttt{VIRTUAL\_WIDGET} BE validity & \textbf{Contradiction non résolue entre workers} : GLM+Minimax disent que \texttt{VIRTUAL\_WIDGET(out\_drv)} sert de proxy BE pour ASoC DPCM. Gemini+claude-code disent que c'est juste un widget DAPM sans statut BE DAI link. Si gemini+claude-code ont raison, "no backend DAIs" persiste en V1.5\_glm. \\
+R2 — Drift DMA/TIMER & PIPE 6 en DMA (synchronisé SAI7) vs PIPE 7 en TIMER (Zephyr tick). Drift cumulatif possible sur longue durée. Buffer B0 PIPE 7 absorbe les différences. Si over/underrun, le MUXDEMUX drop silencieusement (overrun\_permitted=true sur cross-pipeline sinks, \texttt{mux.c:437-460}). \\
+R3 — Ordre de démarrage & Même pattern que \texttt{masterlite} : si PIPE 6 triggere avant que PIPE 7 soit prepared par le kernel, crash potentiel. PCM\_DUPLEX\_ADD devrait sérialiser via le même device, mais à valider. \\
+R4 — Pattern non attesté & La combinaison (VIRTUAL\_WIDGET + PIPE 7 autonome TIMER + PCM\_DUPLEX\_ADD + MUXDEMUX cross-pipeline) n'a pas d'équivalent direct en upstream. GLM s'appuie sur analogies partielles (masterlite, kwd, pipe-detect, pipe-volume-capture-sched template orphelin). \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Plan de test}
+
+Si investigation approuve V1.5\_glm :
+\begin{enumerate}[leftmargin=*, itemsep=1pt]
+  \item Coder les 2 fichiers modifiés
+  \item Gate compile \texttt{m4 + alsatplg} : vérifier widgets + routes
+  \item Deploy sur board + reboot
+  \item T1 : \texttt{aplay OUT\_Monitor} seul $\to$ doit fonctionner (retour V4.2 behavior)
+  \item T2 : \texttt{arecord IN\_Capture} seul $\to$ inchangé Phase 1a.1
+  \item T3 : \texttt{arecord OUT\_Monitor} seul sans aplay $\to$ doit ouvrir sans "no backend DAIs" (KEY TEST pour R1)
+  \item T4 : \texttt{aplay OUT\_Monitor + arecord OUT\_Monitor} simultané $\to$ capture contient le signal post-effets
+  \item T5 : Triplex mics + playback + HP\_Monitor pendant 60s $\to$ pas de xrun
+\end{enumerate}
+
+Si T3 ou T4 échoue $\to$ V1.5\_kernel (patch DT + machine driver) comme fallback.
+
+% =======================================================================
+\section{Ce qui change depuis V1.1}
+
+Investigation V1.1 (5 workers, qwen encore running) verdict : \textbf{4 GO fermes + 1 NO-GO (gemini-3-pro)}. Gemini a identifié un \textbf{bug d'ordre d'évaluation m4 critique} dans \texttt{masterV42-hpmon.m4} non détecté par les 4 autres workers. V1.2 applique le fix.
+
+\subsection{Bug ordre m4 corrigé en V1.2}
+
+\paragraph{Problème V1.1} Dans \texttt{masterV42-hpmon.m4}, l'ordre était :
+\begin{enumerate}[leftmargin=*, itemsep=1pt]
+  \item L376 : \texttt{PIPELINE\_PCM\_ADD PIPE 1}
+  \item L383 : \texttt{PIPELINE\_PCM\_ADD PIPE 6} (playback-tap)
+  \item L392 : \texttt{PIPELINE\_PCM\_ADD PIPE 7} $\leftarrow$ utilise \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6}
+  \item L400 : \texttt{DAI\_ADD PIPE 1}
+  \item L405 : \texttt{DAI\_ADD PIPE 6} $\leftarrow$ \textbf{DÉFINIT} \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} (trop tard!)
+\end{enumerate}
+
+À l'étape 3, la macro \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} n'existe \textbf{pas encore}. m4 passe donc la chaîne littérale. Le \texttt{W\_PIPELINE(SCHED\_COMP, ...)} de PIPE 7 génère \texttt{stream\_name "PIPELINE\_PLAYBACK\_SCHED\_COMP\_6"} au lieu de \texttt{"SAI7.OUT"}. Le kernel topology loader ne trouve pas de match (phase 2 de résolution par nom) $\to$ \texttt{pipeline\_is\_same\_sched\_comp()} retourne false $\to$ guard \texttt{pipeline-stream.c:505} bloque $\to$ timeout \texttt{-110} (rebelote V2.7).
+
+\paragraph{Fix V1.2} Déplacer \texttt{DAI\_ADD PIPE 6} \textbf{avant} \texttt{PIPELINE\_PCM\_ADD PIPE 7}. Pattern confirmé par \texttt{sof-imx8mp-wm8960-kwd.m4} où le \texttt{DAI\_ADD} de la pipeline maître précède le \texttt{PIPELINE\_PCM\_ADD} piggyback.
+
+Nouvel ordre :
+\begin{enumerate}[leftmargin=*, itemsep=1pt]
+  \item \texttt{PIPELINE\_PCM\_ADD PIPE 1} (capture)
+  \item \texttt{PIPELINE\_PCM\_ADD PIPE 6} (playback-tap) $\to$ exporte \texttt{PIPELINE\_SOURCE\_6} et \texttt{PIPELINE\_DEMUX\_6}
+  \item \textbf{\texttt{DAI\_ADD PIPE 6}} $\to$ \textbf{définit \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} = N\_DAI\_OUT = SAI7.OUT}
+  \item \texttt{PIPELINE\_PCM\_ADD PIPE 7} avec \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} $\leftarrow$ maintenant résolu correctement
+  \item \texttt{DAI\_ADD PIPE 1} (ordre indifférent, PIPE 1 autonome)
+\end{enumerate}
+
+\subsection{Points V1.1 confirmés par 4 workers (kimi, minimax, claude-code, glm)}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item B1 fix (export widget N\_MUXDEMUX(0)) — validé unanime
+  \item B2 fix (W\_PIPELINE explicite PIPE 7) — validé unanime
+  \item B3 fix (B5 supprimé) — validé unanime
+  \item \texttt{dapm(BUF7.0, MUXDEMUX6.0)} cross-pipeline — confirmé pattern smart-amplifier
+  \item \texttt{get\_stream\_index} match par pipeline\_id (idx=0 pour 6, idx=1 pour 7) — OK
+  \item \texttt{overrun\_permitted=true} automatique sur sink cross-pipeline — OK NPU
+  \item Ordre démarrage userspace recommandé : \texttt{aplay} avant \texttt{arecord} (caveat claude-code)
+\end{itemize}
+
+% =======================================================================
+\section{Ce qui change depuis V1}
+
+V1 soumise à investigation critic (5 workers convergents en 2027s, glm offline). Verdict : \textbf{architecture VIABLE avec 3 bugs critiques dans le squelette m4}. V1.1 applique les 3 corrections unanimement validées.
+
+\subsection{Bugs V1 corrigés en V1.1}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{\#} & \textbf{Sévérité} & \textbf{Correction V1.1} \\
+\midrule
+B1 & CRITICAL & \texttt{PIPELINE\_DEMUX\_6} exportait \texttt{N\_BUFFER(5)} (un buffer). Pattern upstream (\texttt{pipe-smart-amplifier-playback.m4:135}, \texttt{pipe-amp-ref-capture.m4:109}) exporte le \textbf{widget MUXDEMUX} \texttt{N\_MUXDEMUX(0)}. IPC3 autorise \texttt{dapm(BUF, WIDGET)} cross-pipeline mais \textbf{refuse} \texttt{dapm(BUF, BUF)} (commentaire historique \texttt{masterlite.m4:81-83}). V1.1 corrige. \\
+B2 & CRITICAL & PIPE 7 n'avait pas de \texttt{W\_PIPELINE} explicite. Le piggyback via 13e arg \texttt{PIPELINE\_PCM\_ADD} définit la macro \texttt{SCHED\_COMP} mais \textbf{ne crée pas} le widget scheduler. Pattern upstream (\texttt{pipe-mastertap.m4:33-34}, \texttt{pipe-detect.m4:97}) : toujours ajouter \texttt{W\_PIPELINE(SCHED\_COMP, ...)}. V1.1 corrige. \\
+B3 & CRITICAL & Buffer B5 dans PIPE 6 redondant et buggué : \texttt{B5.pipeline\_id = 6} identique à \texttt{B4.pipeline\_id = 6} $\to$ collision dans \texttt{mux.c:156-167 get\_stream\_index()} qui matche les sinks par \texttt{pipeline\_id}. Le MUXDEMUX ne saurait pas distinguer B4 (DAI) et B5 (tap), \texttt{ROUTE\_MATRIX(7)} jamais appliquée. V1.1 \textbf{supprime} complètement B5 : le MUXDEMUX alimente directement \texttt{BUF7.0} (PIPE 7) via \texttt{SectionGraph} cross-pipeline. Pattern upstream smart-amplifier validé (trouvaille claude-code). \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Points V1 confirmés unanimement (pas de changement)}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{Piggyback syntax} : 13e arg \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} + 12e arg \texttt{SCHEDULE\_TIME\_DOMAIN\_DMA} corrects (référence \texttt{sof-imx8mp-wm8960-kwd.m4:67-72})
+  \item \textbf{MUXDEMUX dual-sink} intra-pipeline + cross-pipeline : viable (pattern smart-amplifier, \texttt{MUX\_MAX\_STREAMS = 4} en IPC3)
+  \item \textbf{ROUTE\_MATRIX pipeline\_id} : 6 pour sink DAI (intra), 7 pour sink cross (HP\_Monitor) — corrects
+  \item \textbf{SectionGraph} : \texttt{dapm(PIPELINE\_SINK\_7, PIPELINE\_DEMUX\_6)} devient \texttt{dapm(BUF7.0, MUXDEMUX6.0)} valide après B1
+  \item \textbf{Latence tap} = 0 (demux copie synchrone au même tick)
+  \item \textbf{Budget CPU} $<$ 2\% additionnel (Phase 1a.1 MVP @ 2ms validée, marge confortable)
+\end{itemize}
+
+% =======================================================================
+\section{Contexte — Phase 1a.1 validée}
+
+La Phase 1a.1 MVP V4.2 est \textbf{validée et déployée} sur board Debix 192.168.0.9 (commit sof fork \texttt{778740b68}, branch \texttt{feature/sdma-ap2ap-phase1}) :
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item 2 pipelines 8ch autonomes avec effets \texttt{mbdrc + pga + drc} chainés
+  \item SAI7 TDM 8$\times$32 @ 48 kHz ASYNC, period 2000 µs (4ms buffer par pipeline)
+  \item PCMs exposés : \texttt{SAI\_Capture} (card 2 device 0), \texttt{SAI\_Playback} (card 2 device 1)
+  \item Tests T0--T4 tous verts, sirène 5s 8ch audible sans clip
+  \item Driver SAI intouché (validation 7 jours de travail utilisateur)
+\end{itemize}
+
+Phase 1a.2 : \textbf{ajouter un 3e PCM ALSA capture \texttt{HP\_Monitor}} qui récupère le signal \textbf{post-effets OUT} (après \texttt{drc} de PIPE 6), pour analyse NPU et monitoring en parallèle du flux qui part vers les HP.
+
+% =======================================================================
+\section{Architecture Phase 1a.2}
+
+\subsection{Schéma cible}
+
+\begin{center}
+\begin{tikzpicture}[node distance=3mm and 8mm]
+
+\node[pcm] (play) {SAI\_Playback\\ALSA play 8ch\\card 2 dev 1};
+\node[buf, right=8mm of play] (b0) {B0\\host};
+\node[dsp, right=5mm of b0] (mbdrc) {MBDRC};
+\node[buf, right=5mm of mbdrc] (b1) {B1};
+\node[dsp, right=5mm of b1] (pga) {PGA};
+\node[buf, right=5mm of pga] (b2) {B2};
+\node[dsp, right=5mm of b2] (drc) {DRC};
+\node[buf, right=5mm of drc] (b3) {B3};
+
+\node[demux, right=6mm of b3] (mux) {MUXDEMUX\\2 sinks};
+\node[buf, right=7mm of mux, yshift=6mm] (b4) {B4 (DAI)};
+\node[buf, right=7mm of mux, yshift=-6mm] (b5) {B5 (tap)};
+
+\node[hw, right=5mm of b4] (dai) {SAI TX 8ch\\→ HP};
+\node[buf, right=5mm of b5] (b6) {B7\\host};
+\node[pcm, right=5mm of b6] (hpmon) {HP\_Monitor\\ALSA cap 8ch\\card 2 dev 2};
+\node[npu, below=4mm of hpmon, align=center] (npu) {→ NPU\\(analyse)};
+
+\draw[arr] (play) -- (b0);
+\draw[arr] (b0) -- (mbdrc);
+\draw[arr] (mbdrc) -- (b1);
+\draw[arr] (b1) -- (pga);
+\draw[arr] (pga) -- (b2);
+\draw[arr] (b2) -- (drc);
+\draw[arr] (drc) -- (b3);
+\draw[arr] (b3) -- (mux);
+\draw[arrmulti] (mux) -| (b4);
+\draw[arrtap] (mux) -| (b5);
+\draw[arr] (b4) -- (dai);
+\draw[arr] (b5) -- (b6);
+\draw[arr] (b6) -- (hpmon);
+\draw[arr] (hpmon) -- (npu);
+
+\node[below=12mm of b1, font=\itshape\small, text width=8cm, align=center]{PIPE 6 : playback 8ch avec effets OUT + demux tap en fin de chaîne};
+\node[below=6mm of b6, font=\itshape\small, text width=5cm, align=center]{PIPE 7 : capture HP\_Monitor\\piggyback sched PIPE 6};
+
+\end{tikzpicture}
+\end{center}
+
+\subsection{Mécanisme piggyback scheduling}
+
+\textbf{Problème historique V2.7} : cross-pipeline en IPC3 échoue au trigger quand \texttt{sched\_comp} diffère entre pipelines connectés (\texttt{pipeline-stream.c:505} : \texttt{if (!is\_single\_ppl \&\& !is\_same\_sched) return 0}).
+
+\textbf{Solution V1} : \textbf{piggyback} la pipeline HP\_Monitor (capture) sur le scheduler de la pipeline playback PIPE 6. Les deux partagent le même \texttt{sched\_comp = N\_DAI\_OUT(6)} (exporté par \texttt{pipe-dai-playback.m4:24} sous le nom \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6}).
+
+\textbf{Pattern upstream confirmé} :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \texttt{sof-imx8mp-wm8960-kwd.m4:72} : keyword-detect pipeline co-scheduled sur \texttt{PIPELINE\_SCHED\_COMP\_1} (13e arg de \texttt{PIPELINE\_PCM\_ADD})
+  \item \texttt{sof-imx8mp-tac5212-masterlite.m4:51-56} : pattern historique avec \texttt{PIPELINE\_SCHED\_COMP\_3}
+  \item \texttt{pipeline.m4:84} : \texttt{define(`SCHED\_COMP', \$13)}
+\end{itemize}
+
+\subsection{Mécanisme MUXDEMUX en fin de pipeline playback}
+
+La pipeline playback existante (PIPE 6) doit être \textbf{modifiée} pour insérer un widget \texttt{W\_MUXDEMUX} entre \texttt{DRC} et le buffer DAI. Le demux duplique le flux post-DRC vers 2 sinks :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{Sink local} : buffer DAI (B4) $\to$ SAI TX (HP physiques)
+  \item \textbf{Sink cross-pipeline} : exposé via \texttt{PIPELINE\_DEMUX\_6} $\to$ alimenté par une pipeline capture séparée (PIPE 7)
+\end{itemize}
+
+\textbf{Attention bug V2.7} : le \texttt{PIPELINE\_DEMUX\_N} doit être \textbf{explicitement exporté} par le fichier pipeline playback. La V2.7 \texttt{masterlite.m4:88} référençait \texttt{PIPELINE\_DEMUX\_3} jamais défini, causant widget fantôme + timeout -110.
+
+% =======================================================================
+\section{Phasage Phase 1a.2}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{llX}
+\toprule
+\textbf{Étape} & \textbf{Livrable} & \textbf{Objectif} \\
+\midrule
+1a.2.a & Renommer \texttt{pipe-effects-playback.m4} $\to$ \texttt{pipe-effects-playback-tap.m4} avec insertion W\_MUXDEMUX + export \texttt{PIPELINE\_DEMUX\_6} & Pipeline playback avec tap exposé \\
+1a.2.b & Créer \texttt{pipe-effects-hp-monitor-capture.m4} (pipeline capture minimal : buffer $\to$ PCM host) & Pipeline capture piggyback PIPE 6 \\
+1a.2.c & Modifier \texttt{masterV42.m4} : ajouter PIPE 7 + SectionGraph cross-pipeline \texttt{dapm(PIPELINE\_SINK\_7, PIPELINE\_DEMUX\_6)} & Topology complète avec HP\_Monitor \\
+1a.2.d & Tests T8-T12 : load, HP\_Monitor visible, capture HP\_Monitor solo, triplex SAI\_Capture + SAI\_Playback + HP\_Monitor & Validation fonctionnelle \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Contraintes clés} :
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Pipeline HP\_Monitor sans effets : juste buffer + \texttt{W\_PCM\_CAPTURE}
+  \item Pas de DAI\_ADD pour PIPE 7 (pas de sortie hardware, juste tap interne)
+  \item 13e arg \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} pour le piggyback
+  \item Period 2000 µs identique (cohérence scheduling avec PIPE 6)
+\end{itemize}
+
+% =======================================================================
+\section{Squelette m4 Phase 1a.2 V1}
+
+\subsection{\texttt{sof-imx8mp-tac5212-pipe-effects-playback-tap.m4} (modifié)}
+
+Dérivé de la version Phase 1a.1 MVP, avec insertion \texttt{W\_MUXDEMUX} entre DRC et le buffer DAI. Le demux a 2 sinks : le buffer B4 vers DAI et un buffer B5 exposé cross-pipeline via \texttt{PIPELINE\_DEMUX\_6}.
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# Playback 8ch avec tap post-effets :
+# HOST -> B0 -> MBDRC -> B1 -> PGA -> B2 -> DRC -> B3 -> MUXDEMUX -> B4 -> DAI
+#                                                             |
+#                                                             +-> (cross-pipeline PIPE 7 HP_Monitor)
+
+include(`utils.m4')
+include(`buffer.m4')
+include(`pcm.m4')
+include(`dai.m4')
+include(`bytecontrol.m4')
+include(`mixercontrol.m4')
+include(`pipeline.m4')
+include(`multiband_drc.m4')
+include(`pga.m4')
+include(`drc.m4')
+include(`muxdemux.m4')
+
+# ... (Controls PGA + MBDRC + DRC comme Phase 1a.1)
+
+# MUXDEMUX route matrix : 1 source 8ch -> 2 sinks 8ch identiques
+define(MY_DEMUX_CTRL, concat(`demux_ctrl_', PIPELINE_ID))
+define(DEMUX_priv, concat(`demux_priv_', PIPELINE_ID))
+include(`demux_route_hpmon.m4')  # à créer : identity 8ch x 2 sinks
+C_CONTROLBYTES(MY_DEMUX_CTRL, PIPELINE_ID,
+	CONTROLBYTES_OPS(bytes, 258, 258, 258),
+	CONTROLBYTES_EXTOPS(258, 258, 258),
+	, , ,
+	CONTROLBYTES_MAX(, 304),
+	,
+	DEMUX_priv)
+
+# Host endpoint
+W_PCM_PLAYBACK(PCM_ID, SAI Playback, 2, 0, SCHEDULE_CORE)
+
+# Widgets : MBDRC + PGA + DRC + MUXDEMUX
+W_MULTIBAND_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+	LIST(`	', "MY_MULTIBAND_DRC_CTRL"))
+W_PGA(0, PIPELINE_FORMAT, DAI_PERIODS, 2, DEF_PGA_CONF, SCHEDULE_CORE,
+	LIST(`	', "PIPELINE_ID Master Playback Volume"))
+W_DRC(0, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+	LIST(`	', "MY_DRC_CTRL"))
+
+# MUXDEMUX : 1 source (DRC) -> 2 sinks (B4 DAI, B5 tap)
+# W_MUXDEMUX(index, mux_or_demux=1 demux, format, periods_sink, periods_source, core, kcontrols)
+W_MUXDEMUX(0, 1, PIPELINE_FORMAT, 2, 2, SCHEDULE_CORE,
+	LIST(`	', "MY_DEMUX_CTRL"))
+
+# Buffers : B0 host, B3 pré-demux, B4 DAI side, B5 tap side
+W_BUFFER(0, COMP_BUFFER_SIZE(2,
+	COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+	COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+	PLATFORM_HOST_MEM_CAP, SCHEDULE_CORE)
+W_BUFFER(1, ..., PLATFORM_COMP_MEM_CAP, SCHEDULE_CORE)
+W_BUFFER(2, ..., PLATFORM_COMP_MEM_CAP, SCHEDULE_CORE)
+W_BUFFER(3, ..., PLATFORM_COMP_MEM_CAP, SCHEDULE_CORE)
+W_BUFFER(4, COMP_BUFFER_SIZE(DAI_PERIODS,
+	COMP_SAMPLE_SIZE(DAI_FORMAT), PIPELINE_CHANNELS,
+	COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+	PLATFORM_DAI_MEM_CAP, SCHEDULE_CORE)
+# V1.1 fix B3 : B5 SUPPRIME (collision pipeline_id=6 avec B4 dans get_stream_index)
+# Le MUXDEMUX alimente directement BUF7.0 de PIPE 7 via SectionGraph cross-pipeline.
+
+# DAPM graph playback : host -> effets -> demux -> DAI
+# Note : MUXDEMUX a 1 sink intra (B4 -> DAI) + 1 sink cross (BUF7.0 via SectionGraph)
+P_GRAPH(pipe-effects-playback-tap, PIPELINE_ID,
+	LIST(`	',
+	`dapm(N_BUFFER(0), N_PCMP(PCM_ID))',
+	`dapm(N_MULTIBAND_DRC(0), N_BUFFER(0))',
+	`dapm(N_BUFFER(1), N_MULTIBAND_DRC(0))',
+	`dapm(N_PGA(0), N_BUFFER(1))',
+	`dapm(N_BUFFER(2), N_PGA(0))',
+	`dapm(N_DRC(0), N_BUFFER(2))',
+	`dapm(N_BUFFER(3), N_DRC(0))',
+	`dapm(N_MUXDEMUX(0), N_BUFFER(3))',
+	`dapm(N_BUFFER(4), N_MUXDEMUX(0))'))
+# V1.1 fix B3 : dapm(N_BUFFER(5), ...) SUPPRIME
+
+# Exports V1.1 :
+#   SOURCE_6 = B4 (vers DAI via DAI_ADD)
+#   DEMUX_6  = WIDGET N_MUXDEMUX(0) (V1.1 fix B1 : widget, pas buffer)
+indir(`define', concat(`PIPELINE_SOURCE_', PIPELINE_ID), N_BUFFER(4))
+indir(`define', concat(`PIPELINE_DEMUX_',  PIPELINE_ID), N_MUXDEMUX(0))
+indir(`define', concat(`PIPELINE_PCM_',    PIPELINE_ID), SAI Playback PCM_ID)
+
+# PCM capabilities
+PCM_CAPABILITIES(SAI Playback PCM_ID, ...)
+\end{lstlisting}
+
+\subsection{\texttt{sof-imx8mp-tac5212-pipe-hp-monitor-capture.m4} (nouveau)}
+
+Pipeline capture simplifié : \textbf{pas d'effets}, juste un buffer qui reçoit le flux cross-pipeline + endpoint PCM capture.
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# HP_Monitor capture pipeline V1.5_glm :
+# (cross-pipeline PIPELINE_DEMUX_6) -> B0 -> OUT_MONITOR_TAP (virtual) -> PCM host HP_Monitor
+# V1.5_glm : pipeline AUTONOME TIMER (PAS de piggyback, contrairement V1.2)
+# Sched_comp = N_PCMC(PCM_ID) HOST local → is_same_sched=false avec PIPE 6 → trigger ne traverse pas
+
+include(`utils.m4')
+include(`buffer.m4')
+include(`pcm.m4')
+include(`pipeline.m4')
+
+# Host PCM endpoint
+W_PCM_CAPTURE(PCM_ID, HP Monitor, 0, 2, SCHEDULE_CORE)
+
+# Buffer : B0 reçoit du cross-pipeline demux (PIPE 6)
+W_BUFFER(0, COMP_BUFFER_SIZE(2,
+	COMP_SAMPLE_SIZE(PIPELINE_FORMAT), PIPELINE_CHANNELS,
+	COMP_PERIOD_FRAMES(PCM_MAX_RATE, SCHEDULE_PERIOD)),
+	PLATFORM_HOST_MEM_CAP, SCHEDULE_CORE)
+
+# V1.5_glm M3 : VIRTUAL_WIDGET out_drv pour résoudre kernel ASoC DPCM
+# "no backend DAIs enabled". Pattern utilisé par pipe-detect.m4:93 (kwd i.MX8MP).
+VIRTUAL_WIDGET(OUT_MONITOR_TAP PIPELINE_ID, out_drv, PIPELINE_ID)
+
+# V1.5_glm M2 : W_PIPELINE avec SCHED_COMP LOCAL (N_PCMC type HOST)
+# Pattern pipe-masterchain.m4:146-147 qui exporte PIPELINE_SCHED_COMP_X = N_PCMP(X).
+# Ici on exporte pour PIPE 7 capture : PIPELINE_SCHED_COMP_7 = N_PCMC(PCM_ID).
+indir(`define', concat(`PIPELINE_SCHED_COMP_', PIPELINE_ID), N_PCMC(PCM_ID))
+
+W_PIPELINE(N_PCMC(PCM_ID), SCHEDULE_PERIOD, SCHEDULE_PRIORITY, SCHEDULE_CORE,
+	SCHEDULE_TIME_DOMAIN, pipe_media_schedule_plat)
+
+# Graph : flux capture = PCM_C <- B0 <- OUT_MONITOR_TAP (virtual)
+# Le VIRTUAL_WIDGET apparaît comme endpoint BE côté kernel DAPM.
+# Le buffer B0 reçoit EN PLUS du cross-pipeline via SectionGraph top-level.
+P_GRAPH(pipe-hp-monitor-capture, PIPELINE_ID,
+	LIST(`	',
+	`dapm(N_PCMC(PCM_ID), N_BUFFER(0))',
+	`dapm(N_BUFFER(0), OUT_MONITOR_TAP PIPELINE_ID)'))
+
+# Exports
+indir(`define', concat(`PIPELINE_SINK_', PIPELINE_ID), N_BUFFER(0))
+indir(`define', concat(`PIPELINE_PCM_',  PIPELINE_ID), HP Monitor PCM_ID)
+
+PCM_CAPABILITIES(HP Monitor PCM_ID, CAPABILITY_FORMAT_NAME(PIPELINE_FORMAT),
+	PCM_MIN_RATE, PCM_MAX_RATE, 2, PIPELINE_CHANNELS, 2, 16,
+	192, 16384, 65536, 65536)
+\end{lstlisting}
+
+\subsection{\texttt{sof-imx8mp-tac5212-masterV42-hpmon.m4} (top-level étendu)}
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+# Topology V4.2 + Phase 1a.2 V1.5_glm : HP_Monitor tap post-effets OUT (m4-only)
+# 3 pipelines : PIPE 1 capture mics, PIPE 6 playback effets + MUXDEMUX tap, PIPE 7 HP_Monitor capture
+# V1.5_glm : PIPE 7 AUTONOME TIMER (pas piggyback DAI) + VIRTUAL_WIDGET + PCM_DUPLEX_ADD
+
+include(`utils.m4')
+include(`dai.m4')
+include(`pipeline.m4')
+include(`sai.m4')
+include(`pcm.m4')
+include(`buffer.m4')
+include(`common/tlv.m4')
+include(`sof/tokens.m4')
+include(`platform/imx/imx8.m4')
+
+# PIPE 1 : Capture 8ch avec effets IN (inchangé Phase 1a.1)
+PIPELINE_PCM_ADD(sof/sof-imx8mp-tac5212-pipe-effects-capture.m4,
+	1, 0, 8, s32le,
+	2000, 0, 0,
+	48000, 48000, 48000,
+	SCHEDULE_TIME_DOMAIN_DMA)
+
+# PIPE 6 : Playback 8ch avec effets OUT + MUXDEMUX tap
+PIPELINE_PCM_ADD(sof/sof-imx8mp-tac5212-pipe-effects-playback-tap.m4,
+	6, 1, 8, s32le,
+	2000, 0, 0,
+	48000, 48000, 48000,
+	SCHEDULE_TIME_DOMAIN_DMA)
+
+# V1.2 fix ordre m4 : DAI_ADD PIPE 6 AVANT PIPELINE_PCM_ADD PIPE 7
+# pour définir PIPELINE_PLAYBACK_SCHED_COMP_6 utilisé par PIPE 7.
+# Pattern upstream : sof-imx8mp-wm8960-kwd.m4 (DAI_ADD maître avant piggyback)
+DAI_ADD(sof/pipe-dai-playback.m4,
+	6, SAI, 7, tac5212-hifi,
+	PIPELINE_SOURCE_6, 2, s32le,
+	2000, 0, 0, SCHEDULE_TIME_DOMAIN_DMA)
+
+# PIPE 7 : HP_Monitor capture, AUTONOME TIMER (V1.5_glm M1 : pas de piggyback)
+# 12e arg SCHEDULE_TIME_DOMAIN_TIMER (PIPE 7 n'a pas de DAI → pas de DMA source)
+# PAS de 13e arg : sched_comp local (N_PCMC(PCM_ID)) défini dans pipe-hp-monitor-capture.m4
+# is_same_sched(PIPE 6, PIPE 7) = false → trigger ne traverse pas cross-pipeline
+PIPELINE_PCM_ADD(sof/sof-imx8mp-tac5212-pipe-hp-monitor-capture.m4,
+	7, 2, 8, s32le,
+	2000, 0, 0,
+	48000, 48000, 48000,
+	SCHEDULE_TIME_DOMAIN_TIMER)
+
+# DAI_ADD PIPE 1 (ordre indifférent, PIPE 1 autonome)
+DAI_ADD(sof/pipe-dai-capture.m4,
+	1, SAI, 7, tac5212-hifi,
+	PIPELINE_SINK_1, 2, s32le,
+	2000, 0, 0, SCHEDULE_TIME_DOMAIN_DMA)
+
+# PCM ALSA exports V1.5_glm (M4) : renommage + PCM_DUPLEX_ADD
+#   IN_Capture  (card device 0, capture only) = les 8 mics post-effets IN
+#   OUT_Monitor (card device 1, duplex) = aplay: DAW→effets OUT→HP
+#                                         arecord: tap post-effets OUT pour NPU
+PCM_CAPTURE_ADD(IN_Capture, 0, PIPELINE_PCM_1)
+PCM_DUPLEX_ADD(OUT_Monitor, 1, PIPELINE_PCM_6, PIPELINE_PCM_7)
+
+# Graph cross-pipeline : tap PIPE 6 demux -> PIPE 7 sink buffer (inchangé V1.2)
+SectionGraph."pipe-tap-hpmon" {
+	index "0"
+	lines [
+		dapm(PIPELINE_SINK_7, PIPELINE_DEMUX_6)
+	]
+}
+
+# SAI7 DAI config (inchangé Phase 1a.1)
+DAI_CONFIG(SAI, 7, 0, tac5212-hifi,
+	SAI_CONFIG(DSP_A, SAI_CLOCK(mclk, 12288000, codec_mclk_in),
+		SAI_CLOCK(bclk, 12288000, codec_consumer),
+		SAI_CLOCK(fsync, 48000, codec_consumer),
+		SAI_TDM(8, 32, 255, 255),
+		SAI_CONFIG_DATA(SAI, 7, 0)))
+\end{lstlisting}
+
+\subsection{\texttt{m4/demux\_route\_hpmon.m4} (nouveau blob route matrix)}
+
+Duplication identité 8 canaux vers 2 sinks. Respecte \texttt{mux\_mix\_check()} de \texttt{sof/src/audio/mux/mux.c:44} : \textbf{pas de sommation} entre streams (popcount(mask) == 1 par byte).
+
+\begin{lstlisting}[language={}, basicstyle=\ttfamily\scriptsize]
+divert(-1)
+
+# demux_route_hpmon.m4 Phase 1a.2
+# 1 source 8ch -> 2 sinks 8ch (identity duplication)
+#   stream 0 : sink vers buffer DAI (pipeline 6 interne) -> SAI TX
+#   stream 1 : sink vers buffer tap (cross-pipeline 7)   -> HP_Monitor
+
+define(`matrix_to_dai', `ROUTE_MATRIX(6,
+	`BITS_TO_BYTE(1, 0, 0, 0, 0, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 1, 0, 0, 0, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 1, 0, 0, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 1, 0, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 0, 1, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 0, 0, 1, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 0, 0, 0, 1, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 0, 0, 0, 0, 1)')')
+
+define(`matrix_to_hpmon', `ROUTE_MATRIX(7,
+	`BITS_TO_BYTE(1, 0, 0, 0, 0, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 1, 0, 0, 0, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 1, 0, 0, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 1, 0, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 0, 1, 0, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 0, 0, 1, 0, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 0, 0, 0, 1, 0)',
+	`BITS_TO_BYTE(0, 0, 0, 0, 0, 0, 0, 1)')')
+
+divert(0)dnl
+MUXDEMUX_CONFIG(DEMUX_priv, 2,
+	LIST_NONEWLINE(`', `matrix_to_dai,', `matrix_to_hpmon'))
+\end{lstlisting}
+
+% =======================================================================
+\section{Tests Phase 1a.2}
+
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item \textbf{T8 Gate compile} : \texttt{m4 | alsatplg} sans erreur, aucun widget orphelin. Vérifier \texttt{alsatplg --dump | grep MUXDEMUX} présent, \texttt{grep "PIPELINE\_DEMUX\_6" masterV42-hpmon.conf} présent avant \texttt{SectionGraph}.
+  \item \textbf{T9 Load} : \texttt{dmesg} propre (pas de \texttt{-22} ni \texttt{-110}). 3 PCMs visibles : \texttt{SAI\_Capture} (dev 0), \texttt{SAI\_Playback} (dev 1), \texttt{HP\_Monitor} (dev 2).
+  \item \textbf{T10 HP\_Monitor solo} : \texttt{arecord -D plughw:softac5212tdm,2 -c 8 -f S32\_LE -r 48000 -d 3 /tmp/hpmon\_solo.wav} $\to$ 4.6MB mais \textbf{silence} si playback pas actif (pas de signal à tap). Vérifier juste l'ouverture sans EIO.
+  \item \textbf{T11 HP\_Monitor avec playback} : \texttt{aplay -D plughw:softac5212tdm,1 siren.wav \&} puis \texttt{arecord -D plughw:softac5212tdm,2 -c 8 -f S32\_LE -r 48000 -d 5 /tmp/hpmon\_play.wav} $\to$ doit contenir la sirène post-effets (DRC + PGA appliqués).
+  \item \textbf{T12 Triplex complet} : \texttt{arecord -D plughw:softac5212tdm,0} (SAI\_Capture) + \texttt{aplay -D plughw:softac5212tdm,1} (SAI\_Playback) + \texttt{arecord -D plughw:softac5212tdm,2} (HP\_Monitor) simultanés. Les 3 doivent tourner sans xrun 10s minimum.
+  \item \textbf{T13 Null test post-effets} : comparer \texttt{/tmp/hpmon\_play.wav} contenu avec le tone original après DRC bypass (via \texttt{amixer cset} du switch DRC) $\to$ confirme le tap est bien post-DRC (pas pre-DRC).
+\end{enumerate}
+
+% =======================================================================
+\section{Questions pour l'investigation critic V1}
+
+\begin{enumerate}[leftmargin=*, itemsep=2pt]
+  \item \textbf{Q1 Piggyback scheduling syntax} : le 13e arg \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} de \texttt{PIPELINE\_PCM\_ADD} est-il la bonne syntaxe ? Faut-il que PIPE 7 passe aussi le 12e arg \texttt{SCHEDULE\_TIME\_DOMAIN\_DMA} ou hérite-t-il via le piggyback ? Vérifier pipeline.m4 + sof-smart-amplifier.m4 + sof-imx8mp-wm8960-kwd.m4.
+  \item \textbf{Q2 MUXDEMUX 2 sinks même pipeline + 1 cross-pipeline} : le W\_MUXDEMUX avec mode demux=1 peut-il avoir simultanément un sink INTRA-pipeline (B4 $\to$ DAI dans PIPE 6) ET un sink cross-pipeline (B5 exposé via PIPELINE\_DEMUX\_6 $\to$ PIPE 7) ? Le pattern upstream sof-smart-amplifier l'utilise dans quel sens exact ?
+  \item \textbf{Q3 Export PIPELINE\_DEMUX\_N} : pour éviter le bug V2.7 (\texttt{PIPELINE\_DEMUX\_3} fantôme), le squelette V1 exporte \texttt{PIPELINE\_DEMUX\_6 = N\_BUFFER(5)}. Est-ce le bon widget à exporter (buffer, pas MUXDEMUX widget lui-même) ? Confirmer avec pipe-amp-ref-capture.m4.
+  \item \textbf{Q4 MUXDEMUX route matrix} : le blob demux\_route\_hpmon.m4 avec 2 streams d'identité 8ch (vers sinks pipe\_id 6 et 7) respecte-t-il \texttt{mux\_mix\_check} ? Les \texttt{ROUTE\_MATRIX(pipeline\_id, ...)} doivent-ils utiliser les pipeline\_id de destination (6 et 7) ?
+  \item \textbf{Q5 Pipeline 7 sans W\_PIPELINE} : PIPE 7 ne reçoit pas de \texttt{DAI\_ADD} (pas de DAI réel). Sans \texttt{DAI\_ADD}, le scheduler widget \texttt{W\_PIPELINE} n'est pas créé. Le piggyback \texttt{PIPELINE\_PLAYBACK\_SCHED\_COMP\_6} compense-t-il ? Ou faut-il ajouter un \texttt{W\_PIPELINE} explicite avec le sched\_comp partagé ?
+  \item \textbf{Q6 Latence tap} : le tap post-DRC ajoute-t-il une latence additionnelle vs le signal qui va au DAI ? Le MUXDEMUX copie-t-il au même tick d'horloge ou avec décalage ?
+  \item \textbf{Q7 Risques CPU} : avec 3 pipelines actifs (PIPE 1, 6, 7) au lieu de 2, le budget CPU HiFi4 @ 2ms tient-il encore ? PIPE 7 est minimaliste (juste 1 buffer + 1 PCM), donc marginal, mais à confirmer.
+\end{enumerate}
+
+% =======================================================================
+\section{Livrables Phase 1a.2}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \texttt{sof/tools/topology/topology1/sof-imx8mp-tac5212-masterV42-hpmon.m4} (top-level 3 pipelines + SectionGraph)
+  \item \texttt{sof/tools/topology/topology1/sof/sof-imx8mp-tac5212-pipe-effects-playback-tap.m4} (playback avec MUXDEMUX)
+  \item \texttt{sof/tools/topology/topology1/sof/sof-imx8mp-tac5212-pipe-hp-monitor-capture.m4} (capture piggyback)
+  \item \texttt{sof/tools/topology/topology1/m4/demux\_route\_hpmon.m4} (route matrix identity 8ch $\times$ 2)
+  \item Le fichier original \texttt{pipe-effects-playback.m4} reste intact (Phase 1a.1 MVP sans tap peut être redéployée en rollback)
+\end{itemize}
+
+% =======================================================================
+\section{Protocole}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item Aucune modification SOF source sans \texttt{critic\_analyze} préalable (fenêtre 2000s).
+  \item Gate \texttt{m4 | alsatplg} OBLIGATOIRE avant deploy sur board.
+  \item Backup tplg V4.2 Phase 1a.1 (déjà présent : \texttt{sof-imx8mp-tac5212.tplg.bak-v27-preV42} + \texttt{.tplg} actuel 13819 bytes validé).
+  \item Si T8 échoue $\to$ retour \texttt{critic\_analyze} avec erreur exacte avant modif.
+  \item Driver SAI \texttt{sof/src/drivers/imx/sai.c} INTOUCHABLE (7 jours de travail utilisateur).
+\end{itemize}
+
+\end{document}
