@@ -5,6 +5,12 @@ SRC_URI += "file://0001-imx8mp-evk-audio-mipi.patch"
 SRC_URI += "file://spdif.cfg"
 SRC_URI += "file://disable-at24.cfg"
 
+# SOF probes support for i.MX (additive: new file imx-probes.c, new Kconfig
+# entry, no behavior change to existing code)
+SRC_URI += "file://imx-probes.c"
+SRC_URI += "file://apply-imx-probes.py"
+SRC_URI += "file://sof-imx-probes.cfg"
+
 # TAC5212 codec driver and device tree configuration
 SRC_URI += "file://tac5212.c"
 SRC_URI += "file://tac5212.h"
@@ -13,6 +19,10 @@ SRC_URI += "file://tac5212.cfg"
 
 # Install TAC5212 driver into kernel tree, patch Kconfig/Makefile and DTS
 do_patch:prepend() {
+    # Copy SOF imx-probes source file then patch Kconfig/Makefile/imx8m.c
+    cp ${WORKDIR}/imx-probes.c ${S}/sound/soc/sof/imx/imx-probes.c
+    python3 ${WORKDIR}/apply-imx-probes.py ${S}
+
     # Copy driver source files
     cp ${WORKDIR}/tac5212.c ${S}/sound/soc/codecs/tac5212.c
     cp ${WORKDIR}/tac5212.h ${S}/sound/soc/codecs/tac5212.h
@@ -41,13 +51,17 @@ do_patch:append() {
     python3 ${WORKDIR}/apply-tac5212-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
 }
 
-# Force TAC5212 config into .config after kernel configure
+# Force TAC5212 + SOF imx-probes config into .config after kernel configure
 do_configure:append() {
     cfg="${B}/.config"
     if [ -f "$cfg" ]; then
         sed -i 's/# CONFIG_SND_SOC_TAC5212 is not set/CONFIG_SND_SOC_TAC5212=m/' "$cfg"
         if ! grep -q "CONFIG_SND_SOC_TAC5212" "$cfg"; then
             echo "CONFIG_SND_SOC_TAC5212=m" >> "$cfg"
+        fi
+        sed -i 's/# CONFIG_SND_SOC_SOF_IMX_PROBES is not set/CONFIG_SND_SOC_SOF_IMX_PROBES=m/' "$cfg"
+        if ! grep -q "CONFIG_SND_SOC_SOF_IMX_PROBES" "$cfg"; then
+            echo "CONFIG_SND_SOC_SOF_IMX_PROBES=m" >> "$cfg"
         fi
         oe_runmake -C ${S} O=${B} olddefconfig
     fi
