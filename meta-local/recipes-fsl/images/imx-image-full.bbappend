@@ -9,6 +9,9 @@ IMAGE_INSTALL:append = " imx-dsp imx-dsp-codec-ext imx-dspc-asrc speexdsp ladspa
 # SOF (Sound Open Firmware) for HiFi4 DSP audio processing
 IMAGE_INSTALL:append = " sof-zephyr sof-tools"
 
+# V3.2.2 NPU audio tap — kernel module exposing /dev/imx-audio-tap (mmap shared mem)
+IMAGE_INSTALL:append = " kernel-module-imx-audio-tap"
+
 # TAC5212 boot-time init (tac-reset script + systemd service)
 IMAGE_INSTALL:append = " tac5212-service"
 

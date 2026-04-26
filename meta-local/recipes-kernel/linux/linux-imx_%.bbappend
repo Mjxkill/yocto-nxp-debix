@@ -17,6 +17,9 @@ SRC_URI += "file://tac5212.h"
 SRC_URI += "file://apply-tac5212-dt.py"
 SRC_URI += "file://tac5212.cfg"
 
+# V3.2.2 NPU tap — DT carve for shared mem at 0x942B0000 (256 KB no-map)
+SRC_URI += "file://apply-npu-tap-dt.py"
+
 # Install TAC5212 driver into kernel tree, patch Kconfig/Makefile and DTS
 do_patch:prepend() {
     # Copy SOF imx-probes source file then patch Kconfig/Makefile/imx8m.c
@@ -49,6 +52,8 @@ config SND_SOC_TAC5212\
 # Apply TAC5212 DT changes after all patches are applied
 do_patch:append() {
     python3 ${WORKDIR}/apply-tac5212-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
+    # V3.2.2 NPU tap DT carve (npu_tap_buffer@942b0000 + imx_audio_tap node)
+    python3 ${WORKDIR}/apply-npu-tap-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
 }
 
 # Force TAC5212 + SOF imx-probes config into .config after kernel configure
