@@ -1,0 +1,790 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{longtable}
+
+\definecolor{codebg}{rgb}{0.96,0.96,0.96}
+\definecolor{codecomment}{rgb}{0.40,0.50,0.40}
+\definecolor{codekey}{rgb}{0.10,0.30,0.65}
+\definecolor{codestr}{rgb}{0.55,0.20,0.20}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  commentstyle=\color{codecomment}\itshape,
+  keywordstyle=\color{codekey}\bfseries,
+  stringstyle=\color{codestr},
+  frame=single,
+  rulecolor=\color{black!20},
+  breaklines=true,
+  breakatwhitespace=true,
+  showstringspaces=false,
+  numbers=none,
+  framerule=0.4pt,
+  framesep=4pt,
+  xleftmargin=8pt,
+  xrightmargin=4pt,
+  aboveskip=8pt,
+  belowskip=8pt,
+}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+  pdftitle={Manuel développeur — Phase 1a.2 NPU Tap V3.2.2},
+  pdfauthor={Electrosens — Plateforme Mastering Live Debix},
+}
+
+\titleformat{\section}{\Large\bfseries\color{blue!50!black}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{blue!40!black}}{\thesubsection}{1em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Phase 1a.2 — NPU Tap V3.2.2}
+\fancyhead[R]{\small Manuel développeur}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\title{\textbf{Manuel développeur \\ Phase 1a.2 — NPU Tap V3.2.2}\\[0.5em]
+       \large Plateforme Mastering Live Debix\\
+       i.MX 8M Plus + 4× TAC5212 + SOF/HiFi4 + NPU 2.3 TOPS}
+\author{Electrosens — Michael Jouannigot}
+\date{27 avril 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{
+\textbf{Résumé.} Ce manuel documente la Phase 1a.2 du projet : le \emph{tap audio
+post-effets vers NPU}, contrainte non-négociable du projet. Il couvre l'architecture
+hardware/software, les périphériques ALSA, le mécanisme du tap, l'usage des outils
+développeur (\texttt{npu\_tap\_reader}, \texttt{npu\_master\_loop.py}, tests V4.2),
+les builds Yocto, le déploiement, et les tests effectués (8 itérations spec et
+8 investigations critic.io cumulées).
+}}
+\end{center}
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Vue d'ensemble}
+% ============================================================================
+
+La \emph{Phase 1a.2} du projet « Plateforme Mastering Live Debix » consiste à
+\textbf{capturer le buffer audio post-effets DSP} (post-MBDRC, PGA, DRC) et à
+l'exposer en userspace pour analyse ML temps réel par le NPU 2.3 TOPS du
+i.MX 8M Plus.
+
+\subsection{Pourquoi}
+
+L'\textbf{audio mastering automatique en boucle fermée} requiert que le NPU
+analyse les samples \emph{après} les traitements DSP (multiband DRC, exciter,
+limiter…) afin de piloter \emph{ces mêmes paramètres} (gains EQ, seuils
+multiband, exciter amount) à $\sim$10 Hz selon une inférence TFLite.
+
+Sans tap post-effets, le NPU ne peut analyser que des samples « secs », ce qui
+casse l'idée même du mastering live IA-piloté.
+
+\subsection{Voies tentées (échecs documentés)}
+
+Avant V3.2.2, plusieurs voies ont été essayées et bloquées techniquement :
+
+\begin{itemize}[leftmargin=1.2em]
+\item \textbf{V1.0--V1.5 ALSA} (capture PCM via BE DAI dummy + MUXDEMUX
+  cross-pipeline) : bloqué par DPCM walk \texttt{dpcm\_end\_walk\_at\_be},
+  IPC3 trigger asymétrie, snd-soc-dummy sans binding DT.
+\item \textbf{S1 SOF Probes upstream} : bloqué silent par \texttt{sdma.c:588}
+  guard \texttt{if (!buf\_addr || !buf\_xaddr) return 0;} (gateway HDA Intel/ACP
+  AMD, pas SDMA i.MX).
+\item \textbf{Alt-A IPC vendor} (\texttt{SOF\_IPC\_PROBE\_HOST\_BUFFER\_SET}) :
+  bloqué par filtre ABI silencieux qui rejette les commandes inconnues
+  ($-22$ EINVAL invisible, etrace mailbox muette).
+\item \textbf{Hardware loopback SAI / scatter-gather multi-dest / dual-mapping
+  OCRAM/DRAM} : impossibles par construction matérielle.
+\end{itemize}
+
+\subsection{Solution V3.2.2}
+
+\textbf{Hook firmware dans \texttt{dai\_dma\_cb()}} de
+\texttt{sof/src/audio/dai-legacy.c}, qui copie les samples post-effets depuis le
+buffer DMA SAI7 (en OCRAM \texttt{0x3B6F0000}) vers une zone \emph{reserved-memory}
+en SDRAM (\texttt{0x942B0000}, 256 KB \texttt{no-map}) lue par un module kernel
+out-of-tree \texttt{imx-audio-tap.ko} via \texttt{mmap}.
+
+% ============================================================================
+\section{Architecture matérielle et logicielle}
+% ============================================================================
+
+\subsection{Plateforme}
+
+\begin{itemize}[leftmargin=1.2em]
+\item \textbf{Board} : Debix Model AB (NXP i.MX 8M Plus, 4× Cortex-A53 @ 1.6 GHz,
+  HiFi4 DSP @ 800 MHz, NPU 2.3 TOPS, Cortex-M7 inutilisé).
+\item \textbf{OS} : Yocto 5.0 (Scarthgap), kernel Linux \texttt{lf\_6.6.36}
+  patched, userspace Ardour/JACK/Flutter.
+\item \textbf{Audio front-end} : 4× TAC5212 daisy-chain via SAI7 TDM 8 slots
+  $\times$ 32 bits @ 48 kHz, mode \textbf{ASYNC} (TX provider, RX consumer
+  \texttt{SYNC=0}), continuous BCLK pour stabilité PLL TAC.
+\item \textbf{DSP firmware} : Sound Open Firmware (SOF) Zephyr-based,
+  IPC3 protocol, fork \texttt{Mjxkill/sof} branche
+  \texttt{feature/sdma-ap2ap-phase1}.
+\end{itemize}
+
+\subsection{Cartographie mémoire DSP}
+
+\begin{lstlisting}[language=C]
+/* memory.h — sof/src/platform/imx8m/include/platform/lib/memory.h */
+SDRAM0_BASE      = 0x92400000   /* 8 MB DSP code + heaps */
+SDRAM1_BASE      = 0x92C00000   /* 8 MB DSP heap_buffer + mailbox */
+SOF MEMORY{}     = [0x92400000, 0x93400000)   /* 16 MB DSP allocations */
+
+DRAM0 (OCRAM)    = 0x3B6E8000   /* 8 KB DSP-only (HEAP_HP_RX) */
+DRAM1 (OCRAM)    = 0x3B6F0000   /* 8 KB DSP-only (HEAP_HP_TX) */
+
+/* Linux side */
+dsp_reserved          = [0x92400000, 0x933FFFFF]  /* 16 MB no-map */
+dsp_reserved_heap     = [0x93400000, 0x942EFFFF]  /* 15 MB no-map (15.687 MB
+                                                     after V3.2.2 carve) */
+npu_tap_buffer        = [0x942B0000, 0x942EFFFF]  /* 256 KB no-map V3.2.2 */
+vdev0vring0           = [0x942F0000, 0x942F7FFF]  /* M7 RPMsg */
+vdev0vring1           = [0x942F8000, 0x942FFFFF]  /* M7 RPMsg */
+vdev0buffer           = [0x94300000, 0x943FFFFF]  /* M7 RPMsg, HORS DSP */
+\end{lstlisting}
+
+\textbf{Découverte clé} : \texttt{vdev0buffer} (M7 RPMsg) est \emph{hors fenêtre
+DSP HiFi4}. Le V3.2.2 utilise \texttt{0x942B0000}, qui est \emph{dans} la
+\texttt{cacheattr} HiFi4 region 4 (\texttt{0x80000000-0x9FFFFFFF}, write-through)
+et \emph{hors} de la zone allouable par SOF \texttt{buffer\_alloc()} (qui
+s'arrête à \texttt{0x93400000}).
+
+\subsection{Cacheattr Xtensa HiFi4}
+
+\begin{lstlisting}
+/* sof/src/platform/imx8m/imx8m.x.in:166-167 */
+_memmap_cacheattr_imx8_wt_allvalid = 0x22212222;
+PROVIDE(_memmap_cacheattr_reset = _memmap_cacheattr_imx8_wt_allvalid);
+
+/* Décodage par digit hex (chaque digit = 512 MB) :
+   (0x22212222 >> 16) & 0xF = 0x1 = WRITE-THROUGH
+   pour la region 4 (0x80000000-0x9FFFFFFF) qui contient SDRAM. */
+\end{lstlisting}
+
+Conséquence : les \emph{stores} DSP vers \texttt{0x942B0000} traversent le cache
+mais sont \emph{immédiatement écrits en DRAM physique} (write-through). La
+cohérence DSP$\to$A53 est donc \textbf{gratuite} (à l'inverse d'un cache
+write-back qui exigerait un flush explicite).
+
+\textbf{Cache line} : \texttt{XCHAL\_DCACHE\_LINESIZE = 128} sur HiFi4 i.MX 8M Plus.
+La struct \texttt{npu\_tap\_hdr} fait exactement 128 B (1 ligne), alignée
+\texttt{\_\_aligned(128)}.
+
+% ============================================================================
+\section{Périphériques ALSA et topologie SOF}
+% ============================================================================
+
+\subsection{Cartes ALSA présentes}
+
+\begin{lstlisting}
+$ aplay -l
+card 0: audiohdmi  [audio-hdmi]    (HDMI output, hors-scope mastering)
+card 1: es8316audio                (codec interne board, hors-scope)
+card 2: softac5212tdm              (SOF + 4× TAC5212 — la console mastering)
+            device 1: SAI_Playback (8ch S32_LE, hw:2,1)
+
+$ arecord -l
+card 1: es8316audio                (interne, hors-scope)
+card 2: softac5212tdm
+            device 0: SAI_Capture  (8ch S32_LE, hw:2,0)
+card 3: sofADCIn                   (debug capture interne SOF)
+\end{lstlisting}
+
+\textbf{La carte de production = \texttt{card 2 (softac5212tdm)}} :
+\begin{itemize}[leftmargin=1.2em]
+\item \texttt{hw:2,0} : SAI\_Capture, 8 canaux entrée XLR via 4× TAC5212 ADC
+\item \texttt{hw:2,1} : SAI\_Playback, 8 canaux sortie XLR via 4× TAC5212 DAC
+\end{itemize}
+
+\subsection{Topologie SOF V4.2 (production figée)}
+
+Pipeline V4.2 = \emph{console 8 canaux end-to-end} avec chaîne d'effets stéréo
+master :
+
+\begin{lstlisting}
+Pipeline V4.2 (sof-imx8mp-tac5212-drc.m4) :
+
+  PCM_host playback (SAI_Playback)
+       |
+       v
+   MBDRC --> PGA --> DRC --> [Hook V3.2.2 dai_dma_cb] --> SAI7 TX (8ch)
+                                       |
+                                       +--> npu_tap_buffer (DSP write)
+
+  SAI7 RX (8ch) --> PCM_host capture (SAI_Capture)
+\end{lstlisting}
+
+Topology compilée : \texttt{/lib/firmware/imx/sof-tplg/sof-imx8mp-tac5212.tplg}.
+
+\subsection{Contrôles ALSA exposés (production V4.2)}
+
+\begin{lstlisting}
+$ amixer -c softac5212tdm controls | grep -E "DRC|PGA|MULTIBAND"
+numid=51,iface=MIXER,name='DRC1.0 drc_control_1'
+numid=54,iface=MIXER,name='DRC6.0 drc_control_6'
+numid=49,iface=MIXER,name='MULTIBAND_DRC1.0 multiband_drc_control_1'
+numid=52,iface=MIXER,name='MULTIBAND_DRC6.0 multiband_drc_control_6'
+numid=50,iface=MIXER,name='PGA1.0 1 Master Capture Volume'
+numid=53,iface=MIXER,name='PGA6.0 6 Master Playback Volume'
+
+# Lecture / écriture
+$ amixer -c softac5212tdm cget name='PGA6.0 6 Master Playback Volume'
+$ amixer -c softac5212tdm cset name='PGA6.0 6 Master Playback Volume' 32,32
+\end{lstlisting}
+
+Les contrôles \texttt{DRC} et \texttt{MULTIBAND\_DRC} sont des
+\emph{bytes blobs} (TLV) — leur édition runtime est prévue par le service NPU
+(Phase 4) via \texttt{sof-ctl}.
+
+% ============================================================================
+\section{Le NPU tap V3.2.2}
+% ============================================================================
+
+\subsection{Principe}
+
+Au moment où le firmware DSP a fini de copier le buffer audio post-effets
+dans son buffer DMA SAI7 (callback \texttt{dai\_dma\_cb()} de
+\texttt{dai-legacy.c} après chaque période DMA de 2 ms), un \texttt{memcpy\_s}
+supplémentaire est fait vers une zone DRAM partagée DSP$\leftrightarrow$A53.
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.6cm, every node/.style={font=\small}]
+\node[draw, rectangle, fill=blue!10] (host) {PCM\_host};
+\node[draw, rectangle, fill=blue!20, below=of host] (mbdrc) {MBDRC};
+\node[draw, rectangle, fill=blue!20, below=of mbdrc] (pga) {PGA};
+\node[draw, rectangle, fill=blue!20, below=of pga] (drc) {DRC};
+\node[draw, rectangle, fill=red!20, below=of drc] (dma) {dma\_buffer (OCRAM)};
+\node[draw, rectangle, fill=green!20, right=2.5cm of dma] (tap) {npu\_tap\_buffer\\(SDRAM @0x942B0000)};
+\node[draw, rectangle, fill=blue!20, below=of dma] (sai) {SAI7 TX};
+\node[draw, rectangle, fill=green!20, right=2.5cm of tap, xshift=-0.5cm] (mmap) {/dev/imx-audio-tap\\(mmap WC)};
+\node[draw, rectangle, fill=green!10, below=of mmap] (us) {npu\_tap\_reader\\or npu\_master\_loop};
+\node[draw, rectangle, fill=yellow!20, below=of us] (npu) {NPU 2.3 TOPS};
+
+\draw[->] (host) -- (mbdrc);
+\draw[->] (mbdrc) -- (pga);
+\draw[->] (pga) -- (drc);
+\draw[->] (drc) -- (dma);
+\draw[->] (dma) -- (sai);
+\draw[->, red, thick] (dma) -- (tap) node[midway, above, font=\tiny] {memcpy + memw};
+\draw[->] (tap) -- (mmap);
+\draw[->] (mmap) -- (us);
+\draw[->, dashed] (us) -- (npu);
+\end{tikzpicture}
+\end{center}
+
+\subsection{Layout mémoire de la zone partagée}
+
+\begin{lstlisting}[language=C]
+/* meta-local/recipes-kernel/imx-audio-tap/files/imx-audio-tap-uapi.h */
+#define NPU_TAP_PHYS_ADDR     0x942B0000U
+#define NPU_TAP_RING_SIZE     0x40000U     /* 256 KB total */
+#define NPU_TAP_HDR_SIZE      128U         /* 1 cache line HiFi4 */
+#define NPU_TAP_MAGIC         0x5441504EU  /* "NPAT" little-endian */
+
+struct npu_tap_hdr {
+    uint32_t magic;          /* @0  : NPU_TAP_MAGIC, écrit en DERNIER */
+    uint32_t version;        /* @4  : 4 (V3.2.2) */
+    uint32_t ring_size;      /* @8  : runtime = (262016 / period_bytes) * period_bytes */
+    uint32_t hdr_size;       /* @12 : 128 */
+    uint32_t epoch;          /* @16 : DSP increments à chaque dai_common_params */
+    uint32_t write_idx;      /* @20 : DSP, wrap mod ring_size */
+    uint32_t read_idx;       /* @24 : A53, wrap mod ring_size (info uniquement) */
+    uint32_t period_bytes;   /* @28 : 3072 (8ch × 4B × 96 frames @ 2 ms) */
+    uint32_t sample_rate;    /* @32 : 48000 */
+    uint32_t channels;       /* @36 : 8 */
+    uint32_t frame_fmt;      /* @40 : SOF_IPC_FRAME_S32_LE = 2 */
+    uint32_t reserved[19];   /* @44..@124 : zero-init padding */
+};
+\end{lstlisting}
+
+\textbf{Layout disque} :
+
+\begin{lstlisting}
+0x942B0000  +-----------------------------+
+            |  npu_tap_hdr (128 B)        |
+0x942B0080  +-----------------------------+
+            |  ring data (S32_LE 8ch)     |
+            |  ring_size = 261120 B       |
+            |  (= 85 périodes × 3072)     |
+0x942EFC00  +-----------------------------+
+            |  unused (896 B padding)     |
+0x942EFFFF  +-----------------------------+
+\end{lstlisting}
+
+\subsection{Pattern producteur (DSP, R3 canonique \texttt{smp\_store\_release})}
+
+À chaque \texttt{dai\_common\_params()} (changement de paramètres) :
+
+\begin{enumerate}[leftmargin=1.4em]
+\item \texttt{magic = 0} (invalidate) + writeback + \texttt{memw}
+\item \texttt{memset} reserved fields (zero-init)
+\item Écriture des champs \emph{data state} : version, ring\_size,
+      hdr\_size, write\_idx=0, read\_idx=0, period\_bytes,
+      sample\_rate, channels, frame\_fmt
+\item \texttt{dcache\_writeback\_region(hdr, offsetof(epoch))} (flush data avant epoch)
+\item \texttt{memw} barrier
+\item \texttt{epoch = ++dd->tap\_epoch} + writeback + \texttt{memw}
+\item \texttt{magic = NPAT} (publish LAST) + writeback + \texttt{memw}
+\end{enumerate}
+
+À chaque \texttt{dai\_dma\_cb()} (chaque période DMA $\sim$2 ms) :
+
+\begin{lstlisting}[language=C]
+if (dev->direction == SOF_IPC_STREAM_PLAYBACK
+    && dd->tap_buffer && bytes > 0) {
+
+    /* Calcul du pointeur source (back-walk après audio_stream_produce) */
+    void *src = audio_stream_rewind_wptr_by_bytes(stream, bytes);
+    /* ... gestion ring wrap × 2 (src et tap) avec memcpy_s ... */
+
+    /* Flush data AVANT write_idx (pattern sdma.c:1254-1255) */
+    dcache_writeback_region(data_base + w, MIN(bytes, ring_size - w));
+    if (bytes > ring_size - w)
+        dcache_writeback_region(data_base, bytes - (ring_size - w));
+    __asm__ volatile("memw" ::: "memory");
+
+    /* Publish write_idx */
+    hdr->write_idx = (w + bytes) % ring_size;
+    dcache_writeback_region(&hdr->write_idx, sizeof(hdr->write_idx));
+    __asm__ volatile("memw" ::: "memory");
+}
+\end{lstlisting}
+
+\subsection{Pattern consommateur (A53, R4 seqcount-style)}
+
+\begin{lstlisting}[language=C]
+/* Boucle de lecture canonique côté userspace */
+do {
+    e1 = atomic_load_explicit(&hdr->epoch, memory_order_acquire);
+    w  = atomic_load_explicit(&hdr->write_idx, memory_order_acquire);
+    /* Lire data du ring [local_read .. w) dans bounce buffer */
+    e2 = atomic_load_explicit(&hdr->epoch, memory_order_acquire);
+} while (e1 != e2);
+
+if (e1 != last_seen_epoch) {
+    /* DSP reset détecté → discard, resync read_idx = w */
+    last_seen_epoch = e1;
+    local_read = w;
+    continue;
+}
+/* Process bounce buffer (push to NPU, dump WAV, ...) */
+local_read = w;
+\end{lstlisting}
+
+% ============================================================================
+\section{Outils développeur}
+% ============================================================================
+
+\subsection{\texttt{npu\_tap\_reader} — dump WAV et stats}
+
+Application C standalone (\texttt{meta-local/audio-tools/npu\_tap\_reader.c}) qui
+mmap \texttt{/dev/imx-audio-tap}, lit avec le pattern R4, dump optionnel en WAV
+et imprime des statistiques temps réel.
+
+\textbf{Compilation sur la board} :
+\begin{lstlisting}
+$ scp meta-local/audio-tools/npu_tap_reader.c root@192.168.0.9:/root/tests/
+$ ssh root@192.168.0.9 'gcc -O2 -Wall -o /root/tests/npu_tap_reader \
+                                       /root/tests/npu_tap_reader.c'
+\end{lstlisting}
+
+\textbf{Usage} :
+\begin{lstlisting}
+$ npu_tap_reader [--dump file.wav] [--stats] [--time seconds]
+
+  --dump FILE   Save samples to WAV (8ch S32_LE 48kHz)
+  --stats       Print throughput, drops, epoch transitions
+  --time N      Stop after N seconds (default = until SIGINT)
+
+# Exemple : capture 5 s pendant un aplay
+$ aplay -D hw:2,1 /root/tests/siren.wav &
+$ npu_tap_reader --dump /tmp/tap.wav --stats --time 5
+\end{lstlisting}
+
+\textbf{Sortie type} :
+\begin{lstlisting}
+npu_tap: header valid -- version=4 ring_size=261120 period=3072 rate=48000 ch=8
+npu_tap: 1.54 MB/s (epoch=1 resets=0 races=0 total=2224128 B)
+...
+npu_tap: wrote 7738368 bytes to /tmp/tap.wav (5.04 s, 1.54 MB/s)
+\end{lstlisting}
+
+\subsection{\texttt{npu\_master\_loop.py} — squelette mastering NPU}
+
+Service Python (\texttt{meta-local/audio-tools/npu\_master\_loop.py}) qui :
+
+\begin{itemize}[leftmargin=1.2em]
+\item lit le tap audio (R4 seqcount-style, R6 runtime ring\_size) ;
+\item bufferise les samples en fenêtres FFT 2048 ($\approx$ 42.67 ms @ 48 kHz) ;
+\item calcule les \emph{features master-bus} : RMS L/R/M, balance, crest,
+      corrélation stéréo, loudness 8 bandes log-spaced (60 Hz à 16 kHz) ;
+\item lit la valeur courante du contrôle ALSA \texttt{Master Playback Volume}
+      via \texttt{amixer} ;
+\item imprime les features à fréquence configurable (10 Hz par défaut).
+\end{itemize}
+
+\textbf{Usage} :
+\begin{lstlisting}
+$ python3 npu_master_loop.py [--device /dev/imx-audio-tap]
+                             [--window 2048] [--rate 10]
+                             [--bands 8] [--time 0]
+
+# Exemple : analyse pendant un aplay siren
+$ aplay -D hw:2,1 /root/tests/siren.wav &
+$ python3 npu_master_loop.py --time 8 --rate 5
+\end{lstlisting}
+
+\textbf{Sortie type} :
+\begin{lstlisting}
+npu_master: header OK -- version=4 ring_size=261120 period=3072 rate=48000 ch=8
+npu_master: ALSA Master Playback Volume = 'PGA6.0 6 Master Playback Volume'
+[   0.0s] L= -5.32dB R= -5.32dB M= -5.32dB bal=0.500 crest=  3.0dB corr=+1.000
+          bands[-57.5 -51.0 -31.6 +53.6 -37.0 -65.3 -79.9 -91.1] vol=32,32
+[   2.0s] L= -5.32dB R= -5.32dB M= -5.32dB bal=0.500 crest=  3.0dB corr=+1.000
+          bands[-31.6 -22.4 +47.7 +52.4 -38.2 -64.2 -81.6 -93.0] vol=32,32
+...
+npu_master: stopped after 8.00s, 186 windows, epoch_resets=1 race_retries=0
+\end{lstlisting}
+
+\textbf{Pour la suite (Phase 4 / TFLite NPU)} : remplacer le bloc
+\texttt{print(features)} par :
+\begin{enumerate}[leftmargin=1.4em]
+\item Concaténation des features dans un \emph{tensor input} (shape selon le
+      modèle : par exemple \texttt{[batch=1, n\_bands=8, n\_steps=10]}).
+\item Appel \texttt{tflite\_runtime.Interpreter.set\_tensor()} +
+      \texttt{interpreter.invoke()} sur le NPU via le delegate
+      \texttt{libvx\_delegate.so} (eIQ).
+\item \texttt{interpreter.get\_tensor()} en sortie : gains EQ par bande,
+      seuils MBDRC, exciter amount.
+\item Écriture des contrôles ALSA correspondants via
+      \texttt{amixer cset name='MULTIBAND\_DRC6.0 ...' <bytes blob>}.
+\end{enumerate}
+
+% ============================================================================
+\section{Tests effectués}
+% ============================================================================
+
+\subsection{Régression V4.2 (pré-existant, gate obligatoire)}
+
+Script \texttt{/root/tests/sof-test.sh} (existant) : vérifie que la production
+audio V4.2 fonctionne (playback, capture, duplex, noise floor).
+
+Variante exécutée à chaque deploy V3.2.2 (avec les bons indices PCM) :
+
+\begin{lstlisting}
+# T1 Playback solo
+$ aplay -D hw:2,1 /root/tests/siren.wav
+   exit 0 attendu
+
+# T2 Capture solo
+$ arecord -D hw:2,0 -c 8 -f S32_LE -r 48000 -d 5 /tmp/r.wav
+   exit 0 attendu
+
+# T3 Duplex (le test le plus exigeant)
+$ arecord -D hw:2,0 -c 8 -f S32_LE -r 48000 -d 10 /tmp/d.wav &
+$ sleep 0.3 && aplay -D hw:2,1 /root/tests/siren.wav
+   play=0 rec=0 attendus
+
+# T4 Noise floor analysis
+$ sox /tmp/d.wav -n stats
+   RMS overall < -90 dBFS attendu
+   Peak overall < -75 dBFS attendu
+
+# T5 dmesg errors
+$ dmesg | grep -iE 'xrun|underrun|panic|sof.*err'
+   aucun (warning ASoC binding deferred bénin OK)
+\end{lstlisting}
+
+\subsection{Validation NPU tap V3.2.2 (J0--J5)}
+
+\begin{longtable}{p{2cm}p{6.5cm}p{6.5cm}}
+\toprule
+\textbf{Étape} & \textbf{Test} & \textbf{Résultat} \\
+\midrule
+\endhead
+\textbf{J0} & Stash modifs Alt-A + V1.x topology, build vanilla firmware, V4.2 régression  & \texttt{git diff sof/} propre, 4/4 V4.2 PASS, RMS -98.99 dBFS \\
+\addlinespace
+\textbf{J1} & Build firmware V3.2.2 + sign rimage + deploy + régression V4.2 & Build OK (sdram1 99.66\%), Reef magic à 0x2e0, V4.2 PASS, +V3.2.2.1 fix \texttt{period\_bytes==0} \\
+\addlinespace
+\textbf{J2} & Build kernel via Yocto (DT carve via \texttt{apply-npu-tap-dt.py}), build module \texttt{imx-audio-tap.ko}, deploy DTB + Image + .ko sur board & \texttt{modprobe} OK, \texttt{/dev/imx-audio-tap} 10:122 créé, \texttt{phys\_addr=0x00000000942b0000}, \texttt{size=262144} \\
+\addlinespace
+\textbf{J3} & Compile + run \texttt{npu\_tap\_reader} avec \texttt{aplay siren.wav}, dump WAV & magic NPAT, version 4, ring\_size 261120, epoch 1$\to$2, write\_idx flow 1.54 MB/s, WAV 7.38 MB / 5.04 s, RMS \textbf{-5.60 dBFS} (vrais samples siren capturés) \\
+\addlinespace
+\textbf{J4} & Stress sustain 10 min : \texttt{npu\_tap\_reader --time 600 --stats} en parallèle de 60 boucles \texttt{aplay siren.wav} & \textbf{0 race retries}, 60 epoch transitions monotones (1$\to$60), 1.54 MB/s steady-state, 464 MB total consommés, 0 underrun, 0 dmesg error \\
+\addlinespace
+\textbf{J5} & Run \texttt{npu\_master\_loop.py} avec aplay loop, vérifier features + ALSA controls & 186 windows analysées en 8 s, RMS L/R = -5.30 dBFS, balance 0.500, crest 3.0 dB, corr +1.000, bandes évoluent avec siren scan 300--800 Hz, vol ALSA = 32,32 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Investigations critic.io cumulées}
+
+8 investigations ($\sim$48 analyses convergentes par 6 workers IA hétérogènes :
+opencode-glm-5.1, opencode-kimi, opencode-qwen, opencode-minimax,
+opencode-deepseek-v4-pro, claude-code, gemini-3-pro CLI) :
+
+\begin{lstlisting}
+54dc95c6  V1 proposition initiale (GO 6/6 + 6 erreurs identifiées)
+01688a32  V1 -> V2 corrections (GO conditionnel)
+64a4b28e  V2 re-validation (NO-GO 5/6 -- overlap HEAP_BUFFER critical)
+23dde533  V3 nouvelle adresse 0x942B0000 (GO 5/6)
+115112b0  V3.1 + A1-A7 (GO 6/6 unanime)
+03b6477a  V3.2 + R1 epoch + R2 macro (GO 6/6 + ordering fix)
+6f4cfb00  V3.2.1 + R3 ordering canonique + R4 seqcount + R5 build diff (GO 5/6)
+f6e0efae  V3.2.2 + R6 ring align + R7 sentinelle + M1-M6 (GO 6/6 unanime)
+\end{lstlisting}
+
+% ============================================================================
+\section{Build et déploiement}
+% ============================================================================
+
+\subsection{Build firmware SOF}
+
+\begin{lstlisting}
+# 1. Source environnement (UNE fois par shell)
+$ cd /home/michael/yocto-nxp-debix
+$ EULA=1 DISTRO=fsl-imx-xwayland MACHINE=imx8mpevk \
+      source imx-setup-release.sh -b Model_AB_Infinity
+
+# 2. Build firmware Zephyr
+$ west build -d build-sof -b imx8mp_evk/mimx8ml8/adsp sof/app
+
+# 3. Sign avec rimage (produit zephyr.ri avec XMan prefix automatique)
+$ west sign -d build-sof --tool rimage \
+            --tool-path /home/michael/yocto-nxp-debix/build-rimage/rimage
+
+# 4. Verify Reef magic à offset 0x2e0
+$ xxd -s 0x2e0 -l 4 build-sof/zephyr/zephyr.ri
+000002e0: 5265 6566                                Reef
+
+# 5. Deploy
+$ scp build-sof/zephyr/zephyr.ri \
+      root@192.168.0.9:/lib/firmware/imx/sof/sof-imx8m.ri
+$ ssh root@192.168.0.9 'sync && systemctl reboot'
+\end{lstlisting}
+
+\textbf{ATTENTION} : le kernel charge \texttt{sof-imx8m.ri} (sans le \texttt{p}
+final). Path déterminé par \texttt{sound/soc/sof/imx/imx8m.c:485}.
+
+\subsection{Build kernel + DTB Yocto (force re-patch)}
+
+\begin{lstlisting}
+$ EULA=1 DISTRO=fsl-imx-xwayland MACHINE=imx8mpevk \
+      source imx-setup-release.sh -b Model_AB_Infinity
+
+$ bitbake -c cleansstate virtual/kernel
+$ bitbake virtual/kernel
+
+# Artifacts:
+$ ls -la Model_AB_Infinity/tmp/deploy/images/imx8mpevk/Image* \
+         Model_AB_Infinity/tmp/deploy/images/imx8mpevk/imx8mp-evk.dtb
+
+# Verify DTB contient les nodes V3.2.2
+$ dtc -I dtb -O dts \
+     Model_AB_Infinity/tmp/deploy/images/imx8mpevk/imx8mp-evk.dtb \
+     | grep -A 4 "npu_tap_buffer\|imx_audio_tap\|dsp_reserved_heap"
+\end{lstlisting}
+
+\subsection{Build kernel module \texttt{imx-audio-tap.ko}}
+
+\begin{lstlisting}
+$ bitbake -c cleansstate imx-audio-tap
+$ bitbake imx-audio-tap
+
+# .ko produit:
+$ find Model_AB_Infinity/tmp -name "imx-audio-tap.ko" 2>/dev/null
+.../sysroots-components/imx8mpevk/imx-audio-tap/usr/lib/modules/6.6.36/updates/imx-audio-tap.ko
+\end{lstlisting}
+
+\subsection{Deploy artifacts sur la board (192.168.0.9)}
+
+\begin{lstlisting}
+# Backup avant
+$ ssh root@192.168.0.9 'cp /boot/Image /boot/Image.bak-pre-V322 && \
+                       cp /boot/imx8mp-evk.dtb /boot/imx8mp-evk.dtb.bak-pre-V322'
+
+# Deploy
+$ scp Model_AB_Infinity/tmp/deploy/images/imx8mpevk/Image-imx8mpevk.bin \
+      root@192.168.0.9:/boot/Image
+$ scp Model_AB_Infinity/tmp/deploy/images/imx8mpevk/imx8mp-evk.dtb \
+      root@192.168.0.9:/boot/imx8mp-evk.dtb
+$ scp Model_AB_Infinity/tmp/sysroots-components/imx8mpevk/imx-audio-tap/usr/lib/modules/6.6.36/updates/imx-audio-tap.ko \
+      root@192.168.0.9:/lib/modules/6.6.36/updates/imx-audio-tap.ko
+
+$ ssh root@192.168.0.9 'depmod -a && sync && systemctl reboot'
+\end{lstlisting}
+
+% ============================================================================
+\section{Procédure runtime (utilisateur final)}
+% ============================================================================
+
+Au boot, le module \texttt{imx-audio-tap} est auto-chargé par Yocto
+(\texttt{KERNEL\_MODULE\_AUTOLOAD = "imx-audio-tap"}). À vérifier :
+
+\begin{lstlisting}
+# 1. Reset les TAC5212 (obligatoire après chaque boot, sinon capture muette)
+$ tac-reset
+
+# 2. Verify le module est chargé
+$ lsmod | grep imx_audio
+imx_audio_tap          12288  0
+
+# 3. Verify /dev et sysfs
+$ ls -la /dev/imx-audio-tap
+crw------- 1 root root 10, 122 Apr 27 06:41 /dev/imx-audio-tap
+
+$ cat /sys/class/misc/imx-audio-tap/phys_addr
+0x00000000942b0000
+$ cat /sys/class/misc/imx-audio-tap/size
+262144
+
+# 4. Verify dmesg
+$ dmesg | grep -i imx-audio-tap
+[    0.000000] OF: reserved mem: initialized node npu_tap_buffer@942b0000, ...
+[    0.000000] OF: reserved mem: 0x00000000942b0000..0x00000000942effff (256 KiB) ...
+
+# 5. Trigger l'init firmware (un aplay quelconque) puis tester
+$ aplay -D hw:2,1 -d 1 /root/tests/siren.wav
+$ npu_tap_reader --time 3 --stats
+\end{lstlisting}
+
+% ============================================================================
+\section{Troubleshooting}
+% ============================================================================
+
+\begin{tabularx}{\textwidth}{p{4.5cm}X}
+\toprule
+\textbf{Symptôme} & \textbf{Cause / Action} \\
+\midrule
+\texttt{aplay: audio open error: Device or resource busy} (juste après tac-reset) &
+Race transient, retry après 100 ms suffit. Si persistant : autre process tient hw:2,1. \\
+\addlinespace
+\texttt{arecord} retourne tous samples = 0 &
+Oublié \texttt{tac-reset} après boot. Voir mémoire \texttt{tac\_reset\_required\_after\_boot.md}. \\
+\addlinespace
+Kernel \texttt{IPC reply size 108/20 error} &
+Firmware sans XMan prefix. Régénérer avec \texttt{west sign} (pas \texttt{cat ri.xman ri}, double prefix). \\
+\addlinespace
+\texttt{/dev/imx-audio-tap} absent &
+Module non chargé : \texttt{modprobe imx-audio-tap}. Si probe fail : DT carve absent (vérifier \texttt{cat /proc/iomem | grep 942b}). \\
+\addlinespace
+A7 DT mismatch error in dmesg &
+DTB sur board ne match pas \texttt{NPU\_TAP\_PHYS\_ADDR} (0x942B0000) ou taille (262144). Re-deploy DTB Yocto. \\
+\addlinespace
+\texttt{npu\_tap\_reader} reste à magic=0xffffffff &
+Firmware n'a pas encore appelé \texttt{dai\_common\_params()}. Lancer un aplay (n'importe quel) pour trigger l'init. \\
+\addlinespace
+\texttt{epoch} ne change pas après plusieurs aplay &
+\texttt{dai\_common\_reset} non appelé entre deux aplay. Probable problème de \texttt{ALSA prepare/free} cycle, vérifier dmesg. \\
+\addlinespace
+write\_idx ne progresse pas (=0 fixe) &
+\texttt{dai\_dma\_cb} n'écrit pas. Causes : \texttt{dd->tap\_buffer == NULL} (R7 sentinelle dégagée par autre DAI), ou \texttt{dd->xrun} actif, ou \texttt{ret < 0} de \texttt{dma\_buffer\_copy\_to}. \\
+\addlinespace
+race\_retries $> 0$ persistant &
+Pattern R3 cassé : DSP n'a pas \texttt{memw} entre data et write\_idx. Vérifier sof commit V3.2.2. \\
+\bottomrule
+\end{tabularx}
+
+% ============================================================================
+\section{Références}
+% ============================================================================
+
+\subsection{Documents projet}
+
+\begin{itemize}[leftmargin=1.2em]
+\item \texttt{PROJECT\_STATE.md} — doc maître unique (architecture, voies bloquées,
+  découvertes, roadmap, fichiers clés).
+\item \texttt{PHASE\_1A\_2\_NPU\_TAP\_V3.2.2.md} — spec finale V3.2.2 avec
+  M1--M6 intégrés inline.
+\item \texttt{PHASE\_1A\_SPEC\_V4.2.pdf} — spec topologie production V4.2 figée.
+\item \texttt{AUDIO\_PLATFORM\_PLAN.md} — plan global Phases 0--7.
+\item \texttt{MASTERING\_PLATFORM\_PLAN.md} — plan détaillé Phase 1a.2--5.
+\end{itemize}
+
+\subsection{Mémoires projet (~/.claude/projects/-home-michael-yocto-nxp-debix/memory/)}
+
+\begin{itemize}[leftmargin=1.2em]
+\item \texttt{phase\_1a2\_history.md} — historique complet des voies tentées.
+\item \texttt{npu\_tap\_v1\_proposal.md} — proposition V1 originale.
+\item \texttt{project\_npu\_non\_negotiable.md} — contrainte projet.
+\item \texttt{sof\_firmware\_build.md} — procédure build/sign/deploy SOF.
+\item \texttt{sof\_firmware\_deploy\_path.md} — chemin \texttt{sof-imx8m.ri}.
+\item \texttt{tac\_reset\_required\_after\_boot.md} — \texttt{tac-reset} après boot.
+\item \texttt{deploy\_procedure.md} — procédure deploy générale.
+\end{itemize}
+
+\subsection{Références matérielles}
+
+\begin{itemize}[leftmargin=1.2em]
+\item \texttt{IMX8MPRM.pdf} — Reference Manual i.MX 8M Plus (NXP).
+\item \texttt{tac5212.pdf} — Datasheet TAC5212 (Texas Instruments).
+\item \texttt{sbaa383c.pdf} — TI Application Note daisy-chain.
+\item \texttt{DSP\_ARCHITECTURES.pdf} — Comparaison architectures DSP.
+\end{itemize}
+
+\subsection{Codes commits clés (Mjxkill GitHub)}
+
+\begin{lstlisting}
+# Repo : github.com/Mjxkill/yocto-nxp-debix, branche feature/audio-platform-v2
+4a3e3603  docs: PHASE_1A_2_NPU_TAP V3.2.2 + PROJECT_STATE
+b083331d  meta-local: J2 V3.2.2 NPU tap kernel module + DT carve
+b71e9f33  imx-audio-tap: fix sysfs phys_addr/size + Makefile KERNEL_SRC
+8054f6fd  audio-tools: J3 V3.2.2 npu_tap_reader.c
+43b6ef7e  docs: PROJECT_STATE -- Phase 1a.2 V3.2.2 hardware validation finale
+4312d6e6  audio-tools: J5 npu_master_loop.py
+c1bcc16e  apply-npu-tap-dt: rewrite using DT overrides
+
+# Repo : github.com/Mjxkill/sof, branche feature/sdma-ap2ap-phase1
+61fcb2e7d  audio: dai-legacy: V3.2.2 NPU tap hook
+9f6f70a21  audio: dai-legacy: V3.2.2.1 -- guard defensive period_bytes==0
+\end{lstlisting}
+
+% ============================================================================
+\appendix
+\section{Glossaire}
+% ============================================================================
+
+\begin{tabularx}{\textwidth}{p{3.5cm}X}
+\toprule
+\textbf{Terme} & \textbf{Définition} \\
+\midrule
+\textbf{SOF} & Sound Open Firmware — firmware audio open-source pour DSP. \\
+\textbf{HiFi4} & Cœur DSP Cadence Tensilica intégré dans i.MX 8M Plus. \\
+\textbf{TDM} & Time-Division Multiplexing — protocole audio multi-canal sur un seul bus série (8 slots ici). \\
+\textbf{SAI} & Synchronous Audio Interface — IP NXP gérant le bus audio (TDM/I²S). \\
+\textbf{TAC5212} & Codec audio TI 2 ADC + 2 DAC + 2 PDM mics par puce, 4 puces daisy-chain pour 8 canaux. \\
+\textbf{IPC3} & Inter-Processor Communication v3 — protocole de contrôle Linux $\leftrightarrow$ SOF firmware. \\
+\textbf{Mailbox SOF} & Zone DRAM partagée pour IPC (inbox, outbox, debug, trace). \\
+\textbf{cacheattr} & Configuration cache Xtensa : 1 hex digit par tranche de 512 MB. \\
+\textbf{memw} & Instruction Xtensa = memory write barrier. \\
+\textbf{dcache\_writeback\_region} & Flush des lignes de cache dirty vers DDR. Sur write-through, opération mostly redondante. \\
+\textbf{R1--R7} & Améliorations consolidées V3.2.2 (epoch, macro shared, ordering canonique, seqcount A53, build diff, ring align, sentinelle mono-DAI). \\
+\textbf{A1--A7} & Améliorations V3.1 (NULL ordering, idempotence, else success, rewind helper, double writeback, overflow guard, DT runtime check). \\
+\textbf{M1--M6} & Micro-amendements V3.2.2 inline (cache 128B, padding hdr, static\_assert, DEPRECATED comment, magic boot handshake, doc Phase 2). \\
+\bottomrule
+\end{tabularx}
+
+\end{document}
