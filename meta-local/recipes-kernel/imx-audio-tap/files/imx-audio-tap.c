@@ -87,20 +87,27 @@ static const struct file_operations imx_audio_tap_fops = {
 	.llseek = no_llseek,
 };
 
-/* sysfs read-only attributes — readable from userspace for sanity checks */
+/* sysfs read-only attributes — readable from userspace for sanity checks.
+ * Note: misc_register() uses misc->this_device with miscdevice* as drvdata,
+ * so dev_get_drvdata(dev) returns &priv->misc, not priv. Use container_of.
+ */
 static ssize_t phys_addr_show(struct device *dev,
 			      struct device_attribute *attr, char *buf)
 {
-	struct imx_audio_tap *priv = dev_get_drvdata(dev);
+	struct miscdevice *misc = dev_get_drvdata(dev);
+	struct imx_audio_tap *priv =
+		container_of(misc, struct imx_audio_tap, misc);
 
-	return sysfs_emit(buf, "0x%pa\n", &priv->phys_addr);
+	return sysfs_emit(buf, "%pa\n", &priv->phys_addr);
 }
 static DEVICE_ATTR_RO(phys_addr);
 
 static ssize_t size_show(struct device *dev,
 			 struct device_attribute *attr, char *buf)
 {
-	struct imx_audio_tap *priv = dev_get_drvdata(dev);
+	struct miscdevice *misc = dev_get_drvdata(dev);
+	struct imx_audio_tap *priv =
+		container_of(misc, struct imx_audio_tap, misc);
 
 	return sysfs_emit(buf, "%zu\n", priv->size);
 }
