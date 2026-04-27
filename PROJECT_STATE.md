@@ -80,7 +80,7 @@ Découverte critique (mémoire `phase_1a2_history.md` discovery #1) :
 | **1** | Full-duplex 8ch ALSA + REGCACHE_NONE + tac-reset | ✅ FAIT |
 | **1a** | Topology SOF V4.2 console 8ch end-to-end (MBDRC + PGA + DRC) | ✅ FAIT (production figée) |
 | **1a.1 MVP** | Pipeline V4.2 deployée + 4/4 régression PASS | ✅ FAIT (commit `9532d649`) |
-| **1a.2** | **Tap audio post-effets → NPU** | 🔴 EN COURS — V1.x ALSA bloqué, S1 Probes bloqué, Alt-A bloqué, V2 hook DSP en validation |
+| **1a.2** | **Tap audio post-effets → NPU** | ✅ **FAIT** — V3.2.2 hook `dai_dma_cb` + reserved-memory @0x942B0000 + module kernel + userspace, validé hardware J4 stress 10 min (0 race, 0 underrun, 60 epoch transitions, 1.54 MB/s steady) |
 | **2** | USB composite gadget UAC2 8×8 + 2×2 + MIDI + RNDIS | ⏳ À venir |
 | **3** | FX send 4 bus LV2 sur A53 (JACK + reverb/chorus/flanger/delay) | ⏳ À venir |
 | **4** | NPU mastering boucle fermée (TFLite + service inference) | ⏳ À venir |
@@ -180,48 +180,47 @@ T1-T6 V4.2 : `aplay siren.wav`, `arecord`, full-duplex C, latence <10 ms, RMS > 
 - ❌ **Patch kernel `sof-client-probes-ipc3.c`** : ne résout pas, le bug est dans le firmware.
 - ❌ **`vdev0buffer@94300000`** : hors fenêtre DSP, inaccessible côté DSP.
 
-## 7. État courant : Phase 1a.2 V2 (V1 corrigé)
+## 7. Phase 1a.2 V3.2.2 — DÉPLOYÉ ET VALIDÉ HARDWARE
 
-### 7.1 V2 = V1 + 6 corrections (issues investigation 6 workers `01688a32`)
+### 7.1 Évolution spec V1 → V3.2.2 (8 investigations cumulées GO 6/6)
 
-**Verdict global investigation** : GO conditionnel. Aucun NO-GO, aucun GO franc. 6 workers convergents.
+V1 (proposition initiale) → V2 (6 corrections) → V2 NO-GO (overlap HEAP_BUFFER) → V3 (adresse 0x942B0000) → V3.1 (A1-A7) → V3.2 (R1 epoch + R2 macro) → V3.2.1 (R3 ordering + R4 seqcount + R5 build diff) → V3.2.2 (R6 ring align runtime + R7 sentinelle mono-DAI + M1-M6 inline).
 
-| # | Erreur V1 | Correction V2 |
-|---|---|---|
-| 1 | Adresse `0x93500000` HORS fenêtre DSP (fenêtre s'arrête à 0x933FFFFF) | Choisir adresse dans **0x93380000-0x933C0000** (dernier bloc libre SDRAM1) |
-| 2 | `buffer_alloc(is_shared=true)` ne fait pas ce que le plan croit (sur i.MX8MP single-core, `SOF_MEM_ZONE_RUNTIME_SHARED` retombe sur `rmalloc_runtime`) | Reserved-memory DT explicite **OU** `buffer_alloc(SOF_MEM_CAPS_RAM | SOF_MEM_CAPS_DMA, ..., false)` (sans HP) |
-| 3 | `dd->dma_buffer` est en OCRAM (`HEAP_HP_TX_BASE = 0x3B6F0000`), A53 ne peut pas mmap | memcpy_s explicite OBLIGATOIRE depuis `dma_buffer` vers tap_buffer en SDRAM |
-| 4 | Math `period_bytes` fausse : annoncé 384 B | Réel : **3072 B** (8 ch × 4 B × 96 frames @ 2 ms). Charge DSP <1% inchangé |
-| 5 | Ring buffer wrap non géré dans le memcpy | Gérer head/tail split via `audio_stream_bytes_without_wrap()` |
-| 6 | Cache : annoncé `dcache_writeback_region()` requis | DSP cacheattr SDRAM = write-through (digit 4 = 1 dans `0x22212222`). `dcache_writeback_region()` est no-op effectif. Conserver pour portabilité, mais cohérence DSP→A53 gratuite via WT |
+8 investigations critic.io toutes archivées : `54dc95c6`, `01688a32`, `64a4b28e`, `23dde533`, `115112b0`, `03b6477a`, `6f4cfb00`, `f6e0efae`. Verdict final V3.2.2 : **GO 6/6 unanime**.
 
-### 7.2 V2 — Décisions techniques tranchées
+### 7.2 Architecture validée
 
-| Question | Décision |
-|---|---|
-| Hook point | `dai_dma_cb()` après `dma_buffer_copy_to()` (`dai-legacy.c:127`) |
-| Tap buffer location | **SDRAM1** via reserved-memory DT à adresse fixe |
-| Caps allocation | `SOF_MEM_CAPS_RAM \| SOF_MEM_CAPS_DMA` (PAS HP) |
-| Exposition kernel | DT `memory-region` + `of_reserved_mem_lookup` |
-| Cache coherency | DSP write-through (gratuit) + A53 `pgprot_writecombine` |
-| Module kernel | miscdevice `/dev/imx-audio-tap` + mmap |
-| App userspace | `npu_tap_reader.c` poll write_idx, push NPU |
-| **Modifs `sof/` Alt-A** | **À revert avant V2** |
+- **Adresse** : `0x942B0000` (256 KB no-map carve dans `dsp_reserved_heap`, hors SOF `MEMORY{}`)
+- **Hook firmware** : `dai_dma_cb()` après `dma_buffer_copy_to()` succès branch (else)
+- **DSP write** : `memcpy_s` + `memw` + `dcache_writeback_region` (R3 canonical smp_store_release)
+- **Header** : 128 B aligned (`__aligned(128)`, M1+M2 HiFi4 cache line full)
+- **Ring runtime** : `hdr->ring_size = (DATA_SIZE_MAX / period_bytes) * period_bytes` = 261120 (R6)
+- **Magic handshake** : `magic=0` first, all data fields, `epoch++`, `magic=NPAT` last (M5 boot safety)
+- **Sentinelle** : `npu_tap_owner` global, mono-DAI, R7 (single-core, no atomic)
+- **A53 read** : mmap `pgprot_writecombine` + `atomic_load_acquire` seqcount-style (R4)
+- **DT runtime check** : A7 `if (rmem->base != NPU_TAP_PHYS_ADDR) return -EINVAL`
+- **Build-time check** : Yocto `do_configure_prepend` diff R5 (bbfatal si UAPI ≠ SOF header)
 
-### 7.3 Plan V2 (5 jours)
+### 7.3 Plan exécuté (5 jours → 1 jour réel)
 
-| Jour | Travail | Gate |
-|---|---|---|
-| **J0** | Revert modifs Alt-A locales (`sof/src/probe/probe.c`, `ipc/ipc3/handler.c`, `include/ipc/header.h`, `include/ipc3/probe.h`, `include/sof/probe/probe.h`, `app/boards/imx8mp_evk_mimx8ml8_adsp.conf`) | `git diff sof/` propre |
-| **J1** | Firmware : hook `dai_dma_cb()` + `buffer_alloc(RAM\|DMA)` + build + sign + deploy + V4.2 régression | Build OK + V4.2 PASS |
-| **J2** | Module kernel `imx-audio-tap.ko` + DTS reserved-memory @0x93380000 | `modprobe` OK + `/dev/imx-audio-tap` + sysfs |
-| **J3** | App userspace `npu_tap_reader` + dump wav | RMS > -100 dB pendant `aplay siren.wav` |
-| **J4** | Test latence + 0-packet-loss 10 min | <50 ms latence + 0 underrun + 4/4 V4.2 PASS |
-| **J5** | Intégration NPU pipeline réelle | Stream NPU stable |
+| Jour | Travail | Status | Commit |
+|---|---|---|---|
+| **J0** | Revert Alt-A (stash) + build vanilla + V4.2 régression | ✅ PASS 5/5 | sof stash@{0} |
+| **J1** | Firmware : `npu_tap.h` + struct field + init + hook + cleanup | ✅ Build OK + V4.2 PASS | sof `61fcb2e7d`, `9f6f70a21` |
+| **J2** | Kernel module + DT carve + recipe Yocto + image install | ✅ modprobe OK + sysfs | yocto `b083331d`, `b71e9f33` |
+| **J3** | Userspace `npu_tap_reader.c` (R4 seqcount + WAV dump) | ✅ siren capturé RMS -5.60 dBFS | yocto `8054f6fd` |
+| **J4** | Stress sustain 10 min | ✅ 60 epoch transitions, 0 race, 0 underrun, 1.54 MB/s steady | (validation hardware) |
+| **J5** | Push NPU TFLite inference | ⏳ À venir |
 
-### 7.4 Plan B explicite (si V2 échoue inopinément)
+### 7.4 Validation hardware finale (192.168.0.9)
 
-**Cortex-M7 bridge via RPMsg** : pattern déjà éprouvé sur ce projet (vdev0buffer existe). Le M7 (inutilisé) snoope la zone shared mem et transmet via RPMsg vers A53. Découple totalement le tap du chemin audio critique. Effort 2-3 semaines.
+- Kernel 6.6.36 + DTB V3.2.2 + firmware V3.2.2.1 + module imx-audio-tap.ko
+- `/dev/imx-audio-tap` 10:122 (miscdevice mmap)
+- sysfs : `phys_addr=0x00000000942b0000`, `size=262144`
+- Header lu post-aplay : magic=NPAT, version=4, ring_size=261120, period=3072, rate=48000, ch=8
+- **Stress 10 min** : 0 race retries, 60 epoch transitions monotones, 1.54 MB/s steady, 464 MB consommés, 0 dmesg error
+- **V4.2 régression** : T1 play exit 0, T2 cap exit 0, T3 duplex play=0 rec=0, RMS -101 dB, 0 errors
+- **WAV dump siren** : 7.38 MB/5.04s, RMS -5.60 dBFS = vrais samples post-DRC capturés
 
 ## 8. Découvertes critiques (à NE JAMAIS oublier)
 
