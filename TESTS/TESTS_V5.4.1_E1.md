@@ -57,6 +57,15 @@
 | sdram1 (heap) | 99.66% | 99.66% | INVARIANT |
 | NPU tap V3.2.2 | invariant | invariant | INVARIANT ✅ |
 
+## Test utilisateur (réel, in-the-loop)
+
+| Champ | Valeur |
+|---|---|
+| Test utilisateur effectué | **NON** |
+| Type de test | — |
+| Résultat | — |
+| Commentaires | E1 = skeletons compilables uniquement, comps non instanciés. Pas d'effet sur audio runtime → test utilisateur peu informatif à ce stade. |
+
 ## Notes importantes
 
 **Découverte E1** : SOF a deux chemins de build pour les comps audio :

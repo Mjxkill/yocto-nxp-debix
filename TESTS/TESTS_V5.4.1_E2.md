@@ -62,6 +62,15 @@
 | sdram1 (heap) | 99.66% | 99.66% | INVARIANT |
 | NPU tap V3.2.2 | invariant | invariant | INVARIANT ✅ |
 
+## Test utilisateur (réel, in-the-loop)
+
+| Champ | Valeur |
+|---|---|
+| Test utilisateur effectué | **NON** |
+| Type de test | — |
+| Résultat | — |
+| Commentaires | E2 = mix loop + blob handler implémentés mais comps non instanciés par topology drc.m4 actuelle → no-op runtime. Premier test utilisateur fonctionnel attendu à **E3** (topology m4 mini test). |
+
 ## Logs significatifs
 
 ```

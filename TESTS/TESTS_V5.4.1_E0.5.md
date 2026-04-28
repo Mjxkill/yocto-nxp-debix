@@ -42,6 +42,15 @@
 | E0.5.g | Firmware boot dmesg propre | `dmesg \| grep -i sof` | "Firmware info: version 2:10:0-c8298" | ✅ |
 | E0.5.g | SDRAM1 utilisation stable | west build memory report | 99.66% inchangé | ✅ |
 
+## Test utilisateur (réel, in-the-loop)
+
+| Champ | Valeur |
+|---|---|
+| Test utilisateur effectué | **NON** |
+| Type de test | — |
+| Résultat | — |
+| Commentaires | À compléter si l'utilisateur lance un loopback live ou un test d'écoute sur cette étape avant E3. Pour l'instant E0.5 ne change que les pré-requis SDRAM2 (topology drc.m4 inchangée) → pas d'impact perçu attendu. |
+
 ## Logs significatifs
 
 ```

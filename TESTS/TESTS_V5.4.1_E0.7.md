@@ -48,6 +48,15 @@
 | arecord 8ch 2s | 3072044 B | 3072044 B | INVARIANT ✅ |
 | 0 xrun | OK | OK | INVARIANT ✅ |
 
+## Test utilisateur (réel, in-the-loop)
+
+| Champ | Valeur |
+|---|---|
+| Test utilisateur effectué | **NON** |
+| Type de test | — |
+| Résultat | — |
+| Commentaires | À compléter si loopback live testé. C14 + C21 sont des constantes max — n'affectent pas le comportement runtime de V3.2.2 topology actuelle. |
+
 ## Logs significatifs
 
 ```

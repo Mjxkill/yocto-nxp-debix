@@ -39,6 +39,15 @@
 | T6 | NPU tap dump pendant aplay | `npu_tap_reader --stats --time 3` | 1.5 MB/s, 0 epoch_resets, 0 race_retries | ✅ OK |
 | T7 | NPU tap dump WAV | `npu_tap_reader --dump out.wav --time 2` | 8ch S32_LE 48 kHz, samples post-effets | ✅ OK |
 
+## Test utilisateur (réel, in-the-loop)
+
+| Champ | Valeur |
+|---|---|
+| Test utilisateur effectué | **OUI** |
+| Type de test | Loopback faible latence : `loopback-lowlat.sh` (`alsaloop -E 64 -B 256 -t 5000` → params "256 2 0" en raccourci utilisateur) — full duplex 8ch capture SAI → playback SAI |
+| Résultat | **Aucun clip audio** sur les sessions normales. **Plantages occasionnels** (latence à la limite — 5 ms target tendu). |
+| Commentaires | Latence limite acceptable pour test, mais pas pour production temps réel sans marge. À expliquer/investiguer si reproduction nécessaire. Référence pour comparaison V5.4+ : si nouvelle topo apporte plus de plantages → régression à traiter. |
+
 ## Caractéristiques topology V3.2.2 (sof-imx8mp-tac5212-drc.m4)
 
 ```

@@ -23,10 +23,19 @@
 | Device | Card | Rôle | Format |
 |---|---|---|---|
 
-## Tests réalisés
+## Tests réalisés (Claude — automatisés sur board)
 
 | # | Test | Commande | Attendu | Résultat |
 |---|---|---|---|---|
+
+## Test utilisateur (réel, in-the-loop)
+
+| Champ | Valeur |
+|---|---|
+| Test utilisateur effectué | OUI / NON |
+| Type de test | <description (loopback live, écoute audio, FFT, réglage effets, etc.)> |
+| Résultat | <constat utilisateur — clips, plantages, latence ressentie, qualité audio> |
+| Commentaires | <explications, contexte, conditions d'usage> |
 
 ## Logs significatifs
 
