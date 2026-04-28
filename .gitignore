@@ -14,3 +14,28 @@ __pycache__/
 *.bak
 *~
 *.orig
+
+# West workspace (sof, zephyr, modules cloned via west update)
+.west/
+sof/
+zephyr/
+modules/
+build-sof/
+build-rimage/
+
+# Claude Code internals
+.claude/
+.mcp.json
+
+# Local notes / temp files
+TAC5212_TEST_STATUS.md
+IMX8MPRM.pdf
+*.pdf
+sbaa383c.pdf
+tac5212.pdf
+
+# Build artefacts root
+flash.bin
+
+# Test scripts dir (per-board tests)
+build-imx8m/
