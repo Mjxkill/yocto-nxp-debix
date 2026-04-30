@@ -9,15 +9,49 @@
 // allocation in startup, and pointer reporting from the standard
 // compress runtime. The actual probe protocol (probe_point_add /
 // probe_point_remove) is handled by sof-client-probes-ipc3.c.
+//
+// Vendor extension: SDMA on i.MX has no hardware DMA gateway like Intel
+// HDA or AMD ACP, so the firmware cannot resolve the host buffer phys
+// address from the stream_tag alone. We send an additional vendor IPC
+// (SOF_IPC_PROBE_HOST_BUFFER_SET) from set_params() carrying the physical
+// address and size of the compress runtime buffer; the firmware then
+// patches its SDMA buffer descriptor destination field.
 
 #include <linux/module.h>
 #include <sound/soc.h>
+#include <sound/sof/header.h>
 #include "../sof-priv.h"
 #include "../sof-client-probes.h"
 #include "../sof-client.h"
 
 /* Single extractor stream supported, tag 0 reserved for it */
 #define IMX_PROBES_STREAM_TAG	0
+
+/*
+ * Vendor IPC matching the firmware-side definition in
+ * sof/src/include/ipc/header.h and sof/src/include/ipc3/probe.h.
+ *
+ * SOF firmware encodes IPC cmd as: GLB_TYPE << 28 | CMD_TYPE << 16 | sub.
+ * GLB_PROBE = 0x9, our HOST_BUFFER_SET CMD_TYPE = 0x009.
+ */
+#define SOF_IPC_GLB_TYPE_SHIFT			28
+#define SOF_IPC_GLB_TYPE(x)			((x) << SOF_IPC_GLB_TYPE_SHIFT)
+#define SOF_IPC_GLB_PROBE_CMD			SOF_IPC_GLB_TYPE(0x9)
+
+#define SOF_IPC_CMD_TYPE_SHIFT			16
+#define SOF_IPC_CMD_TYPE(x)			((x) << SOF_IPC_CMD_TYPE_SHIFT)
+#define SOF_IPC_PROBE_HOST_BUFFER_SET		SOF_IPC_CMD_TYPE(0x009)
+
+/*
+ * struct sof_ipc_cmd_hdr is defined in <sound/sof/header.h>; we only
+ * declare the vendor payload struct here.
+ */
+struct sof_ipc_probe_host_buffer_msg {
+	struct sof_ipc_cmd_hdr hdr;
+	uint32_t phys_addr_lo;
+	uint32_t phys_addr_hi;
+	uint32_t size;
+} __packed;
 
 static int imx_probes_compr_startup(struct sof_client_dev *cdev,
 				    struct snd_compr_stream *cstream,
@@ -40,16 +74,60 @@ static int imx_probes_compr_set_params(struct sof_client_dev *cdev,
 				       struct snd_soc_dai *dai)
 {
 	/*
-	 * Compress runtime allocates the DMA buffer; firmware learns
-	 * its address via the standard SOF probes IPC (PROBE_DMA_ADD).
+	 * Our HOST_BUFFER_SET vendor IPC needs the firmware-side probe
+	 * extraction to be already initialised (probe_init() must have run
+	 * so that _probe->ext_dma.stream_tag != PROBE_DMA_INVALID).
+	 *
+	 * sof_probes_compr_set_params() calls us BEFORE ipc->init(), so
+	 * we defer the IPC to imx_probes_compr_trigger(START) where
+	 * probe_init() has already executed.
 	 */
 	return 0;
+}
+
+static int imx_probes_send_host_buffer(struct sof_client_dev *cdev,
+				       struct snd_compr_stream *cstream)
+{
+	struct snd_compr_runtime *rt = cstream->runtime;
+	struct sof_ipc_probe_host_buffer_msg msg;
+	dma_addr_t phys = rt ? rt->dma_addr : 0;
+	int ret;
+
+	if (!phys || !rt->buffer_size) {
+		dev_warn(&cdev->auxdev.dev,
+			 "imx-probes: no DMA buffer (phys=0x%llx size=%llu)\n",
+			 (unsigned long long)phys,
+			 (unsigned long long)(rt ? rt->buffer_size : 0));
+		return 0;
+	}
+
+	memset(&msg, 0, sizeof(msg));
+	msg.hdr.size = sizeof(msg);
+	msg.hdr.cmd  = SOF_IPC_GLB_PROBE_CMD | SOF_IPC_PROBE_HOST_BUFFER_SET;
+	msg.phys_addr_lo = lower_32_bits(phys);
+	msg.phys_addr_hi = upper_32_bits(phys);
+	msg.size = rt->buffer_size;
+
+	dev_info(&cdev->auxdev.dev,
+		 "imx-probes: TX HOST_BUFFER_SET cmd=0x%08x phys=0x%llx size=%u\n",
+		 msg.hdr.cmd, (unsigned long long)phys, msg.size);
+
+	ret = sof_client_ipc_tx_message_no_reply(cdev, &msg);
+	if (ret < 0)
+		dev_err(&cdev->auxdev.dev,
+			"imx-probes: HOST_BUFFER_SET IPC failed: %d\n", ret);
+	else
+		dev_info(&cdev->auxdev.dev,
+			 "imx-probes: host buffer set OK\n");
+	return ret;
 }
 
 static int imx_probes_compr_trigger(struct sof_client_dev *cdev,
 				    struct snd_compr_stream *cstream,
 				    int cmd, struct snd_soc_dai *dai)
 {
+	if (cmd == SNDRV_PCM_TRIGGER_START)
+		return imx_probes_send_host_buffer(cdev, cstream);
 	return 0;
 }
 
