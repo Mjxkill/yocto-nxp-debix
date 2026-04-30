@@ -40,7 +40,7 @@
 #define RATE     48000
 #define FORMAT   SND_PCM_FORMAT_S32_LE
 #define CDEV     "hw:2,0"
-#define PDEV     "hw:2,1"
+#define PDEV     "hw:2,0"  /* PCM_DUPLEX_ADD : 1 seul device duplex */
 #define BYTES_PER_FRAME (CHANNELS * 4)
 
 static volatile sig_atomic_t running = 1;
@@ -109,9 +109,15 @@ static void vu_bar(double db, char *out, int width)
 
 int main(int argc, char **argv)
 {
-    snd_pcm_uframes_t period = 64;
+    /* Defaults validated 2026-04-29 on Debix/i.MX8MP DMA 2ms:
+     * period=256 frames (5.33ms ALSA, multiple of DSP 2ms period),
+     * n_periods=2 (buffer 10.66ms), swap=0 (direct mapping).
+     * Smaller period (e.g. 64) blocks at start ~80% of the time due
+     * to ALSA-vs-DSP period mismatch races on PCM_DUPLEX.
+     */
+    snd_pcm_uframes_t period = 256;
     int n_periods = 2;
-    int swap = 1;
+    int swap = 0;
     int tone = 0;
     if (argc > 1) period = (snd_pcm_uframes_t)atoi(argv[1]);
     if (argc > 2) n_periods = atoi(argv[2]);
@@ -153,11 +159,23 @@ int main(int argc, char **argv)
     }
 
     /* Pre-fill playback with the full buffer of silence so it never starves
-     * waiting for the first capture frames. */
+     * waiting for the first capture frames. Retry on transient -EPIPE
+     * because cap+play start race may put play in XRUN before pre-fill
+     * gets to push data. */
     int32_t *silence = calloc(buffer, BYTES_PER_FRAME);
-    snd_pcm_sframes_t pf = snd_pcm_writei(play, silence, buffer);
+    snd_pcm_sframes_t pf = -1;
+    for (int retry = 0; retry < 5 && pf < 0; retry++) {
+        pf = snd_pcm_writei(play, silence, buffer);
+        if (pf < 0) {
+            int recover = snd_pcm_recover(play, pf, 1);
+            if (recover < 0) {
+                fprintf(stderr, "pre-fill recover: %s\n", snd_strerror(recover));
+                break;
+            }
+        }
+    }
     if (pf < 0)
-        fprintf(stderr, "pre-fill writei: %s\n", snd_strerror(pf));
+        fprintf(stderr, "pre-fill writei after retry: %s\n", snd_strerror(pf));
     free(silence);
     if (!cap) snd_pcm_start(play);  /* tone mode: no capture, start play here */
 
