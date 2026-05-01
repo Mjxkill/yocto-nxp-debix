@@ -1,57 +1,76 @@
 /*
- * loopback-c — minimal low-latency 8ch ALSA loopback for SAI7
+ * loopback-c — 8ch ALSA loopback (2 threads + ring buffer architecture)
  *
- * capture hw:2,0 -> playback hw:2,1
- * Format S32_LE 48000 Hz 8 channels (V4.2 SOF native).
+ * capture hw:2,0 -> playback hw:2,0 (PCM_DUPLEX device, same hw:2,0)
+ * Format S32_LE 48000 Hz 8 channels (SOF native).
  *
- * Channels are remixed 8 7 6 5 4 3 2 1 (input ch1 -> output ch8, etc.).
- * Pass --no-swap as first arg (or set arg1 = 0) to disable the remix.
+ * Architecture:
+ *   - cap_thread  : snd_pcm_readi(cap) → push into ring buffer
+ *   - play_thread : pop from ring buffer → snd_pcm_writei(play)
+ *   - Main thread : init, SIGINT handler, cleanup
+ *   - Ring buffer : 4 periods deep, mutex + condvar synchronisation
  *
- * Single thread, blocking RW. Uses small period and buffer to minimise
- * latency. Locks memory, raises scheduler to SCHED_FIFO.
+ * No snd_pcm_link: the ring buffer absorbs inter-stream jitter. Both
+ * cap and play are clocked by the same physical SAI BCLK so samples
+ * produced ≡ samples consumed in steady state — the ring buffer never
+ * grows or shrinks unboundedly.
  *
- * Usage:
- *   loopback-c [period_frames] [n_periods] [swap] [tone] [gain]
- *     swap=1 (default) : channels reversed (ch1<->ch8, ch2<->ch7, ...)
- *     swap=0           : direct mapping ch_i -> ch_i
- *     tone=1           : ignore capture, generate 1 kHz sine on all 8 ch
- *                        (sanity check that the writei path is reaching HP)
- *     gain=N           : multiply each sample by N before writei (default 1).
- *                        Use gain=100 to boost a weak mic signal (debug).
- * Defaults: period=64 frames (1.33 ms @ 48k), n_periods=2 (buffer=2.66 ms),
- *           swap=1, tone=0, gain=1.
+ * Defaults: period=256 (5.33 ms), n_periods=2 (buffer=10.66 ms),
+ *           swap=0 (direct mapping ch_i → ch_i), tone=0
  *
- * Build (native gcc on board with libasound headers installed):
- *   gcc -O2 -Wall loopback-c.c -lasound -o loopback-c
+ * Build (on board, requires alsa-lib + pthread headers):
+ *   gcc -O2 -Wall loopback-c.c -lasound -lm -lpthread -o loopback-c
  *
  * Stop with Ctrl+C.
  */
 
 #include <alsa/asoundlib.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <sys/mman.h>
-#include <sched.h>
+#include <stdatomic.h>
 
 #define CHANNELS 8
 #define RATE     48000
 #define FORMAT   SND_PCM_FORMAT_S32_LE
 #define CDEV     "hw:2,0"
-#define PDEV     "hw:2,0"  /* PCM_DUPLEX_ADD : 1 seul device duplex */
+#define PDEV     "hw:2,0"
 #define BYTES_PER_FRAME (CHANNELS * 4)
+#define RING_FRAMES 1024   /* 4× default period @ 256; 21 ms max ring latency */
 
+/* ========== Globals ========== */
 static volatile sig_atomic_t running = 1;
 static void on_sigint(int sig) { (void)sig; running = 0; }
 
-static int set_hw_params(snd_pcm_t *pcm, const char *name,
-                         snd_pcm_uframes_t period, snd_pcm_uframes_t buffer)
+/* Ring buffer (CHANNELS interleaved samples per frame) */
+static int32_t *ring_buf;        /* RING_FRAMES * CHANNELS samples */
+static size_t ring_w = 0;         /* total frames written by cap thread */
+static size_t ring_r = 0;         /* total frames read by play thread */
+static pthread_mutex_t ring_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ring_cond_data = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t ring_cond_space = PTHREAD_COND_INITIALIZER;
+
+/* Stats */
+static atomic_long stat_in = 0;
+static atomic_long stat_out = 0;
+static atomic_long stat_xrun_cap = 0;
+static atomic_long stat_xrun_play = 0;
+static atomic_long stat_overrun_ring = 0;   /* ring full, cap dropped */
+
+/* Common params */
+static snd_pcm_uframes_t period;
+static snd_pcm_uframes_t buffer;
+static int swap = 0;
+static int tone = 0;
+
+/* ========== ALSA helpers ========== */
+static int set_hw_params(snd_pcm_t *pcm, const char *name)
 {
     snd_pcm_hw_params_t *hw;
     snd_pcm_hw_params_alloca(&hw);
-
     int err;
     if ((err = snd_pcm_hw_params_any(pcm, hw)) < 0) {
         fprintf(stderr, "%s: hw_params_any: %s\n", name, snd_strerror(err));
@@ -59,29 +78,35 @@ static int set_hw_params(snd_pcm_t *pcm, const char *name,
     }
     snd_pcm_hw_params_set_access(pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
     if ((err = snd_pcm_hw_params_set_format(pcm, hw, FORMAT)) < 0) {
-        fprintf(stderr, "%s: format: %s\n", name, snd_strerror(err)); return err;
+        fprintf(stderr, "%s: format: %s\n", name, snd_strerror(err));
+        return err;
     }
     if ((err = snd_pcm_hw_params_set_channels(pcm, hw, CHANNELS)) < 0) {
-        fprintf(stderr, "%s: channels: %s\n", name, snd_strerror(err)); return err;
+        fprintf(stderr, "%s: channels: %s\n", name, snd_strerror(err));
+        return err;
     }
     unsigned int rate = RATE;
     if ((err = snd_pcm_hw_params_set_rate_near(pcm, hw, &rate, 0)) < 0) {
-        fprintf(stderr, "%s: rate: %s\n", name, snd_strerror(err)); return err;
+        fprintf(stderr, "%s: rate: %s\n", name, snd_strerror(err));
+        return err;
     }
-    if ((err = snd_pcm_hw_params_set_period_size_near(pcm, hw, &period, 0)) < 0) {
-        fprintf(stderr, "%s: period: %s\n", name, snd_strerror(err)); return err;
+    snd_pcm_uframes_t p = period, b = buffer;
+    if ((err = snd_pcm_hw_params_set_period_size_near(pcm, hw, &p, 0)) < 0) {
+        fprintf(stderr, "%s: period: %s\n", name, snd_strerror(err));
+        return err;
     }
-    if ((err = snd_pcm_hw_params_set_buffer_size_near(pcm, hw, &buffer)) < 0) {
-        fprintf(stderr, "%s: buffer: %s\n", name, snd_strerror(err)); return err;
+    if ((err = snd_pcm_hw_params_set_buffer_size_near(pcm, hw, &b)) < 0) {
+        fprintf(stderr, "%s: buffer: %s\n", name, snd_strerror(err));
+        return err;
     }
     if ((err = snd_pcm_hw_params(pcm, hw)) < 0) {
-        fprintf(stderr, "%s: hw_params: %s\n", name, snd_strerror(err)); return err;
+        fprintf(stderr, "%s: hw_params: %s\n", name, snd_strerror(err));
+        return err;
     }
-    snd_pcm_hw_params_get_period_size(hw, &period, 0);
-    snd_pcm_hw_params_get_buffer_size(hw, &buffer);
-    fprintf(stderr, "%s: period=%lu frames (%lu us), buffer=%lu frames (%lu us)\n",
-            name, period, period * 1000000 / RATE,
-            buffer, buffer * 1000000 / RATE);
+    snd_pcm_hw_params_get_period_size(hw, &p, 0);
+    snd_pcm_hw_params_get_buffer_size(hw, &b);
+    fprintf(stderr, "%s: period=%lu (%lu us) buffer=%lu (%lu us)\n",
+            name, p, p * 1000000UL / RATE, b, b * 1000000UL / RATE);
     return 0;
 }
 
@@ -95,147 +120,49 @@ static int set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t start)
     return snd_pcm_sw_params(pcm, sw);
 }
 
-static void vu_bar(double db, char *out, int width)
+/* ========== Threads ========== */
+
+/* Capture thread: snd_pcm_readi → ring buffer */
+static void *cap_thread_fn(void *arg)
 {
-    if (db < -90.0) db = -90.0;
-    if (db >  0.0)  db =  0.0;
-    int n = (int)((db + 90.0) / 90.0 * width);
-    int hot = width * 9 / 10;
-    int i;
-    for (i = 0; i < n; i++) out[i] = (i < hot) ? '#' : '!';
-    for (; i < width; i++) out[i] = '.';
-    out[width] = 0;
-}
-
-int main(int argc, char **argv)
-{
-    /* Defaults validated 2026-04-29 on Debix/i.MX8MP DMA 2ms:
-     * period=256 frames (5.33ms ALSA, multiple of DSP 2ms period),
-     * n_periods=2 (buffer 10.66ms), swap=0 (direct mapping).
-     * Smaller period (e.g. 64) blocks at start ~80% of the time due
-     * to ALSA-vs-DSP period mismatch races on PCM_DUPLEX.
-     */
-    snd_pcm_uframes_t period = 256;
-    int n_periods = 2;
-    int swap = 0;
-    int tone = 0;
-    if (argc > 1) period = (snd_pcm_uframes_t)atoi(argv[1]);
-    if (argc > 2) n_periods = atoi(argv[2]);
-    if (argc > 3) swap = atoi(argv[3]);
-    if (argc > 4) tone = atoi(argv[4]);
-    if (n_periods < 2) n_periods = 2;
-    snd_pcm_uframes_t buffer = period * n_periods;
-
-    signal(SIGINT, on_sigint);
-    /* No mlockall / SCHED_FIFO: those can interact badly with DMA buffer
-     * pinning on this kernel — sox doesn't use them either. */
-
-    snd_pcm_t *cap = NULL, *play = NULL;
-    int err;
-    if (!tone) {
-        if ((err = snd_pcm_open(&cap, CDEV, SND_PCM_STREAM_CAPTURE, 0)) < 0) {
-            fprintf(stderr, "open %s: %s\n", CDEV, snd_strerror(err)); return 1;
-        }
-    }
-    if ((err = snd_pcm_open(&play, PDEV, SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
-        fprintf(stderr, "open %s: %s\n", PDEV, snd_strerror(err)); return 1;
-    }
-    if (cap && set_hw_params(cap, "capture", period, buffer) < 0) return 1;
-    if (set_hw_params(play, "playback", period, buffer) < 0) return 1;
-    /* playback starts as soon as one period is queued (low-latency mode) */
-    set_sw_params(play, period);
-    /* capture wakeup every period */
-    if (cap) set_sw_params(cap, period);
-
+    snd_pcm_t *cap = (snd_pcm_t *)arg;
     int32_t *buf = malloc(period * BYTES_PER_FRAME);
-    if (!buf) { perror("malloc"); return 1; }
-
-    /* Start capture FIRST. On this SOF setup, pre-filling/starting playback
-     * before capture broke the capture pipeline (silent samples). */
-    if (cap) {
-        if (snd_pcm_link(cap, play) < 0)
-            fprintf(stderr, "snd_pcm_link not supported (continuing unlinked)\n");
-        snd_pcm_start(cap);
-    }
-
-    /* Pre-fill playback with the full buffer of silence so it never starves
-     * waiting for the first capture frames. Retry on transient -EPIPE
-     * because cap+play start race may put play in XRUN before pre-fill
-     * gets to push data. */
-    int32_t *silence = calloc(buffer, BYTES_PER_FRAME);
-    snd_pcm_sframes_t pf = -1;
-    for (int retry = 0; retry < 5 && pf < 0; retry++) {
-        pf = snd_pcm_writei(play, silence, buffer);
-        if (pf < 0) {
-            int recover = snd_pcm_recover(play, pf, 1);
-            if (recover < 0) {
-                fprintf(stderr, "pre-fill recover: %s\n", snd_strerror(recover));
-                break;
-            }
-        }
-    }
-    if (pf < 0)
-        fprintf(stderr, "pre-fill writei after retry: %s\n", snd_strerror(pf));
-    free(silence);
-    if (!cap) snd_pcm_start(play);  /* tone mode: no capture, start play here */
-
-    fprintf(stderr, "loop running. period=%lu, n_periods=%d, buffer=%lu (~%lu us per side)  swap=%d tone=%d\n",
-            period, n_periods, buffer, buffer * 1000000 / RATE, swap, tone);
-
-    long frames_in = 0, frames_out = 0;
-    long xrun_cap = 0, xrun_play = 0;
-
-    /* Sine generator state for tone mode */
-    double phase = 0.0;
-    const double phase_inc = 2.0 * 3.14159265358979 * 1000.0 / RATE; /* 1 kHz */
-    const int32_t amplitude = 100000000; /* ~ -27 dBFS at 1.0 normalised */
-
-    /* VU meter accumulators (refresh every 50 ms) */
-    double vu_peak[CHANNELS] = {0}, vu_rms_acc[CHANNELS] = {0};
-    long vu_frames = 0;
-    const long vu_refresh_frames = RATE / 20;   /* 50 ms */
-    int vu_printed = 0;
+    if (!buf) return NULL;
 
     while (running) {
         snd_pcm_sframes_t r;
         if (tone) {
-            /* Synthesize one period of 1 kHz sine on all 8 channels. */
+            /* tone mode: synthesise on all 8ch directly here so the
+             * ring stays fed without needing a real cap.
+             */
+            static double phase = 0.0;
+            const double phase_inc = 2.0 * M_PI * 1000.0 / RATE;
+            const int32_t amp = 100000000;
             for (snd_pcm_uframes_t f = 0; f < period; f++) {
-                int32_t s = (int32_t)(amplitude * sin(phase));
+                int32_t s = (int32_t)(amp * sin(phase));
                 int32_t *frame = buf + f * CHANNELS;
                 for (int c = 0; c < CHANNELS; c++) frame[c] = s;
                 phase += phase_inc;
-                if (phase >= 2.0 * 3.14159265358979) phase -= 2.0 * 3.14159265358979;
+                if (phase >= 2.0 * M_PI) phase -= 2.0 * M_PI;
             }
             r = period;
-            frames_in += r;
+            /* avoid spinning faster than realtime */
+            usleep((useconds_t)(period * 1000000UL / RATE));
         } else {
             r = snd_pcm_readi(cap, buf, period);
             if (r < 0) {
-                xrun_cap++;
+                atomic_fetch_add(&stat_xrun_cap, 1);
                 r = snd_pcm_recover(cap, r, 1);
-                if (r < 0) { fprintf(stderr, "cap recover fail: %s\n", snd_strerror(r)); break; }
+                if (r < 0) {
+                    fprintf(stderr, "cap recover fail: %s\n", snd_strerror(r));
+                    break;
+                }
                 continue;
             }
-            frames_in += r;
         }
 
-        /* Accumulate VU stats from what we just read (before remix). This
-         * happens for every successful readi, independent of the writei
-         * outcome, so xrun on playback don't freeze the display. */
-        for (snd_pcm_sframes_t f = 0; f < r; f++) {
-            int32_t *frame = buf + f * CHANNELS;
-            for (int c = 0; c < CHANNELS; c++) {
-                double v = (double)frame[c] / 2147483648.0;
-                double a = v < 0 ? -v : v;
-                if (a > vu_peak[c]) vu_peak[c] = a;
-                vu_rms_acc[c] += v * v;
-            }
-        }
-        vu_frames += r;
-
-        /* In-place channel reversal: ch0<->ch7, ch1<->ch6, ch2<->ch5, ch3<->ch4 */
-        if (swap && !tone) {
+        /* Channel reversal if swap enabled */
+        if (swap) {
             for (snd_pcm_sframes_t f = 0; f < r; f++) {
                 int32_t *frame = buf + f * CHANNELS;
                 int32_t t;
@@ -246,46 +173,192 @@ int main(int argc, char **argv)
             }
         }
 
-        snd_pcm_sframes_t w = snd_pcm_writei(play, buf, r);
+        /* Push into ring */
+        pthread_mutex_lock(&ring_mtx);
+        size_t avail_space = RING_FRAMES - (ring_w - ring_r);
+        if (avail_space < (size_t)r) {
+            /* Ring full: drop the oldest period to make room */
+            ring_r += (size_t)r - avail_space;
+            atomic_fetch_add(&stat_overrun_ring, 1);
+        }
+        for (snd_pcm_sframes_t i = 0; i < r; i++) {
+            size_t pos = (ring_w + i) % RING_FRAMES;
+            memcpy(&ring_buf[pos * CHANNELS],
+                   &buf[i * CHANNELS], BYTES_PER_FRAME);
+        }
+        ring_w += r;
+        atomic_fetch_add(&stat_in, r);
+        pthread_cond_signal(&ring_cond_data);
+        pthread_mutex_unlock(&ring_mtx);
+    }
+    free(buf);
+    /* Wake play thread if waiting */
+    pthread_mutex_lock(&ring_mtx);
+    pthread_cond_broadcast(&ring_cond_data);
+    pthread_mutex_unlock(&ring_mtx);
+    return NULL;
+}
+
+/* Playback thread: ring buffer → snd_pcm_writei */
+static void *play_thread_fn(void *arg)
+{
+    snd_pcm_t *play = (snd_pcm_t *)arg;
+    int32_t *buf = malloc(period * BYTES_PER_FRAME);
+    if (!buf) return NULL;
+
+    while (running) {
+        /* Wait until ring has at least 1 period of frames */
+        pthread_mutex_lock(&ring_mtx);
+        while ((ring_w - ring_r) < period && running) {
+            pthread_cond_wait(&ring_cond_data, &ring_mtx);
+        }
+        if (!running) {
+            pthread_mutex_unlock(&ring_mtx);
+            break;
+        }
+        for (snd_pcm_uframes_t i = 0; i < period; i++) {
+            size_t pos = (ring_r + i) % RING_FRAMES;
+            memcpy(&buf[i * CHANNELS],
+                   &ring_buf[pos * CHANNELS], BYTES_PER_FRAME);
+        }
+        ring_r += period;
+        pthread_cond_signal(&ring_cond_space);
+        pthread_mutex_unlock(&ring_mtx);
+
+        snd_pcm_sframes_t w = snd_pcm_writei(play, buf, period);
         if (w < 0) {
-            xrun_play++;
+            atomic_fetch_add(&stat_xrun_play, 1);
             w = snd_pcm_recover(play, w, 1);
-            if (w < 0) { fprintf(stderr, "play recover fail: %s\n", snd_strerror(w)); break; }
-            /* After recovery the stream is in PREPARED state — restart it
-             * so playback keeps flowing. */
-            snd_pcm_start(play);
+            if (w < 0) {
+                fprintf(stderr, "play recover fail: %s\n", snd_strerror(w));
+                break;
+            }
             continue;
         }
-        frames_out += w;
+        atomic_fetch_add(&stat_out, w);
+    }
+    free(buf);
+    return NULL;
+}
 
-        /* Refresh VU display every 50 ms (in place, 9 lines overwrite). */
-        if (vu_frames >= vu_refresh_frames) {
-            char b_pk[33], b_rms[33];
-            if (vu_printed) printf("\033[9A");  /* up 9 lines */
-            for (int c = 0; c < CHANNELS; c++) {
-                double pk_db = vu_peak[c] > 0 ? 20.0 * log10(vu_peak[c]) : -120.0;
-                double rms   = sqrt(vu_rms_acc[c] / vu_frames);
-                double rm_db = rms        > 0 ? 20.0 * log10(rms)        : -120.0;
-                vu_bar(pk_db, b_pk, 20);
-                vu_bar(rm_db, b_rms, 20);
-                printf("\033[2K ch%d  pk %6.1f %s  rms %6.1f %s\n",
-                       c + 1, pk_db, b_pk, rm_db, b_rms);
-                vu_peak[c] = 0; vu_rms_acc[c] = 0;
-            }
-            printf("\033[2K xrun cap=%ld play=%ld  in=%ld out=%ld\n",
-                   xrun_cap, xrun_play, frames_in, frames_out);
-            fflush(stdout);
-            vu_frames = 0;
-            vu_printed = 1;
+/* ========== Main ========== */
+int main(int argc, char **argv)
+{
+    period = 256;
+    int n_periods = 2;
+    if (argc > 1) period = (snd_pcm_uframes_t)atoi(argv[1]);
+    if (argc > 2) n_periods = atoi(argv[2]);
+    if (argc > 3) swap = atoi(argv[3]);
+    if (argc > 4) tone = atoi(argv[4]);
+    if (n_periods < 2) n_periods = 2;
+    buffer = period * n_periods;
+
+    if (period * 4 > RING_FRAMES) {
+        fprintf(stderr, "period too large for RING_FRAMES=%d\n", RING_FRAMES);
+        return 1;
+    }
+
+    ring_buf = malloc(RING_FRAMES * BYTES_PER_FRAME);
+    if (!ring_buf) { perror("malloc ring"); return 1; }
+
+    signal(SIGINT, on_sigint);
+
+    snd_pcm_t *cap = NULL, *play = NULL;
+    int err;
+    if (!tone) {
+        if ((err = snd_pcm_open(&cap, CDEV, SND_PCM_STREAM_CAPTURE, 0)) < 0) {
+            fprintf(stderr, "open %s: %s\n", CDEV, snd_strerror(err));
+            return 1;
+        }
+        if (set_hw_params(cap, "capture") < 0) return 1;
+        if (set_sw_params(cap, period) < 0) return 1;
+    }
+    if ((err = snd_pcm_open(&play, PDEV, SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
+        fprintf(stderr, "open %s: %s\n", PDEV, snd_strerror(err));
+        return 1;
+    }
+    if (set_hw_params(play, "playback") < 0) return 1;
+    if (set_sw_params(play, period) < 0) return 1;
+
+    /* SOF PCM_DUPLEX device doesn't support snd_pcm_link (returns -ENOSYS).
+     * Instead, start cap + play with the tightest possible interleaving:
+     *   1. Pre-fill play silence (auto-triggers play via start_threshold)
+     *   2. Immediately call snd_pcm_start(cap) — back-to-back with play start
+     * This minimises the inter-stream delay so SAI TX FIFO alignment vs
+     * FSYNC is reasonably consistent. Empirically this restores the 2-channel
+     * routing observed with the historical mono-thread version.
+     */
+    int32_t *silence = calloc(buffer, BYTES_PER_FRAME);
+    snd_pcm_sframes_t pf = snd_pcm_writei(play, silence, buffer);
+    if (pf < 0) pf = snd_pcm_recover(play, pf, 1);
+    free(silence);
+
+    if (cap) {
+        if ((err = snd_pcm_start(cap)) < 0) {
+            fprintf(stderr, "start cap: %s\n", snd_strerror(err));
+            return 1;
         }
     }
 
-    fprintf(stderr, "\nstopped. in=%ld out=%ld xrun cap=%ld play=%ld\n",
-            frames_in, frames_out, xrun_cap, xrun_play);
+    /* Pre-fill ring buffer with `period` silence frames so play_thread can
+     * pop immediately on start, avoiding initial drops while cap_thread
+     * spins up. Subsequent steady-state ring fill stabilises around
+     * RING_FRAMES/2 once cap and play settle into BCLK lockstep.
+     */
+    memset(ring_buf + ring_w * CHANNELS, 0, period * BYTES_PER_FRAME);
+    ring_w += period;
+
+    /* Spawn the 2 threads */
+    pthread_t tid_cap = 0, tid_play;
+    if (cap) pthread_create(&tid_cap, NULL, cap_thread_fn, cap);
+    pthread_create(&tid_play, NULL, play_thread_fn, play);
+
+    fprintf(stderr,
+            "loop running. period=%lu n_periods=%d buffer=%lu (~%lu us per side)\n"
+            " swap=%d tone=%d  ring=%d frames\n"
+            "Ctrl+C to stop.\n",
+            period, n_periods, buffer, buffer * 1000000UL / RATE,
+            swap, tone, RING_FRAMES);
+
+    /* Stats loop in main thread */
+    long last_in = 0, last_out = 0;
+    while (running) {
+        sleep(1);
+        long in_now = atomic_load(&stat_in);
+        long out_now = atomic_load(&stat_out);
+        long xc = atomic_load(&stat_xrun_cap);
+        long xp = atomic_load(&stat_xrun_play);
+        long ovr = atomic_load(&stat_overrun_ring);
+        fprintf(stderr,
+                "in=%ld (+%ld f/s) out=%ld (+%ld f/s) "
+                "xrun cap=%ld play=%ld ring_drop=%ld ring_fill=%zu\n",
+                in_now, in_now - last_in,
+                out_now, out_now - last_out, xc, xp, ovr,
+                ring_w - ring_r);
+        last_in = in_now;
+        last_out = out_now;
+    }
+
+    /* Wake threads if waiting */
+    pthread_mutex_lock(&ring_mtx);
+    pthread_cond_broadcast(&ring_cond_data);
+    pthread_cond_broadcast(&ring_cond_space);
+    pthread_mutex_unlock(&ring_mtx);
+
+    if (tid_cap) pthread_join(tid_cap, NULL);
+    pthread_join(tid_play, NULL);
+
+    fprintf(stderr,
+            "\nstopped. in=%ld out=%ld xrun cap=%ld play=%ld ring_drop=%ld\n",
+            (long)atomic_load(&stat_in),
+            (long)atomic_load(&stat_out),
+            (long)atomic_load(&stat_xrun_cap),
+            (long)atomic_load(&stat_xrun_play),
+            (long)atomic_load(&stat_overrun_ring));
 
     snd_pcm_drain(play);
     snd_pcm_close(play);
     if (cap) snd_pcm_close(cap);
-    free(buf);
+    free(ring_buf);
     return 0;
 }
