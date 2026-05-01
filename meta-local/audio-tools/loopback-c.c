@@ -39,7 +39,7 @@
 #define CDEV     "hw:2,0"
 #define PDEV     "hw:2,0"
 #define BYTES_PER_FRAME (CHANNELS * 4)
-#define RING_FRAMES 1024   /* 4× default period @ 256; 21 ms max ring latency */
+#define RING_FRAMES 384    /* 1.5× default period @ 256; 8 ms max ring latency */
 
 /* ========== Globals ========== */
 static volatile sig_atomic_t running = 1;
@@ -244,6 +244,10 @@ static void *play_thread_fn(void *arg)
 /* ========== Main ========== */
 int main(int argc, char **argv)
 {
+    /* Defaults: period=256 (5.33 ms ALSA period, multiple of DSP 2 ms),
+     * n_periods=2 (10.66 ms ALSA buffer), ring 384 (8 ms max).
+     * Total end-to-end latency ≈ 8-10 ms.
+     */
     period = 256;
     int n_periods = 2;
     if (argc > 1) period = (snd_pcm_uframes_t)atoi(argv[1]);
@@ -253,8 +257,8 @@ int main(int argc, char **argv)
     if (n_periods < 2) n_periods = 2;
     buffer = period * n_periods;
 
-    if (period * 4 > RING_FRAMES) {
-        fprintf(stderr, "period too large for RING_FRAMES=%d\n", RING_FRAMES);
+    if (period >= RING_FRAMES) {
+        fprintf(stderr, "period too large for RING_FRAMES=%d (must be < ring)\n", RING_FRAMES);
         return 1;
     }
 
@@ -280,16 +284,13 @@ int main(int argc, char **argv)
     if (set_hw_params(play, "playback") < 0) return 1;
     if (set_sw_params(play, period) < 0) return 1;
 
-    /* SOF PCM_DUPLEX device doesn't support snd_pcm_link (returns -ENOSYS).
-     * Instead, start cap + play with the tightest possible interleaving:
-     *   1. Pre-fill play silence (auto-triggers play via start_threshold)
-     *   2. Immediately call snd_pcm_start(cap) — back-to-back with play start
-     * This minimises the inter-stream delay so SAI TX FIFO alignment vs
-     * FSYNC is reasonably consistent. Empirically this restores the 2-channel
-     * routing observed with the historical mono-thread version.
+    /* Pre-fill play with ONE period of silence (not full buffer) to
+     * minimise startup latency. start_threshold = period → play
+     * auto-triggers when this single period is queued.
+     * Followed back-to-back by snd_pcm_start(cap).
      */
-    int32_t *silence = calloc(buffer, BYTES_PER_FRAME);
-    snd_pcm_sframes_t pf = snd_pcm_writei(play, silence, buffer);
+    int32_t *silence = calloc(period, BYTES_PER_FRAME);
+    snd_pcm_sframes_t pf = snd_pcm_writei(play, silence, period);
     if (pf < 0) pf = snd_pcm_recover(play, pf, 1);
     free(silence);
 
