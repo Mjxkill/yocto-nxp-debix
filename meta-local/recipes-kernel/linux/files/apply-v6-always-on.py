@@ -35,6 +35,59 @@ from pathlib import Path
 
 KSRC = Path(sys.argv[1])
 
+# Purge: remove any prior V6.0 patches before re-applying. This makes the
+# patcher robust against re-runs on already-patched trees (e.g. Yocto work
+# dir reused across builds), and ensures the LATEST script content always
+# wins regardless of what was applied previously.
+PURGE_FILES = [
+    "include/uapi/sound/sof/tokens.h",
+    "include/sound/sof/header.h",
+    "include/sound/sof/topology.h",
+    "sound/soc/sof/sof-audio.h",
+    "sound/soc/sof/ipc3-topology.c",
+]
+def _strip(text: str, start_re: str, end_re: str) -> str:
+    """Remove every block matching start_re...end_re inclusive."""
+    import re
+    pattern = re.compile(start_re + r".*?" + end_re, re.DOTALL)
+    return pattern.sub("", text)
+
+for rel in PURGE_FILES:
+    p = KSRC / rel
+    if not p.exists():
+        continue
+    text = p.read_text()
+    orig_len = len(text)
+    # Token uapi
+    text = _strip(text, r"\n/\* V6\.0: pipeline always-on attribute[^\n]*\n",
+                  r"#define SOF_TKN_PIPE_ALWAYS_ON\s+224\n")
+    # IPC cmd (single line)
+    import re
+    text = re.sub(r"#define SOF_IPC_TPLG_PIPE_TRIGGER\s+SOF_CMD_TYPE\(0x014\)\n", "", text)
+    # Struct (entire block)
+    text = _strip(text, r"\n/\* V6\.0: trigger pipeline by[^\n]*\n",
+                  r"struct sof_ipc_pipe_trigger \{[^}]*\}\s*__packed;\n")
+    # Widget always_on field
+    text = _strip(text,
+                  r"\n\t/\* V6\.0: pipeline parsed as always-on[^\n]*\n",
+                  r"\tbool always_on;\n")
+    # Token table entry (K2)
+    text = _strip(text,
+                  r"\t\{SOF_TKN_PIPE_ALWAYS_ON, SND_SOC_TPLG_TUPLE_TYPE_BOOL, get_token_u16,\n",
+                  r"\t\toffsetof\(struct snd_sof_widget, always_on\)\},\n")
+    # K5 helper
+    text = _strip(text,
+                  r"/\* V6\.0: kernel-side firmware trigger for always-on pipelines \(K5\)\.\n",
+                  r"static int sof_ipc3_send_pipe_trigger\(struct snd_sof_dev[^{]*\{[^}]*?\n\treturn ret;\n\}\n\n")
+    # K1 trigger block
+    text = _strip(text,
+                  r"\n\n\t/\* V6\.0: trigger always-on pipelines now that all widgets are\n",
+                  r"\t\}\n\t\}\n")
+    if len(text) != orig_len:
+        p.write_text(text)
+        print(f"[purge] {rel}: removed {orig_len - len(text)} bytes of prior V6.0 patches")
+
+
 def patch_once(path: Path, marker: str, anchor: str, insert: str, mode: str = "after") -> bool:
     """Idempotent text insertion. Returns True if patched, False if already present."""
     text = path.read_text()
@@ -76,11 +129,19 @@ patch_once(
     KSRC / "include/sound/sof/topology.h",
     marker="struct sof_ipc_pipe_trigger",
     anchor="struct sof_ipc_pipe_free {\n\tstruct sof_ipc_cmd_hdr hdr;\n\tuint32_t comp_id;\n}  __packed;\n",
-    insert="\n/* V6.0: trigger pipeline by id - SOF_IPC_TPLG_PIPE_TRIGGER */\n"
+    insert="\n/* V6.0: trigger pipeline by scheduler comp_id - SOF_IPC_TPLG_PIPE_TRIGGER.\n"
+           " * On PRE_START, params drive pipeline_params() on the firmware side\n"
+           " * (mirroring the PCM hw_params flow). Layout MUST match firmware\n"
+           " * src/include/ipc/topology.h struct sof_ipc_pipe_trigger.\n"
+           " */\n"
            "struct sof_ipc_pipe_trigger {\n"
            "\tstruct sof_ipc_cmd_hdr hdr;\n"
-           "\tuint32_t pipeline_id;\n"
-           "\tuint32_t cmd; /* COMP_TRIGGER_* matching firmware enum */\n"
+           "\tuint32_t pipeline_id;     /* scheduler comp_id */\n"
+           "\tuint32_t cmd;             /* COMP_TRIGGER_* */\n"
+           "\tuint32_t rate;            /* sample rate */\n"
+           "\tuint32_t channels;        /* channel count */\n"
+           "\tuint32_t frame_fmt;       /* enum sof_ipc_frame */\n"
+           "\tuint32_t direction;       /* SOF_IPC_STREAM_PLAYBACK/CAPTURE */\n"
            "}  __packed;\n",
 )
 
@@ -134,9 +195,15 @@ if helper_marker not in text:
         " * ipc_get_pipeline_by_id() actually looks up by comp_id despite its\n"
         " * macro name. cmd values match firmware src/include/sof/audio/component.h:\n"
         " *   COMP_TRIGGER_STOP=0, COMP_TRIGGER_START=1, COMP_TRIGGER_PRE_START=7\n"
+        " *\n"
+        " * On PRE_START the rate/channels/frame_fmt/direction params drive\n"
+        " * pipeline_params() firmware-side before pipeline_prepare() (otherwise\n"
+        " * dai_*_params() never runs and dai_common_prepare() returns -EINVAL).\n"
         " */\n"
         "static int sof_ipc3_send_pipe_trigger(struct snd_sof_dev *sdev,\n"
-        "\t\t\t\t      u32 sched_comp_id, u32 cmd)\n"
+        "\t\t\t\t      u32 sched_comp_id, u32 cmd,\n"
+        "\t\t\t\t      u32 rate, u32 channels, u32 frame_fmt,\n"
+        "\t\t\t\t      u32 direction)\n"
         "{\n"
         "\tstruct sof_ipc_pipe_trigger msg;\n"
         "\tint ret;\n"
@@ -146,9 +213,13 @@ if helper_marker not in text:
         "\tmsg.hdr.cmd = SOF_IPC_GLB_TPLG_MSG | SOF_IPC_TPLG_PIPE_TRIGGER;\n"
         "\tmsg.pipeline_id = sched_comp_id;\n"
         "\tmsg.cmd = cmd;\n"
+        "\tmsg.rate = rate;\n"
+        "\tmsg.channels = channels;\n"
+        "\tmsg.frame_fmt = frame_fmt;\n"
+        "\tmsg.direction = direction;\n"
         "\n"
-        "\tdev_dbg(sdev->dev, \"V6.0: pipe_trigger sched_comp_id %u cmd %u\\n\",\n"
-        "\t\tsched_comp_id, cmd);\n"
+        "\tdev_dbg(sdev->dev, \"V6.0: pipe_trigger sched_comp_id %u cmd %u rate %u ch %u fmt %u dir %u\\n\",\n"
+        "\t\tsched_comp_id, cmd, rate, channels, frame_fmt, direction);\n"
         "\tret = sof_ipc_tx_message_no_reply(sdev->ipc, &msg, sizeof(msg));\n"
         "\tif (ret < 0)\n"
         "\t\tdev_err(sdev->dev, \"V6.0: pipe_trigger sched_comp_id %u cmd %u failed: %d\\n\",\n"
@@ -181,6 +252,12 @@ if trigger_marker not in text:
         "\t * are non-fatal for topology load — log and continue, since\n"
         "\t * existing PCM paths remain usable even if the always-on hook\n"
         "\t * fails for an experimental scheduler.\n"
+        "\t *\n"
+        "\t * Params for V6.0 minimal: SAI7 TDM 8x32 ASYNC, 48kHz, S32_LE,\n"
+        "\t * direction=CAPTURE (anchor on SAI RX comp_dai). The walk goes\n"
+        "\t * downstream through the loopback buffer to SAI TX. Hardcoded\n"
+        "\t * here for now; future versions can derive from snd_sof_dai\n"
+        "\t * config attached to the DAI widget anchored by the scheduler.\n"
         "\t */\n"
         "\tif (!verify) {\n"
         "\t\tstruct snd_sof_widget *aw;\n"
@@ -190,14 +267,18 @@ if trigger_marker not in text:
         "\t\t\tif (aw->id != snd_soc_dapm_scheduler || !aw->always_on)\n"
         "\t\t\t\tcontinue;\n"
         "\t\t\ttrig_ret = sof_ipc3_send_pipe_trigger(sdev, aw->comp_id,\n"
-        "\t\t\t\t\t\t\t      7 /* COMP_TRIGGER_PRE_START */);\n"
+        "\t\t\t\t\t\t\t      7 /* COMP_TRIGGER_PRE_START */,\n"
+        "\t\t\t\t\t\t\t      48000, 8,\n"
+        "\t\t\t\t\t\t\t      2 /* SOF_IPC_FRAME_S32_LE */,\n"
+        "\t\t\t\t\t\t\t      1 /* SOF_IPC_STREAM_CAPTURE */);\n"
         "\t\t\tif (trig_ret < 0) {\n"
         "\t\t\t\tdev_warn(sdev->dev, \"V6.0: PRE_START failed comp_id %d (%d) — continuing\\n\",\n"
         "\t\t\t\t\t aw->comp_id, trig_ret);\n"
         "\t\t\t\tcontinue;\n"
         "\t\t\t}\n"
         "\t\t\ttrig_ret = sof_ipc3_send_pipe_trigger(sdev, aw->comp_id,\n"
-        "\t\t\t\t\t\t\t      1 /* COMP_TRIGGER_START */);\n"
+        "\t\t\t\t\t\t\t      1 /* COMP_TRIGGER_START */,\n"
+        "\t\t\t\t\t\t\t      0, 0, 0, 0);\n"
         "\t\t\tif (trig_ret < 0) {\n"
         "\t\t\t\tdev_warn(sdev->dev, \"V6.0: START failed comp_id %d (%d) — continuing\\n\",\n"
         "\t\t\t\t\t aw->comp_id, trig_ret);\n"
