@@ -23,9 +23,6 @@ SRC_URI += "file://apply-npu-tap-dt.py"
 # V5.4.1 SDRAM2 — DT carve for DSP-only matrix/effects (8 MB no-map @0xA0000000)
 SRC_URI += "file://apply-sdram2-dt.py"
 
-# V6.0 always-on — K0+K2+K4+K5+K1 ASoC SOF kernel patches (additive, idempotent)
-SRC_URI += "file://apply-v6-always-on.py"
-
 # Install TAC5212 driver into kernel tree, patch Kconfig/Makefile and DTS
 do_patch:prepend() {
     # Copy SOF imx-probes source file then patch Kconfig/Makefile/imx8m.c
@@ -62,8 +59,6 @@ do_patch:append() {
     python3 ${WORKDIR}/apply-npu-tap-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
     # V5.4.1 SDRAM2 DT carve (sdram2_reserved@a0000000 + dsp memory-region append)
     python3 ${WORKDIR}/apply-sdram2-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
-    # V6.0 always-on ASoC SOF kernel patches (K0+K2+K4+K5+K1)
-    python3 ${WORKDIR}/apply-v6-always-on.py ${S}
 }
 
 # Force TAC5212 + SOF imx-probes config into .config after kernel configure
