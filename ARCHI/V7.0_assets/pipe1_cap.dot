@@ -1,0 +1,19 @@
+digraph pipe1cap {
+  rankdir=TB
+  graph [bgcolor=transparent fontname="Inter" pad=0.3 nodesep=0.4 ranksep=0.55]
+  node [fontname="Inter" fontsize=12 shape=box style="rounded,filled" color="#334155" penwidth=1.4]
+  edge [fontname="Inter" fontsize=10 color="#475569" penwidth=1.4 arrowsize=0.85]
+
+  sai_rx [label="SAI7 RX 8ch\nTDM 8 × S32 × 48 kHz" fillcolor="#dbeafe" color="#1d4ed8" width=3.6]
+  tap_in [label="TAP IN (raw)\nhook post-DAI RX, pre-effets\n→ reserved-memory tap-in\n→ /dev/imx-audio-tap-in" fillcolor="#fef3c7" color="#ca8a04" shape=note width=3.6]
+  mb_drc [label="multiband_drc\n8 ch — 8 instances logiques\nblob 8 × N (multi-config patché)" fillcolor="#fce7f3" color="#be185d" width=3.6]
+  drc    [label="drc D3 (E5.e.2-D3)\n8 ch — 8 instances logiques\nstate arrays + multi-blob" fillcolor="#fce7f3" color="#be185d" width=3.6]
+  pga    [label="pga\n8 ch — 8 vol kcontrols indép" fillcolor="#fce7f3" color="#be185d" width=3.6]
+  pcm0   [label="PCM HOST 0 cap\nASIO IN 8 ch S32_LE 48 kHz\n→ Linux /dev/snd/pcmC2D0c" fillcolor="#dcfce7" color="#15803d" width=3.6]
+
+  sai_rx -> tap_in [label="copy split (raw)" style=dashed color="#ca8a04" fontcolor="#ca8a04"]
+  sai_rx -> mb_drc
+  mb_drc -> drc
+  drc    -> pga
+  pga    -> pcm0
+}

@@ -1,0 +1,1057 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>ARCHI V7.0 — DSP indépendant + NPU dual-tap</title>
+<style>
+  :root {
+    --ink: #0f172a;
+    --ink-2: #334155;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --line-2: #cbd5e1;
+    --bg: #ffffff;
+    --bg-soft: #f8fafc;
+    --bg-code: #f1f5f9;
+    --accent: #4f46e5;
+    --accent-soft: #eef2ff;
+    --blue: #1d4ed8;
+    --blue-soft: #dbeafe;
+    --pink: #be185d;
+    --pink-soft: #fce7f3;
+    --green: #15803d;
+    --green-soft: #dcfce7;
+    --amber: #ca8a04;
+    --amber-soft: #fef3c7;
+    --red: #b91c1c;
+    --red-soft: #fee2e2;
+    --purple: #6d28d9;
+    --purple-soft: #ede9fe;
+  }
+
+  @page { size: A4; margin: 16mm 14mm 18mm 14mm; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Inter", "Inter Display", system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--ink);
+    font-size: 10.5pt;
+    line-height: 1.55;
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* —— Cover —— */
+  .cover {
+    height: 257mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 8mm 4mm;
+    page-break-after: always;
+    position: relative;
+  }
+  .cover::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(900px 500px at 100% 0%, var(--accent-soft) 0%, transparent 60%),
+      radial-gradient(700px 600px at 0% 100%, var(--blue-soft) 0%, transparent 50%);
+    z-index: 0;
+  }
+  .cover > * { position: relative; z-index: 1; }
+  .cover-tag {
+    display: inline-block;
+    font-size: 9pt;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    color: var(--accent);
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.7);
+  }
+  .cover h1 {
+    font-family: "Inter Display", "Inter", sans-serif;
+    font-size: 38pt;
+    font-weight: 700;
+    line-height: 1.05;
+    margin: 18mm 0 6mm 0;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .cover h1 .accent { color: var(--accent); }
+  .cover-sub {
+    font-size: 14pt;
+    color: var(--ink-2);
+    max-width: 165mm;
+    line-height: 1.4;
+  }
+  .cover-meta {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6mm;
+    margin-top: auto;
+  }
+  .cover-meta .item {
+    border-top: 2px solid var(--ink);
+    padding-top: 3mm;
+  }
+  .cover-meta .label {
+    font-size: 8pt;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+    margin-bottom: 2mm;
+    font-weight: 600;
+  }
+  .cover-meta .value {
+    font-size: 11pt;
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .cover-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 4mm;
+    font-size: 8.5pt;
+    color: var(--muted);
+    border-top: 1px solid var(--line);
+    padding-top: 3mm;
+  }
+
+  /* —— Sections —— */
+  section {
+    padding: 4mm 4mm 0 4mm;
+    page-break-inside: avoid;
+  }
+  section.break { page-break-before: always; }
+
+  h2 {
+    font-family: "Inter Display", "Inter", sans-serif;
+    font-size: 18pt;
+    font-weight: 700;
+    margin: 0 0 1mm 0;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+  h2 .num {
+    color: var(--accent);
+    font-weight: 700;
+    margin-right: 8px;
+  }
+  h2 + .lede {
+    color: var(--muted);
+    font-size: 10.5pt;
+    margin: 0 0 6mm 0;
+    max-width: 175mm;
+  }
+  h3 {
+    font-size: 12pt;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 5mm 0 2mm 0;
+  }
+
+  /* —— Cards & callouts —— */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; }
+
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4mm 5mm;
+    background: var(--bg);
+  }
+  .card .kicker {
+    font-size: 8pt;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+    font-weight: 600;
+    margin-bottom: 1mm;
+  }
+  .card .title {
+    font-weight: 600;
+    color: var(--ink);
+    font-size: 11pt;
+    margin-bottom: 1mm;
+  }
+  .card .body { color: var(--ink-2); font-size: 10pt; line-height: 1.5; }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 3mm 4mm;
+    border-radius: 0 6px 6px 0;
+    color: var(--ink);
+    font-size: 10pt;
+    margin: 3mm 0;
+  }
+  .callout .label {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 8pt;
+    letter-spacing: 0.16em;
+    color: var(--accent);
+    margin-right: 6px;
+  }
+  .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+  .callout.warn .label { color: var(--amber); }
+  .callout.bad  { border-left-color: var(--red);   background: var(--red-soft); }
+  .callout.bad  .label { color: var(--red); }
+  .callout.good { border-left-color: var(--green); background: var(--green-soft); }
+  .callout.good .label { color: var(--green); }
+
+  /* —— Tables —— */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9.5pt;
+    margin: 2mm 0 4mm 0;
+  }
+  th, td {
+    text-align: left;
+    padding: 2.5mm 3mm;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  thead th {
+    background: var(--bg-soft);
+    color: var(--ink);
+    font-weight: 600;
+    font-size: 9pt;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 2px solid var(--line-2);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td code, code { font-family: "JetBrains Mono", "Fira Code", "Roboto Mono", ui-monospace, monospace; font-size: 9pt; background: var(--bg-code); padding: 1px 5px; border-radius: 3px; color: var(--ink); }
+
+  /* —— Diagram blocks —— */
+  .figure {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg-soft);
+    padding: 6mm 4mm 4mm 4mm;
+    margin: 3mm 0 4mm 0;
+    text-align: center;
+    page-break-inside: avoid;
+  }
+  .figure img { max-width: 100%; height: auto; }
+  .figure .cap {
+    text-align: center;
+    color: var(--muted);
+    font-size: 9pt;
+    margin-top: 3mm;
+    letter-spacing: 0.04em;
+  }
+  .figure .cap b { color: var(--ink-2); font-weight: 600; }
+
+  /* —— Badge / pill —— */
+  .pill {
+    display: inline-block;
+    padding: 1px 8px;
+    font-size: 8.5pt;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    border: 1px solid;
+  }
+  .pill.blue   { color: var(--blue);   border-color: var(--blue);   background: var(--blue-soft); }
+  .pill.pink   { color: var(--pink);   border-color: var(--pink);   background: var(--pink-soft); }
+  .pill.green  { color: var(--green);  border-color: var(--green);  background: var(--green-soft); }
+  .pill.amber  { color: var(--amber);  border-color: var(--amber);  background: var(--amber-soft); }
+  .pill.purple { color: var(--purple); border-color: var(--purple); background: var(--purple-soft); }
+  .pill.red    { color: var(--red);    border-color: var(--red);    background: var(--red-soft); }
+
+  ul.clean { margin: 1mm 0 4mm 5mm; padding: 0; }
+  ul.clean li { margin: 1mm 0; }
+
+  hr { border: none; border-top: 1px solid var(--line); margin: 6mm 0; }
+
+  /* —— Footer running —— */
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ====== COVER ====== -->
+<div class="cover">
+  <div>
+    <span class="cover-tag">Architecture · Phase 2</span>
+    <h1>V7.0 — DSP <span class="accent">indépendant</span><br>+ NPU dual-tap</h1>
+    <div class="cover-sub">
+      Refonte du firmware audio Debix Model AB&nbsp;: 2 pipelines DSP strictement
+      séparées, mixage Linux, GUI de test pour piloter tous les effets en direct,
+      latence end-to-end &lt; 10 ms, taps NPU prêts pour ML aval.
+    </div>
+  </div>
+
+  <div>
+    <div class="cover-meta">
+      <div class="item">
+        <div class="label">Version</div>
+        <div class="value">V7.0</div>
+      </div>
+      <div class="item">
+        <div class="label">Baseline</div>
+        <div class="value">E6.a · <code>0580b5f14</code></div>
+      </div>
+      <div class="item">
+        <div class="label">Date</div>
+        <div class="value">2026-05-10</div>
+      </div>
+      <div class="item">
+        <div class="label">Statut</div>
+        <div class="value"><span class="pill purple">DRAFT — à valider</span></div>
+      </div>
+    </div>
+    <div class="cover-foot">
+      <div>Yocto NXP L6.12.3 · i.MX 8M Plus · TAC5212 8 ch · SOF Zephyr</div>
+      <div>ARCHI_V7.0.pdf</div>
+    </div>
+  </div>
+</div>
+
+<!-- ====== 1. Pourquoi V7.0 ====== -->
+<section>
+  <h2><span class="num">1.</span> Pourquoi V7.0</h2>
+  <div class="lede">
+    V6.0 (passthrough firmware-only DAI-to-DAI sans PCM hôte) a été abandonné après
+    trois semaines&nbsp;: SOF est conçu host-centric et n'admet pas nativement deux DAIs
+    sans PCM HOST anchor. V7.0 repart de E6.a (qui marche) et change de cap.
+  </div>
+
+  <div class="grid-3">
+    <div class="card">
+      <div class="kicker">Constat V6.0</div>
+      <div class="title">Le DSP ne sait pas ordonnancer 2 DAIs sans PCM</div>
+      <div class="body">
+        <code>pipeline_trigger_run</code>, <code>register_dma_irq</code>,
+        <code>is_pending</code> supposent tous un anchor unique. Sans HOST, chaque
+        fix appliqué cassait un autre maillon. Le <code>pipe_task</code> body ne
+        s'exécute jamais (mailbox 0x570 = <code>0xFFFFFFFF</code>).
+      </div>
+    </div>
+    <div class="card">
+      <div class="kicker">Décision V7.0</div>
+      <div class="title">2 pipelines DSP totalement indépendantes</div>
+      <div class="body">
+        Aucun lien intra-firmware entre cap et play. Chaque pipeline a son PCM HOST
+        anchor (modèle SOF natif, déjà validé en E6.a). Le routing/mixage repart
+        dans Linux.
+      </div>
+    </div>
+    <div class="card">
+      <div class="kicker">Différenciation</div>
+      <div class="title">2 NPU taps asymétriques</div>
+      <div class="body">
+        <b>Tap IN</b> = sur PIPE 1 cap, post-DAI RX, <b>pre-effets</b> (signal mic brut).
+        <b>Tap OUT</b> = sur PIPE 2 play, post-strips, <b>pre-DAI TX</b> (signal speaker post-effets).
+        Reserved-memory dédiées, <code>/dev/imx-audio-tap-in</code> et <code>/dev/imx-audio-tap-out</code>.
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="label">Promesse V7.0</span>
+    Toute fonctionnalité d'E6.a est conservée ou améliorée — rien n'est régressé.
+    Seul le routing est déplacé du DSP vers Linux, là où c'est outillé et debuggable.
+  </div>
+
+  <h3>Priorités V7.0 (cadrage explicite)</h3>
+  <table>
+    <thead>
+      <tr><th style="width:22%">Priorité</th><th>Cible</th><th style="width:22%">Statut</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><b>Latence end-to-end</b></td><td>&lt; 10 ms (mic → DSP cap → mixer Linux → DSP play → speaker)</td><td><span class="pill red">Non-négo</span></td></tr>
+      <tr><td><b>GUI de test V7.0</b></td><td>App Linux : mixer + réglage de TOUS les effets DSP / TAC en direct (kcontrols)</td><td><span class="pill purple">Livrable V7.0</span></td></tr>
+      <tr><td><b>2 NPU taps</b></td><td>Plomberie firmware + DT + kernel + <code>/dev</code> (tap IN raw + tap OUT post-FX)</td><td><span class="pill amber">Livrable V7.0</span></td></tr>
+      <tr><td><b>NPU contrôle TOUS les effets</b></td><td>Effets TAC5212 ADC + DAC (via I²C / kcontrols) + effets DSP SOF cap + play (via tplg kcontrols) — chaîne unifiée pilotée depuis le NPU et le GUI</td><td><span class="pill purple">Cible architecturale</span></td></tr>
+      <tr><td>Code NPU (modèles ML)</td><td>Inférences sur <code>tap-in</code> / <code>tap-out</code> + écriture des consignes effets</td><td><span class="pill green">Aval (post-V7.0)</span></td></tr>
+      <tr><td>Ardour</td><td>—</td><td><span class="pill blue">PAS un objectif</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ====== 2. Vue système ====== -->
+<section class="break">
+  <h2><span class="num">2.</span> Vue système end-to-end</h2>
+  <div class="lede">
+    Trace du signal DSP&nbsp;: mics TAC5212 → SAI7 RX → DSP cap → PCM 0 → Linux mixer →
+    PCM 1 → DSP play → SAI7 TX → speakers TAC5212. Le mixer Linux est aussi
+    connecté à un USB gadget audio 8×8 (interface PC host) et à un téléphone 2×2.
+    Tap IN part de PIPE 1 cap (input brut), Tap OUT part de PIPE 2 play (output post-effets).
+  </div>
+
+  <div class="figure">
+    <img src="V7.0_assets/system.svg" alt="Vue système V7.0" />
+    <div class="cap"><b>Fig 1.</b> Architecture système V7.0 — TAC5212 ouvert (chaînes ADC + DAC d'effets), 2 pipelines DSP, 3 paires de devices au mixer Linux. Le NPU (flèches rouges pointillées) pilote l'ensemble des effets TAC + DSP.</div>
+  </div>
+
+  <h3>Invariants hardware</h3>
+  <table>
+    <thead>
+      <tr><th style="width:14%">#</th><th>Invariant</th><th style="width:30%">Justification</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>I1</code></td><td>TX = master, RX = slave, SAI ASYNC, BCLK continu (FCONT=1)</td><td>mémoire <code>feedback_tx_master_drives_all.md</code> + idempotence patch</td></tr>
+      <tr><td><code>I2</code></td><td>DMA 2 ms, <code>SCHEDULE_TIME_DOMAIN_DMA</code> exclusivement</td><td>mémoire <code>feedback_dma_2ms_definitive.md</code> non-négo</td></tr>
+      <tr><td><code>I3</code></td><td>8 ch = 1 component multi-channel, jamais 8 instances séparées</td><td>mémoires <code>feedback_pcm_8ch_pas_separes.md</code> · <code>sof_pivot_1comp_8ch.md</code></td></tr>
+      <tr><td><code>I4</code></td><td>Pas de cross-pipeline DSP cap ↔ play</td><td>nouveau V7.0, design choice</td></tr>
+      <tr><td><code>I5</code></td><td>NPU taps présents en permanence (raw + fx)</td><td>mémoire <code>project_npu_non_negotiable.md</code></td></tr>
+      <tr><td><code>I6</code></td><td>tac-reset avant tout test capture</td><td>mémoire <code>tac_reset_required_after_boot.md</code></td></tr>
+      <tr><td><code>I7</code></td><td>Topology&nbsp;: period=2000 µs, S32_LE, 8 slots TDM, 48 kHz</td><td>baseline E6.a</td></tr>
+      <tr><td><code>I8</code></td><td>Filename firmware = <code>sof-imx8m.ri</code></td><td>mémoire <code>sof_firmware_deploy_path.md</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ====== 3. Pipeline 1 cap ====== -->
+<section class="break">
+  <h2><span class="num">3.</span> Pipeline 1 — Capture (8 voies)</h2>
+  <div class="lede">
+    Signal mic post-DAI RX traverse <b>multiband_drc → drc D3 → pga</b> (8 voies
+    indépendantes), puis vers PCM HOST 0 (ASIO IN). Un seul tap NPU est splitté&nbsp;:
+    le <b>Tap IN brut</b>, juste après SAI7 RX, avant tout traitement.
+  </div>
+
+  <div class="figure">
+    <img src="V7.0_assets/pipe1_cap.svg" alt="Pipeline 1 cap V7.0" />
+    <div class="cap"><b>Fig 2.</b> Pipeline cap — chaîne d'effets et Tap IN brut.</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Étage</th><th>Component SOF</th><th>Paramètres</th><th>Origine</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Capture DAI</td><td><code>DAI SAI7 RX</code></td><td>TDM 8 slots × S32_LE × 48 kHz</td><td><span class="pill blue">E6.a inchangé</span></td></tr>
+      <tr><td>TAP IN (brut)</td><td>hook <code>dai_dma_cb</code> cap</td><td>reserved-memory <code>tap-in</code> · 8 ch · signal mic non traité</td><td><span class="pill amber">V7.0 nouveau</span></td></tr>
+      <tr><td>Compression multibande</td><td><code>multiband_drc</code> 8 ch</td><td>blob 8 × N (multi-config patché — modèle drc D3)</td><td><span class="pill pink">V7.0 nouveau</span></td></tr>
+      <tr><td>Compression dynamique</td><td><code>drc</code> D3 patché</td><td>state arrays + multi-blob 8 × M</td><td><span class="pill pink">E5.e.2-D3 réutilisé</span></td></tr>
+      <tr><td>Volume</td><td><code>pga</code> 8 ch</td><td>8 vol kcontrols indép</td><td><span class="pill pink">E5.e.2 step1 réutilisé</span></td></tr>
+      <tr><td>HOST PCM</td><td><code>PCM 0 cap</code></td><td>8 ch S32_LE 48 kHz · <code>/dev/snd/pcmC2D0c</code></td><td><span class="pill green">E6.a inchangé</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ====== 4. Pipeline 2 play ====== -->
+<section class="break">
+  <h2><span class="num">4.</span> Pipeline 2 — Playback (8 voies)</h2>
+  <div class="lede">
+    Strictement indépendante de PIPE 1. Reçoit 8 ch depuis Linux via PCM HOST 1,
+    traverse <b>multiband_drc → pga → drc</b> (limiteur final), puis SAI7 TX 8 ch.
+    Le <b>Tap OUT post-effets</b> est splitté juste avant SAI7 TX. Aucun mixer,
+    aucun deinterleave/interleave.
+  </div>
+
+  <div class="figure">
+    <img src="V7.0_assets/pipe2_play.svg" alt="Pipeline 2 play V7.0" />
+    <div class="cap"><b>Fig 3.</b> Pipeline play — strips OUT 8 voies indépendantes + Tap OUT post-effets.</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Étage</th><th>Component SOF</th><th>Paramètres</th><th>Origine</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>HOST PCM</td><td><code>PCM 1 play</code></td><td>8 ch S32_LE 48 kHz · <code>/dev/snd/pcmC2D1p</code></td><td><span class="pill purple">V7.0 simplifié vs E6.a</span></td></tr>
+      <tr><td>Compression multibande</td><td><code>multiband_drc</code> 8 ch</td><td>blob 8 × N′ (instance distincte de PIPE 1)</td><td><span class="pill pink">V7.0 nouveau</span></td></tr>
+      <tr><td>Volume</td><td><code>pga</code> 8 ch</td><td>8 vol kcontrols indép</td><td><span class="pill pink">réutilisé</span></td></tr>
+      <tr><td>Limiteur dynamique</td><td><code>drc</code> 8 ch</td><td>blob 8 × M′ (limiteur de sortie)</td><td><span class="pill pink">réutilisé</span></td></tr>
+      <tr><td>TAP OUT (post-FX)</td><td>hook post-strips, pre-DAI TX</td><td>reserved-memory <code>tap-out</code> · 8 ch · signal speaker post-traité</td><td><span class="pill amber">V7.0 nouveau</span></td></tr>
+      <tr><td>Playback DAI</td><td><code>DAI SAI7 TX</code></td><td>TDM 8 slots × S32_LE × 48 kHz · master</td><td><span class="pill blue">E6.a inchangé</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">Suppressions</span>
+    <code>mixer16</code>, <code>deinterleave_8</code>, <code>interleave_8</code> et tous les
+    buffers mono intermédiaires (B[0..7], B[100..107]) de E6.a sont retirés. Le bug
+    <code>copy_seq</code> re-entry guard (commit <code>0580b5f14</code>) reste en place,
+    mais ne sera plus déclenché par cette topology.
+  </div>
+</section>
+
+<!-- ====== 5. Effets TAC5212 dans la chaîne ====== -->
+<section class="break">
+  <h2><span class="num">5.</span> Effets TAC5212 dans la chaîne</h2>
+  <div class="lede">
+    Le TAC5212 n'est <b>pas</b> un convertisseur transparent. Il intègre une chaîne d'effets
+    complète des deux côtés (ADC capture + DAC playback). Tous ces effets <b>font partie de
+    la chaîne audio V7.0</b> et sont pilotables via I²C (registres TAC) → ALSA kcontrols.
+    Le NPU agit donc sur l'<b>ensemble unifié</b> : effets TAC + effets DSP SOF.
+    <br><span style="font-size:8.5pt; color: var(--muted);">Source : datasheet TAC5212 SLASF23A § 7.1, p. 28.</span>
+  </div>
+
+  <div class="figure">
+    <img src="V7.0_assets/effects_chain.svg" alt="Chaîne d'effets unifiée TAC + DSP, contrôlée par NPU" />
+    <div class="cap"><b>Fig 4.</b> Chaîne d'effets unifiée : TAC ADC → DSP cap → PCM → Linux → PCM → DSP play → TAC DAC. Flèches rouges pointillées = contrôle NPU sur tous les blocs.</div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="kicker">Côté ADC (mics → SAI RX)</div>
+      <div class="title">Effets TAC5212 capture</div>
+      <div class="body">
+        <ul class="clean">
+          <li><b>AGC</b> — Automatic Gain Controller</li>
+          <li><b>HPF</b> — High-pass filter</li>
+          <li><b>Biquad filters</b> par canal ADC</li>
+          <li><b>Gain / Volume</b> programmable par canal</li>
+          <li><b>Phase &amp; gain calibration</b> fine resolution</li>
+          <li><b>Decimation filter</b> (linear-phase / low-lat / ultra-low-lat)</li>
+          <li><b>Digital channel mixer</b> (ADC + DAC routing interne)</li>
+          <li><b>Mic bias</b> programmable jusqu'à 3 V</li>
+          <li><b>PDM digital mic</b> decimation filter (jusqu'à 4 mics PDM)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+      <div class="kicker">Côté DAC (SAI TX → speakers)</div>
+      <div class="title">Effets TAC5212 playback</div>
+      <div class="body">
+        <ul class="clean">
+          <li><b>Interpolation filter</b> (linear-phase / low-lat / ultra-low-lat)</li>
+          <li><b>Biquad filters</b> par canal DAC</li>
+          <li><b>DRC</b> — Dynamic Range Controller</li>
+          <li><b>Gain / Volume</b> programmable par canal</li>
+          <li><b>Distortion limiter</b></li>
+          <li><b>Thermal foldback</b> + protection</li>
+          <li><b>Battery guard</b> (brown-out prevention)</li>
+          <li><b>Tone generator</b></li>
+          <li><b>VAD</b> — Voice Activity Detection</li>
+          <li><b>UAD</b> — Ultrasonic Activity Detection</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="label">NPU pilote TOUT</span>
+    Le NPU n'écrit pas en I²C directement&nbsp;: il calcule des coefficients/consignes,
+    le GUI test V7.0 (E7) ou un orchestrateur userspace les applique aux kcontrols
+    ALSA. Le driver <code>tac5212.c</code> doit exposer ces effets en kcontrols
+    (à vérifier en E0, étendre si besoin).
+  </div>
+
+  <h3>Chaîne audio V7.0 complète (TAC + DSP)</h3>
+  <table>
+    <thead><tr><th style="width:20%">Sens</th><th>Chaîne complète</th></tr></thead>
+    <tbody>
+      <tr><td><b>Capture</b></td><td>mics → <span class="pill purple">TAC ADC</span> AGC → HPF → biquads → gain → decim → SAI7 RX → <span class="pill pink">DSP cap</span> multiband_drc → drc D3 → pga → PCM 0</td></tr>
+      <tr><td><b>Playback</b></td><td>PCM 1 → <span class="pill pink">DSP play</span> multiband_drc → pga → drc → SAI7 TX → <span class="pill purple">TAC DAC</span> interp → biquads → DRC → gain → limiter+foldback → speakers</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ====== 6. Devices Linux mixer ====== -->
+<section class="break">
+  <h2><span class="num">6.</span> Devices Linux connectés au mixer</h2>
+  <div class="lede">
+    Le mixer Linux orchestre 3 paires symétriques in/out. C'est lui qui décide
+    quoi router où, en temps réel, sans toucher au DSP.
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Device</th><th style="width:11%">Channels</th><th>Direction</th><th>Source / sink</th><th>Usage</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>DSP TAC5212</b></td>
+        <td><span class="pill green">8 × 8</span></td>
+        <td>cap + play</td>
+        <td><code>PCM 0 cap</code> (mics post-effets DSP)<br><code>PCM 1 play</code> (vers strips OUT DSP)</td>
+        <td>Capture mics + restitution speakers locaux</td>
+      </tr>
+      <tr>
+        <td><b>USB gadget audio</b></td>
+        <td><span class="pill blue">8 × 8</span></td>
+        <td>cap + play</td>
+        <td>USB 2.0 audio class · vu comme carte son externe par un PC host</td>
+        <td>I/O studio externe (DAW PC ↔ board)</td>
+      </tr>
+      <tr>
+        <td><b>Téléphone</b></td>
+        <td><span class="pill purple">2 × 2</span></td>
+        <td>cap + play</td>
+        <td>Modem voice / interface VoIP / PCM dédié</td>
+        <td>Communication voix entrante/sortante</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <span class="label">Mixer = Linux-only</span>
+    Le mixer ne fait <b>aucun</b> appel au DSP. Il prend N inputs (DSP cap, USB cap, phone cap), produit M outputs (DSP play, USB play, phone play), avec routing/gain/send FX au choix de l'app userspace.
+  </div>
+</section>
+
+<!-- ====== 7. Roadmap ====== -->
+<section class="break">
+  <h2><span class="num">7.</span> Roadmap d'implémentation</h2>
+  <div class="lede">
+    8 étapes incrémentales, fiche de test obligatoire à chacune
+    (<code>TESTS/TESTS_V7.0_E&lt;n&gt;.md</code>). Chaque étape passe par
+    <code>critic_analyze</code> + <code>critic_submit</code> avant tout code SOF.
+    Le low-latency est traité <b>tôt</b> (E1) et <b>vérifié à chaque étape</b>, pas
+    en sprint final.
+  </div>
+
+  <div class="figure">
+    <img src="V7.0_assets/roadmap.svg" alt="Roadmap V7.0" />
+    <div class="cap"><b>Fig 5.</b> Séquencement E0 → E7 (E4 = Tap IN sur cap, E5 = Tap OUT sur play, E7 = GUI test).</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:8%">Étape</th><th>Objectif</th><th>Critère GO</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><b>E0</b></td><td>Branche créée depuis <code>0580b5f14</code>, doc V7.0 commit/push, audit patches kernel V6.0→V7.0 appliqué (retirer <code>apply-v6-always-on.py</code>), <b>audit driver <code>tac5212.c</code></b> (vérifier qu'il expose tous les effets ADC + DAC en kcontrols ALSA), fiche E0 baseline E6.a re-vérifiée</td><td>boot OK, audio loopback Linux OK, kernel sans patches V6.0, kcontrols TAC visibles via <code>amixer</code></td></tr>
+      <tr><td><b>E1</b></td><td>Topology simplifiée + ALSA low-lat Linux : retirer mixer16/deinterleave/interleave, PCM 1 → SAI7 TX direct, MMAP + SCHED_FIFO + mlockall sur le loopback de test</td><td>latence boucle ALSA → DSP play → SAI loopback PCB → DSP cap → ALSA mesurée &lt; 10 ms, 0 xrun sur 60 s</td></tr>
+      <tr><td><b>E2</b></td><td>Pipe cap : remplacer <code>eq_iir</code> par <code>multiband_drc</code> (8 ch multi-blob, patch state arrays)</td><td>8 multibandes indép vérifiables, latence E1 préservée</td></tr>
+      <tr><td><b>E3</b></td><td>Pipe play : strips OUT <code>multiband_drc → pga → drc</code> (8 ch indép)</td><td>8 voies play indép paramétrables, audio OK, latence préservée</td></tr>
+      <tr><td><b>E4</b></td><td>Tap IN brut (PIPE 1) : adapter <code>apply-npu-tap-dt.py</code> (carve <code>tap-in</code>) + hook post-DAI RX + module <code>imx-audio-tap-in</code> + <code>/dev/imx-audio-tap-in</code></td><td>dump 1 s 8 ch brut wave correct</td></tr>
+      <tr><td><b>E5</b></td><td>Tap OUT post-FX (PIPE 2) : 2e reserved-memory <code>tap-out</code>, hook post-strips/pre-DAI TX, <code>/dev/imx-audio-tap-out</code></td><td>dump 1 s 8 ch post-effets ≠ signal Linux mixer entrant</td></tr>
+      <tr><td><b>E6</b></td><td>USB gadget audio 8×8 + intégration téléphone 2×2 dans le mixer Linux</td><td>3 paires de PCMs visibles, routing N×M opérationnel</td></tr>
+      <tr><td><b>E7</b></td><td><b>GUI de test V7.0</b> : app Linux (Qt / Flutter / web) — mixer N×M visuel + sliders pour <b>tous les effets de la chaîne unifiée</b> : TAC ADC (AGC, HPF, biquads, gain, decim) + DSP cap (multiband_drc, drc, pga) + DSP play (multiband_drc, pga, drc) + TAC DAC (interp, biquads, DRC, gain, limiter, foldback, VAD, tone gen)</td><td>tous effets TAC + DSP pilotables en direct depuis le GUI, audio reste &lt; 10 ms</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ====== 8. Patches kernel audit ====== -->
+<section class="break">
+  <h2><span class="num">8.</span> Patches kernel — audit V6.0 → V7.0</h2>
+  <div class="lede">
+    Les patches kernel actuels (<code>meta-local/recipes-kernel/linux/</code>) ont
+    été montés pour V3.2.2 / V5.4.1 / V6.0. Audit individuel pour V7.0&nbsp;:
+    certains restent obligatoires, l'un doit être retiré, un autre adapté.
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Patch / fichier</th><th style="width:18%">V7.0</th><th>Action</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>0001-imx8mp-evk-audio-mipi.patch</code> (board audio + MIPI)</td><td><span class="pill green">Garder</span></td><td>Patches du board hardware, indépendants V6.0</td></tr>
+      <tr><td><code>spdif.cfg</code> · <code>disable-at24.cfg</code></td><td><span class="pill green">Garder</span></td><td>Hors scope audio principal, peu coûteux</td></tr>
+      <tr><td>SOF imx-probes (<code>imx-probes.c</code>, <code>apply-imx-probes.py</code>, <code>sof-imx-probes.cfg</code>)</td><td><span class="pill green">Garder</span></td><td>Debug auxiliaire, V7.0 utilise debugfs principalement mais SOF Probes peut servir</td></tr>
+      <tr><td>TAC5212 driver (<code>tac5212.c/h</code>, <code>apply-tac5212-dt.py</code>, <code>tac5212.cfg</code>)</td><td><span class="pill blue">Obligatoire</span></td><td>Sans ça, pas d'audio du tout</td></tr>
+      <tr><td><code>apply-npu-tap-dt.py</code> — actuellement 1 reserved-memory @ <code>0x942B0000</code> + 1 node <code>imx_audio_tap</code></td><td><span class="pill amber">Adapter</span></td><td>V7.0 dual-tap : générer <b>2 reserved-memory</b> (<code>tap-in</code> + <code>tap-out</code>) + 2 nodes. Adresses + tailles à définir en E4/E5</td></tr>
+      <tr><td><code>apply-sdram2-dt.py</code> (8 MB @ <code>0xA0000000</code>, DSP-only)</td><td><span class="pill purple">Évaluer</span></td><td>Le mixer16 (utilisateur principal) est retiré, mais multiband_drc + drc blobs 8×N peuvent réclamer la mémoire. Confirmer empiriquement en E2/E3</td></tr>
+      <tr><td><code>apply-v6-always-on.py</code> (K0+K1+K2+K4+K5 ASoC SOF : token <code>SOF_TKN_PIPE_ALWAYS_ON</code>, IPC <code>SOF_IPC_TPLG_PIPE_TRIGGER</code>, struct <code>sof_ipc_pipe_trigger</code>, <code>always_on</code> dans widget, helper <code>sof_ipc3_send_pipe_trigger</code>, boucle de trigger PRE_START + START)</td><td><span class="pill red">RETIRER</span></td><td>V6.0 only. V7.0 a des PCM HOST anchors → start standard ALSA, pas de PIPE_TRIGGER firmware-side. <b>À retirer dès E0</b></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">Action E0</span>
+    Retirer <code>apply-v6-always-on.py</code> de <code>linux-imx_%.bbappend</code>
+    (lignes <code>SRC_URI += "file://apply-v6-always-on.py"</code> et l'appel
+    <code>python3 apply-v6-always-on.py</code> dans <code>do_patch:append</code>).
+    Supprimer le fichier source. Vérifier que le kernel build sans cette dépendance
+    et que les fichiers <code>tokens.h</code>, <code>header.h</code>, <code>topology.h</code>,
+    <code>sof-audio.h</code>, <code>ipc3-topology.c</code> sont restaurés à leur état
+    upstream (le purge interne du script aide mais à vérifier).
+  </div>
+</section>
+
+<!-- ====== 9. Diag mailbox ====== -->
+<section class="break">
+  <h2><span class="num">9.</span> Diagnostics mailbox</h2>
+  <div class="lede">
+    Lecture via <code>/sys/kernel/debug/sof/debug</code> (jamais <code>devmem</code>,
+    DSP SRAM non mappée userspace). Chaque diagnostic a une plage d'adresses unique
+    (mémoire <code>feedback_unique_mailbox_addresses.md</code>).
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:14%">Adresse</th><th>Compteur</th><th>Signification</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>0x500</code></td><td>marker <code>0xCAFE0420</code></td><td><code>sdma_set_config</code> block run au moins une fois</td></tr>
+      <tr><td><code>0x504</code></td><td>sdma_set_config calls</td><td>nombre total de configs par boot</td></tr>
+      <tr><td><code>0x510 – 0x52C</code></td><td>sdma_chan_type[0..7]</td><td>type DMA par channel (0 = AP2AP, 3 = SHP2MCU, 4 = MCU2SHP)</td></tr>
+      <tr><td><code>0x530 – 0x54C</code></td><td>hw_event[0..7]</td><td>handshake (12 = SAI7 RX, 13 = SAI7 TX, -1 = sw-trig)</td></tr>
+      <tr><td><code>0x550 – 0x56C</code></td><td>direction[0..7]</td><td>sens DMA configuré</td></tr>
+      <tr><td><code>0x570 / 0x574</code></td><td>pipe_task body counter</td><td>doit être > 0 sur les 2 pipelines actives</td></tr>
+      <tr><td><code>0x600 – 0x68C</code></td><td>sdma_copy + dai_dma_cb par direction</td><td>trafic effectif des copies DMA</td></tr>
+      <tr><td>E4/E5</td><td>nouveaux compteurs taps</td><td>adresses à définir, jamais réutiliser celles ci-dessus</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ====== 10. Risques ====== -->
+<section class="break">
+  <h2><span class="num">10.</span> Risques identifiés</h2>
+  <div class="lede">
+    Cinq points de friction potentiels, avec leur mitigation. Aucun n'est bloquant
+    mais chacun mérite une vérification empirique au moment de son étape.
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Risque</th><th style="width:14%">Probabilité</th><th>Mitigation</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>multiband_drc</code> SOF stock pas multi-instance ready</td><td><span class="pill red">Haute</span></td><td>Patch state arrays + multi-blob comme <code>drc</code> D3 (E5.e.2-D3)</td></tr>
+      <tr><td>2 NPU taps consomment trop de bande passante DDR</td><td><span class="pill amber">Moyenne</span></td><td>reserved-memory séparées, mesure SDMA bandwidth E5</td></tr>
+      <tr><td>ALSA low-latency casse capabilities Ardour</td><td><span class="pill green">Faible</span></td><td>Sprint dédié post-E6, isolation <code>mlockall</code> via systemd</td></tr>
+      <tr><td><code>drc</code> cap + <code>drc</code> play simultanés — conflit ABI</td><td><span class="pill amber">Moyenne</span></td><td>Patch déjà multi-instance, à re-tester sur 2 pipes</td></tr>
+      <tr><td>Sans tap brut, NPU pourrait apprendre sur signal traité (biais)</td><td><span class="pill purple">Variable</span></td><td>C'est exactement la raison des 2 taps</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ====== 11. Hors-scope ====== -->
+<section class="break">
+  <h2><span class="num">11.</span> Hors-scope V7.0</h2>
+  <div class="lede">Projets parallèles ou suites possibles, listés explicitement pour cadrer V7.0 sans inflation.</div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="kicker">Projet aval</div>
+      <div class="title">E8 — GUI v2 (FFT + ML monitoring)</div>
+      <div class="body">
+        Évolution du GUI test V7.0 (E7) avec FFT NPU tap + FFT voie sélectionnée
+        + visualisations ML en direct. Mémoire <code>project_e8_gui_realtime.md</code>.
+        Démarre après V7.0 GO + premiers modèles NPU.
+      </div>
+    </div>
+    <div class="card">
+      <div class="kicker">Userland</div>
+      <div class="title">Send effects (réverb / delay / sidechain)</div>
+      <div class="body">
+        Le GUI de test V7.0 (livrable, étape E7) couvre <b>mixer + réglages des
+        effets DSP/TAC</b>. Les <b>send effects</b> userspace plus poussés
+        (réverb, delay, sidechain inter-voies) sont post-V7.0.
+      </div>
+    </div>
+    <div class="card">
+      <div class="kicker">Modèle ML</div>
+      <div class="title">Code NPU (Vela / TFLite)</div>
+      <div class="body">
+        Les modèles consommant <code>tap-raw</code> et <code>tap-fx</code> sont un
+        projet à part. V7.0 fournit la plomberie, pas les inférences.
+      </div>
+    </div>
+    <div class="card">
+      <div class="kicker">Branches archive</div>
+      <div class="title">V6.0 always-on DAI-to-DAI</div>
+      <div class="body">
+        La branche <code>feature/v6-always-on-async</code> reste en l'état pour
+        archive. Ré-activable plus tard si SOF upstream introduit un support
+        no-host natif.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== 12. Plan de développement complet ====== -->
+<section class="break">
+  <h2><span class="num">12.</span> Plan de développement complet</h2>
+  <div class="lede">
+    Feuille de route détaillée pour V7.0 — 8 étapes, chaque étape produit un tag git
+    <code>v7.0-e&lt;n&gt;</code>, une fiche de test <code>TESTS_V7.0_E&lt;n&gt;.md</code>
+    avec liste exhaustive des tests à exécuter avant de passer à l'étape suivante.
+    Aucun saut d'étape. Critère GO global = test utilisateur OUI sur audio + latence &lt; 10 ms.
+  </div>
+
+  <h3>12.1 Vue d'ensemble</h3>
+  <table>
+    <thead>
+      <tr><th style="width:8%">Étape</th><th style="width:11%">Tag git</th><th>Livrable principal</th><th style="width:11%">Fiche test</th><th style="width:14%">Préalable</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><b>E0</b></td><td><code>v7.0-e0</code></td><td>Branche + audit kernel + audit driver TAC + baseline E6.a re-vérifiée</td><td><code>TESTS_V7.0_E0.md</code></td><td>doc V7.0 mergée</td></tr>
+      <tr><td><b>E1</b></td><td><code>v7.0-e1</code></td><td>Topology simplifiée (sans mixer16) + ALSA low-lat &lt; 10 ms</td><td><code>TESTS_V7.0_E1.md</code></td><td>E0 GO</td></tr>
+      <tr><td><b>E2</b></td><td><code>v7.0-e2</code></td><td><code>multiband_drc</code> CAP 8 ch indép (patch state arrays + multi-blob)</td><td><code>TESTS_V7.0_E2.md</code></td><td>E1 GO</td></tr>
+      <tr><td><b>E3</b></td><td><code>v7.0-e3</code></td><td>Strips OUT play 8 ch (multiband_drc → pga → drc)</td><td><code>TESTS_V7.0_E3.md</code></td><td>E2 GO</td></tr>
+      <tr><td><b>E4</b></td><td><code>v7.0-e4</code></td><td>Tap IN brut + reserved-mem + module kernel + <code>/dev/imx-audio-tap-in</code></td><td><code>TESTS_V7.0_E4.md</code></td><td>E3 GO</td></tr>
+      <tr><td><b>E5</b></td><td><code>v7.0-e5</code></td><td>Tap OUT post-FX + 2e reserved-mem + <code>/dev/imx-audio-tap-out</code></td><td><code>TESTS_V7.0_E5.md</code></td><td>E4 GO</td></tr>
+      <tr><td><b>E6</b></td><td><code>v7.0-e6</code></td><td>USB gadget 8×8 + téléphone 2×2 dans le mixer Linux</td><td><code>TESTS_V7.0_E6.md</code></td><td>E5 GO</td></tr>
+      <tr><td><b>E7</b></td><td><code>v7.0-e7</code></td><td>GUI test V7.0 — pilotage de tous les effets TAC + DSP en direct</td><td><code>TESTS_V7.0_E7.md</code></td><td>E6 GO</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <span class="label">Format des fiches</span>
+    Chaque <code>TESTS_V7.0_E&lt;n&gt;.md</code> contient&nbsp;: référentiel
+    (commit / branche / firmware md5 / topology md5), travaux exécutés, table des
+    tests (T<code>n</code>.1 → T<code>n</code>.X), résultats observés, log dmesg
+    pertinent, dump <code>amixer scontrols</code> si applicable, mesure latence
+    si applicable, <b>champ « Test utilisateur OUI / NON »</b> non-négo, conclusion GO/NO-GO.
+  </div>
+
+  <!-- E0 -->
+  <h3>12.2 E0 — Baseline + audit (<code>v7.0-e0</code>)</h3>
+  <table>
+    <thead><tr><th style="width:18%">Domaine</th><th>Travaux</th></tr></thead>
+    <tbody>
+      <tr><td>git</td><td>Créer branches <code>feature/v7.0-multiband-drc-tap</code> sur SOF (depuis <code>0580b5f14</code>) et yocto. Commit doc <code>ARCHI_V7.0.pdf</code>+<code>md</code></td></tr>
+      <tr><td>kernel</td><td>Retirer <code>apply-v6-always-on.py</code> (lignes <code>SRC_URI</code> + appel <code>do_patch:append</code> dans bbappend, supprimer <code>.py</code>). Vérifier purge interne du script a bien restauré l'arbre. Build kernel.</td></tr>
+      <tr><td>driver</td><td>Audit <code>tac5212.c</code> : lister les kcontrols ALSA exposés (AGC, HPF, biquads, gain, decim, DRC DAC, limiter, foldback, VAD, tone gen). Comparer à la liste datasheet. Identifier les manquants (à étendre en E2/E3 si bloquant)</td></tr>
+      <tr><td>firmware</td><td>Build SOF firmware E6.a (<code>0580b5f14</code>) sur la nouvelle branche, sign, deploy, vérifier md5</td></tr>
+      <tr><td>baseline</td><td>Re-vérifier audio loopback E6.a (loopback-c userspace) avant tout autre changement</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <thead><tr><th style="width:8%">Test</th><th>Description</th><th style="width:22%">Outil / méthode</th><th style="width:18%">Critère GO</th></tr></thead>
+    <tbody>
+      <tr><td><b>T0.1</b></td><td>Yocto build <code>imx-image-full</code> sans <code>apply-v6-always-on.py</code></td><td><code>bitbake imx-image-full</code></td><td>build OK, no error</td></tr>
+      <tr><td><b>T0.2</b></td><td>Board boot avec image V7.0-E0</td><td>scp Image+dtb, reboot</td><td>uname OK, login OK</td></tr>
+      <tr><td><b>T0.3</b></td><td>SOF debugfs présente</td><td><code>ls /sys/kernel/debug/sof/</code></td><td>fichiers <code>debug</code>, <code>fw_version</code> présents</td></tr>
+      <tr><td><b>T0.4</b></td><td>Audio loopback Linux passthrough (E6.a baseline)</td><td><code>loopback-c</code></td><td>in/out ~47 kfps stable</td></tr>
+      <tr><td><b>T0.5</b></td><td>kcontrols TAC visibles côté ALSA</td><td><code>amixer -c softac5212tdm scontrols</code></td><td>liste non vide, AGC/HPF/Vol présents</td></tr>
+      <tr><td><b>T0.6</b></td><td>Pas de régression vs E6.a</td><td>compare xrun_play et ring_drop avec E6.a</td><td>≤ valeurs E6.a</td></tr>
+      <tr><td><b>T0.7</b></td><td>Test utilisateur — écoute audio</td><td>écoute mics → speakers via loopback userspace</td><td>« le son est bon »</td></tr>
+    </tbody>
+  </table>
+
+  <!-- E1 -->
+  <h3>12.3 E1 — Topology simplifiée + ALSA low-lat (<code>v7.0-e1</code>)</h3>
+  <table>
+    <thead><tr><th style="width:18%">Domaine</th><th>Travaux</th></tr></thead>
+    <tbody>
+      <tr><td>topology</td><td>Modifier <code>sof-imx8mp-tac5212-V7.0.m4</code> : retirer <code>mixer16</code>, <code>deinterleave_8</code>, <code>interleave_8</code>, buffers mono. PCM 1 → SAI7 TX direct. Retirer fix <code>copy_seq</code> côté topology si plus déclenché (le code reste).</td></tr>
+      <tr><td>linux</td><td>Configurer <code>loopback-c</code> avec MMAP + <code>SCHED_FIFO</code> (rt-priority 80) + <code>mlockall(MCL_CURRENT|MCL_FUTURE)</code>. Période et buffer ALSA réduits (cible 2-3 périodes × 2 ms).</td></tr>
+      <tr><td>mesure</td><td>Outil <code>alsa-rtt</code> ou injection sinus + capture &amp; cross-correlation pour mesurer round-trip latency</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <thead><tr><th style="width:8%">Test</th><th>Description</th><th style="width:22%">Outil / méthode</th><th style="width:18%">Critère GO</th></tr></thead>
+    <tbody>
+      <tr><td><b>T1.1</b></td><td>Topology compile + signature</td><td><code>m4 + alsatplg + west sign</code></td><td>OK</td></tr>
+      <tr><td><b>T1.2</b></td><td>Board boot, dmesg pipelines OK</td><td><code>dmesg | grep -i pipe</code></td><td>2 pipelines instanciées</td></tr>
+      <tr><td><b>T1.3</b></td><td>kcontrols toujours présents</td><td><code>amixer scontrols</code></td><td>list ≥ T0.5</td></tr>
+      <tr><td><b>T1.4</b></td><td>Loopback ALSA RT mesuré</td><td><code>alsa-rtt</code> sinus + corrélation</td><td>round-trip mesuré, valeur consignée</td></tr>
+      <tr><td><b>T1.5</b></td><td>Latence end-to-end &lt; 10 ms</td><td>idem T1.4</td><td>RTT mesuré &lt; 10 ms</td></tr>
+      <tr><td><b>T1.6</b></td><td>0 xrun_play sur 60 s</td><td><code>loopback-c --duration 60</code></td><td>xrun_play=0</td></tr>
+      <tr><td><b>T1.7</b></td><td>0 ring_drop sur 60 s</td><td>idem T1.6</td><td>ring_drop=0</td></tr>
+      <tr><td><b>T1.8</b></td><td>Test utilisateur</td><td>écoute audio</td><td>« son OK, perception rapide »</td></tr>
+    </tbody>
+  </table>
+
+  <!-- E2 -->
+  <h3>12.4 E2 — multiband_drc CAP (<code>v7.0-e2</code>)</h3>
+  <table>
+    <thead><tr><th style="width:18%">Domaine</th><th>Travaux</th></tr></thead>
+    <tbody>
+      <tr><td>SOF source</td><td>Patcher <code>src/audio/multiband_drc/*</code> pour state arrays par canal + détection multi-blob (modèle <code>drc</code> D3 commit <code>ea984a266</code>). ABI back-compat (mono/single-blob inchangé).</td></tr>
+      <tr><td>topology</td><td>Remplacer <code>eq_iir(8)</code> par <code>multiband_drc(8)</code> dans pipe cap. Charger 8 blobs distincts (config différenciée par voie).</td></tr>
+      <tr><td>config blobs</td><td>Générer 8 blobs : voie 1 = compresseur agressif, voie 2 = soft, voie 3 = bypass (≈ ratio 1:1), voies 4-8 = variantes. Permet vérification empirique différenciation.</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <thead><tr><th style="width:8%">Test</th><th>Description</th><th style="width:22%">Outil / méthode</th><th style="width:18%">Critère GO</th></tr></thead>
+    <tbody>
+      <tr><td><b>T2.1</b></td><td>SOF tests unitaires multiband_drc</td><td><code>west build sof-tests</code></td><td>tests passent</td></tr>
+      <tr><td><b>T2.2</b></td><td>Build firmware OK</td><td><code>west build + west sign</code></td><td>Reef signature OK</td></tr>
+      <tr><td><b>T2.3</b></td><td>Boot + 8 instances multiband_drc</td><td>mailbox debug compteur instances</td><td>8 instances</td></tr>
+      <tr><td><b>T2.4</b></td><td>Configs distinctes appliquées</td><td>kcontrol blob get par voie</td><td>blobs différents lus</td></tr>
+      <tr><td><b>T2.5</b></td><td>Sinus saturant voie 1 → compression</td><td>injecter -6 dBFS, mesurer crête sortie</td><td>crête limitée, ≠ voie 3 bypass</td></tr>
+      <tr><td><b>T2.6</b></td><td>Voie 3 bypass = pas de compression</td><td>idem T2.5 sur voie 3</td><td>crête = entrée</td></tr>
+      <tr><td><b>T2.7</b></td><td>Latence E1 préservée</td><td>RTT mesuré</td><td>&lt; 10 ms</td></tr>
+      <tr><td><b>T2.8</b></td><td>0 xrun sur 60 s</td><td><code>loopback-c</code></td><td>xrun_play=0</td></tr>
+      <tr><td><b>T2.9</b></td><td>Test utilisateur — entendre la différence par voie</td><td>écoute</td><td>« je sens la compression différente »</td></tr>
+    </tbody>
+  </table>
+
+  <!-- E3 -->
+  <h3>12.5 E3 — Strips OUT play (<code>v7.0-e3</code>)</h3>
+  <table>
+    <thead><tr><th style="width:18%">Domaine</th><th>Travaux</th></tr></thead>
+    <tbody>
+      <tr><td>topology</td><td>Ajouter strips OUT (<code>multiband_drc → pga → drc</code>) en aval de PCM 1, 8 ch indép. Charger 8 blobs distincts par étage par voie.</td></tr>
+      <tr><td>SOF source</td><td>Vérifier que <code>drc</code> D3 patché en E5.e.2-D3 supporte 2 instances simultanées (1 cap + 1 play). Patcher si nécessaire (pas attendu).</td></tr>
+      <tr><td>config</td><td>Blobs play : limiteur dur sur voie 8 (test soft-clip), bypass sur voie 1, compression musique sur voies 2-7</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <thead><tr><th style="width:8%">Test</th><th>Description</th><th style="width:22%">Outil / méthode</th><th style="width:18%">Critère GO</th></tr></thead>
+    <tbody>
+      <tr><td><b>T3.1</b></td><td>Build firmware OK</td><td><code>west build + sign</code></td><td>Reef OK</td></tr>
+      <tr><td><b>T3.2</b></td><td>Boot, 8 strips OUT instanciées</td><td>mailbox debug</td><td>8 strips × 3 étages</td></tr>
+      <tr><td><b>T3.3</b></td><td>drc cap + drc play simultanés OK</td><td>mailbox + audio</td><td>pas de conflit, audio passe</td></tr>
+      <tr><td><b>T3.4</b></td><td>Configs distinctes par voie play</td><td>kcontrol blob get</td><td>blobs ≠</td></tr>
+      <tr><td><b>T3.5</b></td><td>Sinus saturant play voie 8 → limité</td><td>injecter via PCM 1, scope sur SAI TX</td><td>écrêtage doux</td></tr>
+      <tr><td><b>T3.6</b></td><td>Voie 1 bypass = pas de limite</td><td>idem T3.5</td><td>signal intact</td></tr>
+      <tr><td><b>T3.7</b></td><td>Latence préservée</td><td>RTT</td><td>&lt; 10 ms</td></tr>
+      <tr><td><b>T3.8</b></td><td>0 xrun sur 60 s</td><td><code>loopback-c</code></td><td>xrun_play=0</td></tr>
+      <tr><td><b>T3.9</b></td><td>Test utilisateur</td><td>écoute play 8 voies différenciées</td><td>« je sens les effets play »</td></tr>
+    </tbody>
+  </table>
+
+  <!-- E4 -->
+  <h3>12.6 E4 — Tap IN brut (<code>v7.0-e4</code>)</h3>
+  <table>
+    <thead><tr><th style="width:18%">Domaine</th><th>Travaux</th></tr></thead>
+    <tbody>
+      <tr><td>device tree</td><td>Adapter <code>apply-npu-tap-dt.py</code> : reserved-memory <code>tap-in@&lt;adresse&gt;</code> 256 KB no-map + node <code>imx_audio_tap_in</code> compatible <code>imx,audio-tap</code></td></tr>
+      <tr><td>SOF firmware</td><td>Hook dans <code>dai_dma_cb</code> capture (cf <code>npu_tap_v1_proposal.md</code>) — copier les samples post-DAI RX, pre-effets vers <code>tap-in</code> rmem. Header avec timestamp.</td></tr>
+      <tr><td>kernel module</td><td>Module <code>imx-audio-tap-in</code> (recette additive dans meta-local) : driver chardev exposant <code>/dev/imx-audio-tap-in</code> avec <code>read()</code> bloquant + <code>mmap()</code> sur la rmem</td></tr>
+      <tr><td>userspace</td><td>Outil de test C : <code>tap-in-dump</code> qui lit <code>/dev/imx-audio-tap-in</code> 1 s 8 ch S32_LE et écrit un .wav</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <thead><tr><th style="width:8%">Test</th><th>Description</th><th style="width:22%">Outil / méthode</th><th style="width:18%">Critère GO</th></tr></thead>
+    <tbody>
+      <tr><td><b>T4.1</b></td><td>DT compile + reserved-memory visible</td><td><code>cat /proc/device-tree/reserved-memory/</code></td><td>node tap-in présent</td></tr>
+      <tr><td><b>T4.2</b></td><td>Module kernel charge OK</td><td><code>modprobe imx-audio-tap-in</code></td><td>OK, pas de oops</td></tr>
+      <tr><td><b>T4.3</b></td><td><code>/dev/imx-audio-tap-in</code> présent</td><td><code>ls /dev/</code></td><td>chardev créé</td></tr>
+      <tr><td><b>T4.4</b></td><td>Dump 1 s wave correct</td><td><code>tap-in-dump &gt; out.wav ; aplay out.wav</code></td><td>signal mics audible</td></tr>
+      <tr><td><b>T4.5</b></td><td>Signal tap-in == post-TAC pre-DSP-fx</td><td>injecter -20 dBFS sur mic, comparer tap-in vs PCM 0</td><td>tap-in pré-effets DSP, PCM 0 post-effets DSP</td></tr>
+      <tr><td><b>T4.6</b></td><td>Latence préservée</td><td>RTT</td><td>&lt; 10 ms</td></tr>
+      <tr><td><b>T4.7</b></td><td>0 xrun sur 60 s</td><td><code>loopback-c</code></td><td>xrun_play=0</td></tr>
+      <tr><td><b>T4.8</b></td><td>Test utilisateur</td><td>écoute du dump tap-in vs PCM cap</td><td>« je perçois la différence brut/traité »</td></tr>
+    </tbody>
+  </table>
+
+  <!-- E5 -->
+  <h3>12.7 E5 — Tap OUT post-FX (<code>v7.0-e5</code>)</h3>
+  <table>
+    <thead><tr><th style="width:18%">Domaine</th><th>Travaux</th></tr></thead>
+    <tbody>
+      <tr><td>device tree</td><td>2e reserved-memory <code>tap-out@&lt;adresse&gt;</code> 256 KB no-map + node <code>imx_audio_tap_out</code></td></tr>
+      <tr><td>SOF firmware</td><td>2e hook : post-strips OUT, pre-DAI TX (juste avant <code>dai_dma_cb</code> playback) — copier vers <code>tap-out</code> rmem</td></tr>
+      <tr><td>kernel module</td><td>Module <code>imx-audio-tap-out</code> (similaire E4) → <code>/dev/imx-audio-tap-out</code></td></tr>
+      <tr><td>mesure DDR</td><td>Mesurer bande passante SDMA cumulée avec les 2 taps actifs (8 ch × 4 octets × 48 kHz × 2 = 3 MB/s, faible)</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <thead><tr><th style="width:8%">Test</th><th>Description</th><th style="width:22%">Outil / méthode</th><th style="width:18%">Critère GO</th></tr></thead>
+    <tbody>
+      <tr><td><b>T5.1</b></td><td>2 reserved-memory visibles</td><td><code>cat /proc/device-tree/reserved-memory/</code></td><td>tap-in + tap-out</td></tr>
+      <tr><td><b>T5.2</b></td><td>2 modules chargent + 2 <code>/dev/</code></td><td><code>modprobe ; ls /dev/</code></td><td>2 chardev</td></tr>
+      <tr><td><b>T5.3</b></td><td>Dump tap-out 1 s wave</td><td><code>tap-out-dump</code></td><td>signal speaker pré-TAC DAC</td></tr>
+      <tr><td><b>T5.4</b></td><td>Tap-out montre la chaîne strips OUT</td><td>injecter dans PCM 1 sinus, vérifier compression sur tap-out vs entrée mixer</td><td>≠ entrée, ≠ tap-in</td></tr>
+      <tr><td><b>T5.5</b></td><td>Bande passante SDMA acceptable</td><td><code>perf trace</code> ou compteur firmware</td><td>&lt; 10 % pic SDMA</td></tr>
+      <tr><td><b>T5.6</b></td><td>Latence préservée</td><td>RTT</td><td>&lt; 10 ms</td></tr>
+      <tr><td><b>T5.7</b></td><td>0 xrun sur 60 s</td><td><code>loopback-c</code></td><td>xrun_play=0</td></tr>
+      <tr><td><b>T5.8</b></td><td>Test utilisateur</td><td>écoute tap-out + comparaison tap-in</td><td>« les 2 dumps reflètent bien la chaîne »</td></tr>
+    </tbody>
+  </table>
+
+  <!-- E6 -->
+  <h3>12.8 E6 — USB gadget + téléphone (<code>v7.0-e6</code>)</h3>
+  <table>
+    <thead><tr><th style="width:18%">Domaine</th><th>Travaux</th></tr></thead>
+    <tbody>
+      <tr><td>kernel</td><td>Activer <code>CONFIG_USB_F_UAC2</code> + <code>CONFIG_USB_CONFIGFS_F_UAC2</code>. Configfs 8 ch in / 8 ch out S32_LE 48 kHz</td></tr>
+      <tr><td>script systemd</td><td>Service <code>usb-gadget-audio.service</code> qui crée le gadget au boot</td></tr>
+      <tr><td>téléphone</td><td>Définir interface tél : modem (ofono ?) ou PCM dédié 2 ch / 16 kHz / S16_LE. Sortie/entrée routables ALSA.</td></tr>
+      <tr><td>mixer</td><td>Outil userspace ou config <code>asound.conf</code> : routes N×M cap/play entre les 3 paires de PCMs (DSP TAC, USB, tél)</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <thead><tr><th style="width:8%">Test</th><th>Description</th><th style="width:22%">Outil / méthode</th><th style="width:18%">Critère GO</th></tr></thead>
+    <tbody>
+      <tr><td><b>T6.1</b></td><td>USB gadget visible PC host</td><td>brancher PC host, <code>aplay -l</code></td><td>8 ch in/out 48 kHz</td></tr>
+      <tr><td><b>T6.2</b></td><td>Téléphone PCMs visibles board</td><td><code>aplay -l ; arecord -l</code></td><td>card téléphone listée</td></tr>
+      <tr><td><b>T6.3</b></td><td>DSP cap → USB out</td><td>route ALSA, écoute PC host</td><td>audio mics audible PC</td></tr>
+      <tr><td><b>T6.4</b></td><td>USB in → DSP play</td><td>jouer .wav PC host, écoute speaker board</td><td>audible</td></tr>
+      <tr><td><b>T6.5</b></td><td>Tél in → DSP play</td><td>route via mixer</td><td>audible</td></tr>
+      <tr><td><b>T6.6</b></td><td>DSP cap → tél out</td><td>route via mixer</td><td>audible côté tél</td></tr>
+      <tr><td><b>T6.7</b></td><td>Latence USB round-trip</td><td>boucle PC host → USB in → DSP → SAI loopback PCB → DSP → USB out → PC host</td><td>mesurée et &lt; 25 ms (USB ajoute ~5 ms)</td></tr>
+      <tr><td><b>T6.8</b></td><td>Latence DSP préservée</td><td>RTT mics → speakers (sans USB ni tél)</td><td>&lt; 10 ms inchangé</td></tr>
+      <tr><td><b>T6.9</b></td><td>Test utilisateur</td><td>3 sources connectées simultanément</td><td>« tout est routable »</td></tr>
+    </tbody>
+  </table>
+
+  <!-- E7 -->
+  <h3>12.9 E7 — GUI test V7.0 (<code>v7.0-e7</code>)</h3>
+  <table>
+    <thead><tr><th style="width:18%">Domaine</th><th>Travaux</th></tr></thead>
+    <tbody>
+      <tr><td>techno</td><td>Choix : <b>Flutter</b> (déjà dans la stack Yocto, runtime <code>flutter-embedded-runner</code>) — ou Qt6 fallback. Recette <code>recipes-graphics/v7-gui/</code></td></tr>
+      <tr><td>backend</td><td>Plugin Flutter binding ALSA (libasound) pour kcontrols + libsndfile pour test files. Auto-discovery des kcontrols, génération UI depuis introspection ALSA</td></tr>
+      <tr><td>UI sections</td><td>Onglet Mixer : matrice 6×6 (3 in × 3 out) avec sliders gain. Onglet TAC ADC. Onglet DSP cap. Onglet DSP play. Onglet TAC DAC. Onglet Presets (load/save blob configs).</td></tr>
+      <tr><td>presets</td><td>3 presets initiaux : « voix studio », « musique », « téléphone bas débit ». Stockage <code>/etc/v7-gui/presets/</code>.</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <thead><tr><th style="width:8%">Test</th><th>Description</th><th style="width:22%">Outil / méthode</th><th style="width:18%">Critère GO</th></tr></thead>
+    <tbody>
+      <tr><td><b>T7.1</b></td><td>GUI lance sur board (X11 ou wayland)</td><td>systemctl start v7-gui</td><td>fenêtre affichée</td></tr>
+      <tr><td><b>T7.2</b></td><td>Slider TAC AGC voie 1 cap → audio change live</td><td>slide + écoute</td><td>compression audible immédiate</td></tr>
+      <tr><td><b>T7.3</b></td><td>Slider DSP drc threshold cap → audio change live</td><td>slide + écoute</td><td>compression DSP audible</td></tr>
+      <tr><td><b>T7.4</b></td><td>Slider TAC DRC DAC voie play → audio change</td><td>slide + écoute</td><td>limiteur audible</td></tr>
+      <tr><td><b>T7.5</b></td><td>Routage cap → USB activable depuis GUI</td><td>clic sur matrice mixer</td><td>route appliquée</td></tr>
+      <tr><td><b>T7.6</b></td><td>Latence stable sous interaction</td><td>RTT pendant slide intensif</td><td>&lt; 10 ms inchangé</td></tr>
+      <tr><td><b>T7.7</b></td><td>Preset « voix studio » load OK</td><td>cliquer preset</td><td>tous kcontrols mis à jour, audio cohérent</td></tr>
+      <tr><td><b>T7.8</b></td><td>Pas de crash 1 h</td><td>script de test interaction continue</td><td>0 crash, 0 leak mémoire significatif</td></tr>
+      <tr><td><b>T7.9</b></td><td>Test utilisateur</td><td>session libre 30 min</td><td>« je peux tout régler facilement »</td></tr>
+    </tbody>
+  </table>
+
+  <h3>12.10 Contenu type des fiches <code>TESTS_V7.0_E&lt;n&gt;.md</code></h3>
+  <table>
+    <thead><tr><th style="width:25%">Section</th><th>Contenu attendu</th></tr></thead>
+    <tbody>
+      <tr><td>En-tête</td><td>Date · Statut (DRAFT / GO / NO-GO) · branche · commit SOF · firmware md5 · topology md5 · kernel image md5</td></tr>
+      <tr><td>Référentiel</td><td>Phase / Étape / Préalable (réf fiche précédente) / Tag git produit</td></tr>
+      <tr><td>Travaux exécutés</td><td>Liste précise des modifications par domaine (firmware / kernel / topology / userspace) avec liens vers les commits</td></tr>
+      <tr><td>Build &amp; deploy</td><td>Commandes utilisées (<code>west build</code>, <code>west sign</code>, <code>scp</code>, <code>systemctl reboot</code>) + md5 attendus + dmesg attendu</td></tr>
+      <tr><td>Tests automatisés</td><td>Tableau T<code>n</code>.X avec résultat OK / FAIL / N/A + valeur mesurée (ms, fps, dB, etc.)</td></tr>
+      <tr><td>Logs &amp; mailbox</td><td>Extrait dmesg pertinent + dump <code>/sys/kernel/debug/sof/debug</code> avec interprétation (compteurs critiques)</td></tr>
+      <tr><td>Mesure latence</td><td>Si applicable : valeur RTT, méthode, conditions (sinus 1 kHz, période ALSA, etc.)</td></tr>
+      <tr><td>Test utilisateur</td><td>Champ <b>OUI / NON</b> + commentaire libre (qualité audio, ressenti, problèmes perçus)</td></tr>
+      <tr><td>Régression</td><td>Comparaison avec la fiche précédente (xrun, ring_drop, latence, kcontrols listés)</td></tr>
+      <tr><td>Conclusion</td><td>GO / NO-GO + raison + actions correctives si NO-GO</td></tr>
+      <tr><td>Annexes</td><td>captures d'écran si GUI, .wav samples, fichiers de config, blob configs, screenshots scope</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <span class="label">Règle d'or</span>
+    Aucune étape ne passe à la suivante tant que <b>tous les tests Tn.X sont OK
+    + champ « Test utilisateur OUI »</b> sur la fiche. NO-GO = retour analyse +
+    investigation critic, pas de saut. Cf mémoire <code>feedback_test_fiches.md</code>.
+  </div>
+</section>
+
+<!-- ====== 13. Décision de branchage ====== -->
+<section class="break">
+  <h2><span class="num">13.</span> Décision de branchage</h2>
+  <div class="lede">Tous les repos forkent depuis E6.a (commit <code>0580b5f14</code>) sur une nouvelle branche dédiée V7.0. La branche V6.0 est conservée mais inactive.</div>
+
+  <table>
+    <thead>
+      <tr><th>Repo</th><th>Branche source</th><th>Nouvelle branche V7.0</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>sof/</code> (submodule)</td><td><code>feature/audio-platform-v2</code> @ <code>0580b5f14</code></td><td><code>feature/v7.0-multiband-drc-tap</code></td></tr>
+      <tr><td><code>yocto-nxp-debix/</code></td><td><code>feature/audio-platform-v2</code> (HEAD courant)</td><td><code>feature/v7.0-multiband-drc-tap</code></td></tr>
+      <tr><td><code>meta-local/</code> (recettes tap)</td><td>idem yocto</td><td>idem yocto</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout good">
+    <span class="label">État courant</span>
+    Working tree SOF revenu à <code>3c14c8185</code> (clean), firmware Fix #2+#3
+    encore sur board (à reflasher dès création de la branche V7.0). Doc V7.0 prête
+    à committer.
+  </div>
+</section>
+
+</body>
+</html>

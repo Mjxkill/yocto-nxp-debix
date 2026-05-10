@@ -1,0 +1,17 @@
+digraph roadmap {
+  rankdir=LR
+  graph [bgcolor=transparent fontname="Inter" pad=0.2 nodesep=0.25 ranksep=0.5]
+  node [fontname="Inter" fontsize=10 shape=box style="rounded,filled" color="#475569" penwidth=1.4 width=1.55 height=0.95]
+  edge [color="#94a3b8" penwidth=2 arrowsize=0.85]
+
+  e0 [label="E0\nbaseline E6.a\n+ retirer V6.0\nkernel patches" fillcolor="#e0f2fe" color="#0369a1"]
+  e1 [label="E1\nsimplifier topo\n+ ALSA low-lat\n< 10 ms" fillcolor="#fee2e2" color="#b91c1c"]
+  e2 [label="E2\nmultiband_drc\nCAP" fillcolor="#fce7f3" color="#9d174d"]
+  e3 [label="E3\nstrips OUT\nplay" fillcolor="#fce7f3" color="#9d174d"]
+  e4 [label="E4\nTap IN raw\n(cap)" fillcolor="#fef3c7" color="#a16207"]
+  e5 [label="E5\nTap OUT post-FX\n(play)" fillcolor="#fef3c7" color="#a16207"]
+  e6 [label="E6\nUSB 8×8 +\ntéléphone 2×2" fillcolor="#cffafe" color="#0e7490"]
+  e7 [label="E7\nGUI de test\nmixer + effets" fillcolor="#ede9fe" color="#6d28d9"]
+
+  e0 -> e1 -> e2 -> e3 -> e4 -> e5 -> e6 -> e7
+}

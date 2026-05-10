@@ -1,0 +1,110 @@
+digraph system {
+  rankdir=LR
+  graph [bgcolor=transparent fontname="Inter" pad=0.3 nodesep=0.3 ranksep=0.65 splines=spline compound=true]
+  node [fontname="Inter" fontsize=10 shape=box style="rounded,filled" color="#334155" penwidth=1.3]
+  edge [fontname="Inter" fontsize=9 color="#475569" penwidth=1.3 arrowsize=0.8]
+
+  subgraph cluster_tac {
+    label="TAC5212 codec (I2C @ 0x50)"
+    fontname="Inter Display" fontsize=12 style=rounded color="#cbd5e1" bgcolor="#eef2ff" margin=12
+
+    subgraph cluster_adc {
+      label="ADC chain (capture)"
+      fontname="Inter" fontsize=10 style="rounded,dashed" color="#a5b4fc" bgcolor="#f5f3ff"
+      mics [label="8 mics in" fillcolor="#e0e7ff" color="#3730a3"]
+      tac_agc  [label="AGC" fillcolor="#e9d5ff" color="#6b21a8"]
+      tac_hpf  [label="HPF" fillcolor="#e9d5ff" color="#6b21a8"]
+      tac_bqI  [label="Biquads" fillcolor="#e9d5ff" color="#6b21a8"]
+      tac_gnI  [label="Gain / Vol" fillcolor="#e9d5ff" color="#6b21a8"]
+      tac_dec  [label="Decim filter" fillcolor="#e9d5ff" color="#6b21a8"]
+      mics -> tac_agc -> tac_hpf -> tac_bqI -> tac_gnI -> tac_dec
+    }
+
+    subgraph cluster_dac {
+      label="DAC chain (playback)"
+      fontname="Inter" fontsize=10 style="rounded,dashed" color="#a5b4fc" bgcolor="#f5f3ff"
+      tac_int  [label="Interp filter" fillcolor="#e9d5ff" color="#6b21a8"]
+      tac_bqO  [label="Biquads" fillcolor="#e9d5ff" color="#6b21a8"]
+      tac_drcO [label="DRC" fillcolor="#e9d5ff" color="#6b21a8"]
+      tac_gnO  [label="Gain / Vol" fillcolor="#e9d5ff" color="#6b21a8"]
+      tac_lim  [label="Distortion limiter\n+ thermal foldback" fillcolor="#e9d5ff" color="#6b21a8"]
+      spk      [label="8 spk out" fillcolor="#e0e7ff" color="#3730a3"]
+      tac_int -> tac_bqO -> tac_drcO -> tac_gnO -> tac_lim -> spk
+    }
+  }
+
+  subgraph cluster_sai {
+    label="i.MX 8M Plus — SAI7"
+    fontname="Inter Display" fontsize=12 style=rounded color="#cbd5e1" bgcolor="#f8fafc" margin=12
+
+    sai_rx [label="SAI7 RX (slave)\n8 × S32 × 48 kHz" fillcolor="#dbeafe" color="#1d4ed8"]
+    sai_tx [label="SAI7 TX (master)\nBCLK/FSYNC source" fillcolor="#dbeafe" color="#1d4ed8"]
+    pcb    [label="PCB BCLK/FSYNC loop" fillcolor="#fef9c3" color="#a16207" shape=note]
+  }
+
+  subgraph cluster_dsp {
+    label="DSP HiFi4 (SOF / Zephyr)"
+    fontname="Inter Display" fontsize=12 style=rounded color="#cbd5e1" bgcolor="#fdf4ff" margin=12
+
+    p1     [label="PIPE 1 cap (8 ch)\nmultiband_drc → drc → pga" fillcolor="#fce7f3" color="#be185d"]
+    p2     [label="PIPE 2 play (8 ch)\nmultiband_drc → pga → drc" fillcolor="#fce7f3" color="#be185d"]
+    tap_in [label="TAP IN (raw)" fillcolor="#fef3c7" color="#ca8a04" shape=note]
+    tap_out[label="TAP OUT (post-FX)" fillcolor="#fef3c7" color="#ca8a04" shape=note]
+  }
+
+  subgraph cluster_ddr {
+    label="DDR — reserved-memory"
+    fontname="Inter Display" fontsize=12 style=rounded color="#cbd5e1" bgcolor="#fff7ed" margin=12
+
+    rmem_in  [label="rmem tap-in 8ch"  fillcolor="#fef3c7" color="#ca8a04" shape=note]
+    rmem_out [label="rmem tap-out 8ch" fillcolor="#fef3c7" color="#ca8a04" shape=note]
+  }
+
+  subgraph cluster_linux {
+    label="Linux (CA53) — userspace"
+    fontname="Inter Display" fontsize=12 style=rounded color="#cbd5e1" bgcolor="#ecfdf5" margin=12
+
+    pcm_cap  [label="PCM 0 cap · 8ch"      fillcolor="#dcfce7" color="#15803d"]
+    pcm_play [label="PCM 1 play · 8ch"     fillcolor="#dcfce7" color="#15803d"]
+    usb_io   [label="USB gadget · 8×8"     fillcolor="#cffafe" color="#0e7490"]
+    tel_io   [label="Téléphone · 2×2"      fillcolor="#fae8ff" color="#a21caf"]
+    mixer    [label="Mixer / routing\n(GUI test V7.0)" fillcolor="#a7f3d0" color="#047857"]
+    dev_in   [label="/dev/imx-audio-tap-in"  fillcolor="#fef3c7" color="#ca8a04"]
+    dev_out  [label="/dev/imx-audio-tap-out" fillcolor="#fef3c7" color="#ca8a04"]
+    npu      [label="NPU\n(monitoring + ML\npilote TOUS les effets)" fillcolor="#ede9fe" color="#6d28d9"]
+  }
+
+  // Audio path
+  tac_dec -> sai_rx [color="#0ea5e9" penwidth=2 ltail=cluster_adc]
+  sai_rx -> p1 [color="#0ea5e9" penwidth=2]
+  p1 -> pcm_cap [color="#0ea5e9" penwidth=2]
+  pcm_play -> p2 [color="#0ea5e9" penwidth=2]
+  p2 -> sai_tx [color="#0ea5e9" penwidth=2]
+  sai_tx -> tac_int [color="#0ea5e9" penwidth=2 lhead=cluster_dac]
+
+  // PCB loop BCLK/FSYNC
+  sai_tx -> pcb [arrowhead=none style=dashed]
+  pcb -> sai_rx [style=dashed]
+
+  // NPU taps
+  p1 -> tap_in     [style=dashed color="#ca8a04"]
+  p2 -> tap_out    [style=dashed color="#ca8a04"]
+  tap_in -> rmem_in [style=dashed color="#ca8a04"]
+  tap_out -> rmem_out [style=dashed color="#ca8a04"]
+  rmem_in  -> dev_in  [style=dashed color="#ca8a04"]
+  rmem_out -> dev_out [style=dashed color="#ca8a04"]
+  dev_in -> npu  [style=dashed color="#ca8a04"]
+  dev_out -> npu [style=dashed color="#ca8a04"]
+
+  // Linux mixer
+  pcm_cap -> mixer [color="#10b981"]
+  usb_io  -> mixer [color="#06b6d4" dir=both]
+  tel_io  -> mixer [color="#c026d3" dir=both]
+  mixer -> pcm_play [color="#10b981"]
+
+  // NPU control over ALL effects (red dotted)
+  npu -> p1 [style=dotted color="#dc2626" label="ctrl SOF tplg" fontcolor="#dc2626" constraint=false]
+  npu -> p2 [style=dotted color="#dc2626" constraint=false]
+  npu -> tac_agc  [style=dotted color="#dc2626" label="ctrl I2C TAC" fontcolor="#dc2626" lhead=cluster_adc constraint=false]
+  npu -> tac_drcO [style=dotted color="#dc2626" lhead=cluster_dac constraint=false]
+}

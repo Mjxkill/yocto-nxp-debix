@@ -1,0 +1,55 @@
+digraph effectschain {
+  rankdir=LR
+  graph [bgcolor=transparent fontname="Inter" pad=0.3 nodesep=0.2 ranksep=0.45 splines=ortho]
+  node [fontname="Inter" fontsize=10 shape=box style="rounded,filled" color="#334155" penwidth=1.3 height=0.8]
+  edge [color="#475569" penwidth=1.3 arrowsize=0.85]
+
+  // CAP path
+  mics    [label="mics" fillcolor="#e0e7ff" color="#3730a3" width=0.9]
+  c_agc   [label="AGC" fillcolor="#e9d5ff" color="#6b21a8"]
+  c_hpf   [label="HPF" fillcolor="#e9d5ff" color="#6b21a8"]
+  c_bq    [label="Biquads" fillcolor="#e9d5ff" color="#6b21a8"]
+  c_gn    [label="Gain/Vol" fillcolor="#e9d5ff" color="#6b21a8"]
+  c_dec   [label="Decim" fillcolor="#e9d5ff" color="#6b21a8"]
+  sairx   [label="SAI7 RX" fillcolor="#dbeafe" color="#1d4ed8"]
+  c_mb    [label="multiband_drc" fillcolor="#fce7f3" color="#be185d"]
+  c_drc   [label="drc D3" fillcolor="#fce7f3" color="#be185d"]
+  c_pga   [label="pga" fillcolor="#fce7f3" color="#be185d"]
+  pcm0    [label="PCM 0\n(ASIO IN)" fillcolor="#dcfce7" color="#15803d"]
+
+  mics -> c_agc -> c_hpf -> c_bq -> c_gn -> c_dec -> sairx -> c_mb -> c_drc -> c_pga -> pcm0
+
+  // PLAY path
+  pcm1    [label="PCM 1\n(ASIO OUT)" fillcolor="#dcfce7" color="#15803d"]
+  p_mb    [label="multiband_drc" fillcolor="#fce7f3" color="#be185d"]
+  p_pga   [label="pga" fillcolor="#fce7f3" color="#be185d"]
+  p_drc   [label="drc (lim)" fillcolor="#fce7f3" color="#be185d"]
+  saitx   [label="SAI7 TX" fillcolor="#dbeafe" color="#1d4ed8"]
+  d_int   [label="Interp" fillcolor="#e9d5ff" color="#6b21a8"]
+  d_bq    [label="Biquads" fillcolor="#e9d5ff" color="#6b21a8"]
+  d_drc   [label="DRC" fillcolor="#e9d5ff" color="#6b21a8"]
+  d_gn    [label="Gain/Vol" fillcolor="#e9d5ff" color="#6b21a8"]
+  d_lim   [label="Limiter +\nfoldback" fillcolor="#e9d5ff" color="#6b21a8"]
+  spk     [label="speakers" fillcolor="#e0e7ff" color="#3730a3" width=0.9]
+
+  pcm1 -> p_mb -> p_pga -> p_drc -> saitx -> d_int -> d_bq -> d_drc -> d_gn -> d_lim -> spk
+
+  // NPU control
+  npu [label="NPU\n(pilote TOUT)" fillcolor="#ede9fe" color="#6d28d9" shape=octagon]
+
+  // dotted control edges (one per chain to keep readable)
+  npu -> c_agc   [style=dotted color="#dc2626" constraint=false]
+  npu -> c_hpf   [style=dotted color="#dc2626" constraint=false]
+  npu -> c_bq    [style=dotted color="#dc2626" constraint=false]
+  npu -> c_gn    [style=dotted color="#dc2626" constraint=false]
+  npu -> c_mb    [style=dotted color="#dc2626" constraint=false]
+  npu -> c_drc   [style=dotted color="#dc2626" constraint=false]
+  npu -> c_pga   [style=dotted color="#dc2626" constraint=false]
+  npu -> p_mb    [style=dotted color="#dc2626" constraint=false]
+  npu -> p_pga   [style=dotted color="#dc2626" constraint=false]
+  npu -> p_drc   [style=dotted color="#dc2626" constraint=false]
+  npu -> d_bq    [style=dotted color="#dc2626" constraint=false]
+  npu -> d_drc   [style=dotted color="#dc2626" constraint=false]
+  npu -> d_gn    [style=dotted color="#dc2626" constraint=false]
+  npu -> d_lim   [style=dotted color="#dc2626" constraint=false]
+}

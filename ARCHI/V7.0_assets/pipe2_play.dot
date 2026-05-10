@@ -1,0 +1,19 @@
+digraph pipe2play {
+  rankdir=TB
+  graph [bgcolor=transparent fontname="Inter" pad=0.3 nodesep=0.4 ranksep=0.55]
+  node [fontname="Inter" fontsize=12 shape=box style="rounded,filled" color="#334155" penwidth=1.4]
+  edge [fontname="Inter" fontsize=10 color="#475569" penwidth=1.4 arrowsize=0.85]
+
+  pcm1   [label="PCM HOST 1 play\nASIO OUT 8 ch S32_LE 48 kHz\n← Linux /dev/snd/pcmC2D1p" fillcolor="#dcfce7" color="#15803d" width=3.6]
+  mb     [label="multiband_drc\n8 ch — 8 instances logiques\nblob 8 × N′" fillcolor="#fce7f3" color="#be185d" width=3.6]
+  pga    [label="pga\n8 ch — 8 vol kcontrols indép" fillcolor="#fce7f3" color="#be185d" width=3.6]
+  drc    [label="drc (limiteur)\n8 ch — 8 instances logiques\nblob 8 × M′" fillcolor="#fce7f3" color="#be185d" width=3.6]
+  tap_out[label="TAP OUT (post-FX)\nhook post-strips OUT, pre-DAI TX\n→ reserved-memory tap-out\n→ /dev/imx-audio-tap-out" fillcolor="#fef3c7" color="#ca8a04" shape=note width=3.6]
+  saitx  [label="SAI7 TX 8ch (master)\nTDM 8 × S32 × 48 kHz\nBCLK / FSYNC source" fillcolor="#dbeafe" color="#1d4ed8" width=3.6]
+
+  pcm1 -> mb
+  mb   -> pga
+  pga  -> drc
+  drc  -> tap_out [label="copy split (post-FX)" style=dashed color="#ca8a04" fontcolor="#ca8a04"]
+  drc  -> saitx
+}
