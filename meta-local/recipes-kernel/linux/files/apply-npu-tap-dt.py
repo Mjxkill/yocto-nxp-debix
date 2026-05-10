@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
-"""Apply NPU tap V3.2.2 device tree modifications to imx8mp-evk.dts.
+"""Apply NPU dual-tap device tree modifications to imx8mp-evk.dts.
+
+V7.0-E4 — passe de 1 carve (V3.2.2 npu_tap_buffer @0x942B0000) à 2 carves :
+  - tap_in_buffer  @0x94270000 (256 KB) : capture brut post-DAI RX
+  - tap_out_buffer @0x942B0000 (256 KB) : playback post-effets (alias V3.2.2)
 
 Run after apply-tac5212-dt.py at do_patch:append.
 
-Three modifications, all via DT overrides (no edit of imx8mp.dtsi SoC-level):
-  1. Override &dsp_reserved_heap to reduce its size : 0xef0000 → 0xeb0000
-     (-256 KB) so npu_tap_buffer@942b0000 can be carved without overlap.
-  2. Add npu_tap_buffer@942b0000 in &{/reserved-memory} (256 KB no-map).
-  3. Add imx_audio_tap node at root with compatible="electrosens,imx-audio-tap"
-     and memory-region=<&npu_tap_buffer> for the kernel module to bind.
+Modifications appliquées via DT overrides (pas d'édition de imx8mp.dtsi) :
+  1. Override &dsp_reserved_heap pour reclaim 512 KB : 0xef0000 → 0xe70000
+     (au lieu de -256 KB en V3.2.2) afin de carver 2 zones de 256 KB.
+  2. Add tap_in_buffer @0x94270000 (256 KB no-map) — NEW V7.0-E4.
+  3. Add tap_out_buffer @0x942B0000 (256 KB no-map) — alias V3.2.2.
+  4. Add imx_audio_tap_in node (compatible electrosens,imx-audio-tap +
+     memory-region=tap_in_buffer + device-name="imx-audio-tap-in").
+  5. Add imx_audio_tap_out node (idem mais memory-region=tap_out_buffer +
+     device-name="imx-audio-tap-out").
 
-R7 sentinelle mono-DAI : V3.2.2 firmware uses ONE shared 256 KB tap buffer.
-M6 limitation Phase 2 : if multi-DAI playback simultaneous needed, this DT
-will need to be refactored with per-DAI buffer carve (4 zones).
+Disposition mémoire :
+  0x93400000 dsp_reserved_heap (taille 0xe70000 = 14.687 MB)
+  0x94270000 tap_in_buffer  (256 KB) ← début dsp_heap + 0xe70000
+  0x942B0000 tap_out_buffer (256 KB)
+  0x942F0000 vdev0vring0    (préservé)
 """
 import sys
 
@@ -20,55 +29,78 @@ dts_path = sys.argv[1]
 with open(dts_path, 'r') as f:
     content = f.read()
 
-if 'npu_tap_buffer' in content:
-    print("NPU tap DT changes already applied, skipping")
+if 'tap_in_buffer' in content or 'tap_out_buffer' in content:
+    print("NPU dual-tap DT changes already applied, skipping")
     sys.exit(0)
 
-# All three modifications appended at the end of the file as DT overrides.
-# This is the recommended pattern for layered DTs : keep base SoC dtsi
-# unchanged, override only what we need in the board-level dts.
-npu_tap_overlay = """
-/* V3.2.2 NPU tap — DT overlay (added by apply-npu-tap-dt.py) */
+# Si le DT contient déjà l'ancien npu_tap_buffer (V3.2.2), on refuse pour ne
+# pas créer une double-carve incohérente. L'utilisateur doit nettoyer.
+if 'npu_tap_buffer' in content:
+    print("ERROR: V3.2.2 npu_tap_buffer present in DT — must be removed first")
+    print("       (the V7.0-E4 overlay supersedes it with tap_out_buffer @ same addr)")
+    sys.exit(1)
 
-/* (1) Reduce dsp_reserved_heap by 256 KB to make room for npu_tap_buffer.
+npu_tap_overlay = """
+/* V7.0-E4 NPU dual-tap — DT overlay (added by apply-npu-tap-dt.py) */
+
+/* (1) Reduce dsp_reserved_heap by 512 KB to make room for 2 tap buffers.
  *     Original: 0x93400000, size 0xef0000  (15.875 MB)
- *     Modified: 0x93400000, size 0xeb0000  (15.687 MB, -256 KB)
- *     Freed range: 0x942b0000-0x942effff = 256 KB for npu_tap_buffer.
+ *     Modified: 0x93400000, size 0xe70000  (14.687 MB, -512 KB)
+ *     Freed range: 0x94270000-0x942EFFFF = 512 KB pour 2 carves.
  */
 &dsp_reserved_heap {
-\treg = <0 0x93400000 0 0xeb0000>;
+\treg = <0 0x93400000 0 0xe70000>;
 };
 
-/* (2) NPU tap shared buffer carve — 256 KB no-map at 0x942b0000.
- *     Hors SOF MEMORY{} (au-delà de 0x93400000), dans cacheattr region 4
- *     (write-through cacheable, accessible DSP HiFi4 et A53). Pile avant
- *     vdev0vring0@942f0000.
+/* (2) tap_in_buffer carve — 256 KB no-map @ 0x94270000 (capture brut, E4). */
+&{/reserved-memory} {
+\ttap_in_buffer: tap_in_buffer@94270000 {
+\t\tcompatible = "shared-dma-pool";
+\t\treg = <0 0x94270000 0 0x40000>;
+\t\tno-map;
+\t};
+};
+
+/* (3) tap_out_buffer carve — 256 KB no-map @ 0x942B0000 (play post-FX, E5).
+ *     Alias adresse V3.2.2 — préserve compat firmware hook playback existant.
  */
 &{/reserved-memory} {
-\tnpu_tap_buffer: npu_tap_buffer@942b0000 {
+\ttap_out_buffer: tap_out_buffer@942b0000 {
 \t\tcompatible = "shared-dma-pool";
 \t\treg = <0 0x942b0000 0 0x40000>;
 \t\tno-map;
 \t};
 };
 
-/* (3) NPU tap platform node — kernel module imx-audio-tap binds here.
- *     R7 sentinelle mono-DAI : un seul DAI playback peut être tapé.
+/* (4) imx_audio_tap_in platform node — module imx-audio-tap bind, expose
+ *     /dev/imx-audio-tap-in (prop device-name).
  */
 / {
-\timx_audio_tap: imx_audio_tap {
+\timx_audio_tap_in: imx_audio_tap_in {
 \t\tcompatible = "electrosens,imx-audio-tap";
-\t\tmemory-region = <&npu_tap_buffer>;
+\t\tmemory-region = <&tap_in_buffer>;
+\t\tdevice-name = "imx-audio-tap-in";
+\t\tstatus = "okay";
+\t};
+};
+
+/* (5) imx_audio_tap_out platform node — expose /dev/imx-audio-tap-out (E5). */
+/ {
+\timx_audio_tap_out: imx_audio_tap_out {
+\t\tcompatible = "electrosens,imx-audio-tap";
+\t\tmemory-region = <&tap_out_buffer>;
+\t\tdevice-name = "imx-audio-tap-out";
 \t\tstatus = "okay";
 \t};
 };
 """
 
-# Append to file (after the last closing brace of the dts).
 with open(dts_path, 'a') as f:
     f.write(npu_tap_overlay)
 
-print("NPU tap DT changes applied successfully (V3.2.2)")
-print("  - &dsp_reserved_heap size: 0xef0000 -> 0xeb0000 (-256 KB)")
-print("  - npu_tap_buffer@942b0000: NEW 256 KB no-map carve")
-print("  - imx_audio_tap node: NEW (compatible=electrosens,imx-audio-tap)")
+print("NPU dual-tap DT changes applied successfully (V7.0-E4)")
+print("  - &dsp_reserved_heap size: 0xef0000 -> 0xe70000 (-512 KB)")
+print("  - tap_in_buffer  @0x94270000: NEW 256 KB no-map carve")
+print("  - tap_out_buffer @0x942B0000: NEW 256 KB no-map carve (V3.2.2 alias)")
+print("  - imx_audio_tap_in  : device-name=imx-audio-tap-in")
+print("  - imx_audio_tap_out : device-name=imx-audio-tap-out")

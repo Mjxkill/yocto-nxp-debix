@@ -1,7 +1,8 @@
 SUMMARY = "i.MX8MP NPU audio tap — kernel module exposing SOF DSP shared mem"
-DESCRIPTION = "V3.2.2 NPU tap. Exposes /dev/imx-audio-tap (miscdevice mmap) for \
-userspace to read the post-effects audio ring buffer written by the SOF DSP \
-firmware at NPU_TAP_PHYS_ADDR (0x942B0000, 256 KB no-map carve in dsp_reserved_heap)."
+DESCRIPTION = "V7.0-E4 NPU dual-tap. Exposes 2 miscdevices : \
+/dev/imx-audio-tap-in (capture brut, 0x94270000 256 KB) et \
+/dev/imx-audio-tap-out (playback post-effets, 0x942B0000 256 KB, alias V3.2.2). \
+Le SOF DSP firmware écrit dans ces 2 zones no-map du dsp_reserved_heap."
 HOMEPAGE = "https://github.com/Mjxkill/yocto-nxp-debix"
 LICENSE = "GPL-2.0-or-later"
 LIC_FILES_CHKSUM = "file://imx-audio-tap.c;beginline=1;endline=1;md5=7226e442a172bcf25807246d7ef1eba1"
@@ -31,11 +32,11 @@ python do_stage_sources() {
 }
 
 #
-# R5 — Build-time sanity check : NPU_TAP_PHYS_ADDR must match the value
-# defined in sof/src/include/sof/audio/npu_tap.h. Divergence between the
-# kernel UAPI header and the firmware header would cause silent corruption
-# (kernel and firmware writing/reading different physical addresses).
-# A7 runtime DT check validates the DT vs UAPI ; this check validates UAPI vs SOF.
+# R5 — Build-time sanity check (V7.0-E4 dual-tap) : NPU_TAP_IN_PHYS_ADDR et
+# NPU_TAP_OUT_PHYS_ADDR doivent matcher entre l'UAPI kernel et SOF firmware.
+# Divergence = corruption silencieuse (kernel/firmware accédant des adresses
+# différentes). DT runtime check (A7) valide DT vs UAPI ; ce check valide
+# UAPI vs SOF.
 #
 do_configure:prepend() {
     UAPI_HDR="${WORKDIR}/imx-audio-tap-uapi.h"
@@ -46,18 +47,24 @@ do_configure:prepend() {
         return 0
     fi
 
-    UAPI_ADDR=$(grep -E '^[[:space:]]*#define[[:space:]]+NPU_TAP_PHYS_ADDR' "$UAPI_HDR" | awk '{print $3}' | tr -d 'Uu')
-    SOF_ADDR=$(grep -E '^[[:space:]]*#define[[:space:]]+NPU_TAP_PHYS_ADDR' "$SOF_HDR" | awk '{print $3}' | tr -d 'Uu')
+    for SYM in NPU_TAP_IN_PHYS_ADDR NPU_TAP_OUT_PHYS_ADDR; do
+        UAPI_VAL=$(grep -E "^[[:space:]]*#define[[:space:]]+$SYM[[:space:]]" "$UAPI_HDR" | awk '{print $3}' | tr -d 'Uu')
+        SOF_VAL=$(grep -E "^[[:space:]]*#define[[:space:]]+$SYM[[:space:]]" "$SOF_HDR" | awk '{print $3}' | tr -d 'Uu')
 
-    if [ "$UAPI_ADDR" != "$SOF_ADDR" ]; then
-        bbfatal "NPU_TAP_PHYS_ADDR mismatch between kernel UAPI ($UAPI_ADDR) and SOF firmware ($SOF_ADDR). \
-Edit $UAPI_HDR or $SOF_HDR so both match. R2/R5 single-source-of-truth violation."
-    fi
+        if [ -z "$UAPI_VAL" ] || [ -z "$SOF_VAL" ]; then
+            bbfatal "$SYM missing in UAPI ($UAPI_VAL) or SOF ($SOF_VAL) — R2/R5 single source of truth violation."
+        fi
 
-    bbnote "NPU_TAP_PHYS_ADDR cross-check OK : kernel UAPI = SOF firmware = $UAPI_ADDR"
+        if [ "$UAPI_VAL" != "$SOF_VAL" ]; then
+            bbfatal "$SYM mismatch : kernel UAPI ($UAPI_VAL) vs SOF firmware ($SOF_VAL). \
+Edit $UAPI_HDR or $SOF_HDR so both match."
+        fi
+
+        bbnote "$SYM cross-check OK : kernel UAPI = SOF firmware = $UAPI_VAL"
+    done
 }
 
-# Auto-load at boot
+# Auto-load at boot (un seul module, 2 instances DT bindées)
 KERNEL_MODULE_AUTOLOAD = "imx-audio-tap"
 
 RPROVIDES:${PN} = "imx-audio-tap"

@@ -2,17 +2,21 @@
 /*
  * imx-audio-tap — kernel module exposing NPU tap shared memory to userspace.
  *
- * V3.2.2 NPU tap (i.MX8MP) :
- *   - DSP firmware SOF écrit le buffer audio post-effets dans une zone
- *     reserved-memory à NPU_TAP_PHYS_ADDR (0x942B0000, 256 KB no-map).
- *   - Ce module miscdevice expose la zone via /dev/imx-audio-tap (mmap).
+ * V7.0-E4 dual-tap (i.MX8MP) :
+ *   - SOF firmware DSP écrit dans 1 ou 2 zones reserved-memory partagées :
+ *       tap_in_buffer  @ 0x94270000 (signal cap brut, post-DAI RX / pre-DSP)
+ *       tap_out_buffer @ 0x942B0000 (signal play post-effets, V3.2.2 héritage)
+ *   - Le module bind chaque instance DT `electrosens,imx-audio-tap` et
+ *     expose un miscdevice nommé via la prop DT `device-name`
+ *     (par ex. /dev/imx-audio-tap-in en E4, /dev/imx-audio-tap-out en E5).
  *   - Userspace mmap PROT_READ + write-combine, lit le ring buffer pour
  *     pousser les samples au NPU.
  *
- * A7 : runtime DT check — refuse le probe si l'adresse/taille du
- *      reserved-memory ne correspond pas exactement à la spec.
- * R2/R5 : NPU_TAP_PHYS_ADDR partagé via imx-audio-tap-uapi.h, validé au
- *        build par Yocto recipe + au runtime par ce module.
+ * A7 : sanity check size uniquement (NPU_TAP_RING_SIZE = 256 KB). L'adresse
+ *      vient du DT (memory-region phandle) — le module fait confiance au DT
+ *      pour les 2 instances dual-tap.
+ * R2/R5 : NPU_TAP_IN_PHYS_ADDR / NPU_TAP_OUT_PHYS_ADDR partagés via
+ *        imx-audio-tap-uapi.h, validés au build par Yocto recipe.
  */
 
 #include <linux/init.h>
@@ -30,12 +34,14 @@
 #include "imx-audio-tap-uapi.h"
 
 #define DRV_NAME "imx-audio-tap"
+#define MAX_DEVICE_NAME 32
 
 struct imx_audio_tap {
 	struct device *dev;
 	struct miscdevice misc;
 	phys_addr_t phys_addr;
 	size_t size;
+	char devname[MAX_DEVICE_NAME];
 };
 
 static int imx_audio_tap_open(struct inode *inode, struct file *file)
@@ -146,23 +152,35 @@ static int imx_audio_tap_probe(struct platform_device *pdev)
 	}
 
 	/*
-	 * A7 — runtime DT sanity check.
-	 * R2/R5 — verify DT base/size match the values shared with SOF firmware
-	 * (NPU_TAP_PHYS_ADDR / NPU_TAP_RING_SIZE in imx-audio-tap-uapi.h).
-	 * Refuse to probe if mismatch — would corrupt audio or NPU data.
+	 * A7 — runtime size sanity (V7.0-E4 dual-tap : adresses lues du DT,
+	 * pas hardcodées). Refuse le probe si la taille diverge de 256 KB
+	 * (corruption silencieuse audio/NPU sinon).
 	 */
-	if (rmem->base != NPU_TAP_PHYS_ADDR || rmem->size != NPU_TAP_RING_SIZE) {
+	if (rmem->size != NPU_TAP_RING_SIZE) {
 		dev_err(dev,
-			"DT mismatch: expected base=0x%x size=0x%x, got base=%pa size=%pa\n",
-			NPU_TAP_PHYS_ADDR, NPU_TAP_RING_SIZE,
-			&rmem->base, &rmem->size);
+			"DT size mismatch: expected 0x%x, got %pa\n",
+			NPU_TAP_RING_SIZE, &rmem->size);
 		return -EINVAL;
 	}
 	priv->phys_addr = rmem->base;
 	priv->size = rmem->size;
 
+	/*
+	 * V7.0-E4 — nom de device piloté par le DT (`device-name` string).
+	 * Fallback DRV_NAME pour compat anciennes DT (un seul tap V3.2.2).
+	 */
+	{
+		const char *devname = NULL;
+
+		if (of_property_read_string(dev->of_node, "device-name", &devname) == 0
+		    && devname && *devname)
+			strscpy(priv->devname, devname, sizeof(priv->devname));
+		else
+			strscpy(priv->devname, DRV_NAME, sizeof(priv->devname));
+	}
+
 	priv->misc.minor = MISC_DYNAMIC_MINOR;
-	priv->misc.name = DRV_NAME;
+	priv->misc.name = priv->devname;
 	priv->misc.fops = &imx_audio_tap_fops;
 	priv->misc.groups = imx_audio_tap_groups;
 
@@ -174,7 +192,7 @@ static int imx_audio_tap_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, priv);
 	dev_info(dev,
-		 "registered: /dev/%s phys=%pa size=%zu (NPU_TAP V3.2.2)\n",
+		 "registered: /dev/%s phys=%pa size=%zu (NPU_TAP V7.0-E4)\n",
 		 priv->misc.name, &priv->phys_addr, priv->size);
 	return 0;
 }
@@ -206,4 +224,4 @@ module_platform_driver(imx_audio_tap_driver);
 MODULE_AUTHOR("Electrosens / Michael Jouannigot");
 MODULE_DESCRIPTION("i.MX8MP NPU audio tap — expose SOF DSP shared mem to userspace");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("3.2.2");
+MODULE_VERSION("7.0");

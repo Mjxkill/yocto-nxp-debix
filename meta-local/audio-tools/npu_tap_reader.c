@@ -39,7 +39,7 @@
 #define NPU_TAP_MAGIC          0x5441504EU   /* "NPAT" */
 #define NPU_TAP_RING_SIZE      0x40000U      /* 256 KB total */
 #define NPU_TAP_HDR_SIZE       128U
-#define NPU_TAP_DEV            "/dev/imx-audio-tap"
+#define NPU_TAP_DEV_DEFAULT    "/dev/imx-audio-tap-in"   /* V7.0-E4 default */
 
 struct npu_tap_hdr {
 	uint32_t magic;
@@ -53,7 +53,8 @@ struct npu_tap_hdr {
 	uint32_t sample_rate;
 	uint32_t channels;
 	uint32_t frame_fmt;
-	uint32_t reserved[19];
+	uint32_t direction;      /* V7.0-E4 : 0=play (tap-out), 1=cap (tap-in) */
+	uint32_t reserved[18];
 } __attribute__((packed));
 
 static volatile sig_atomic_t g_running = 1;
@@ -110,24 +111,28 @@ static inline uint32_t mod_sub(uint32_t a, uint32_t b, uint32_t m)
 
 static int dump_wav_path = 0;
 static const char *dump_wav_file = NULL;
+static const char *tap_dev = NPU_TAP_DEV_DEFAULT;
 static int print_stats = 0;
 static double run_seconds = 0.0;   /* 0 = run until SIGINT */
 
 static void usage(const char *argv0)
 {
 	fprintf(stderr,
-		"usage: %s [--dump file.wav] [--stats] [--time seconds]\n"
+		"usage: %s [--device path] [--dump file.wav] [--stats] [--time seconds]\n"
 		"\n"
+		"  --device path    NPU tap device (default %s)\n"
 		"  --dump file.wav  Save samples to WAV (8ch S32_LE)\n"
 		"  --stats          Print throughput / drops / epoch transitions\n"
 		"  --time N         Stop after N seconds (default: until Ctrl+C)\n",
-		argv0);
+		argv0, NPU_TAP_DEV_DEFAULT);
 }
 
 int main(int argc, char **argv)
 {
 	for (int i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "--dump") && i + 1 < argc) {
+		if (!strcmp(argv[i], "--device") && i + 1 < argc) {
+			tap_dev = argv[++i];
+		} else if (!strcmp(argv[i], "--dump") && i + 1 < argc) {
 			dump_wav_file = argv[++i];
 			dump_wav_path = 1;
 		} else if (!strcmp(argv[i], "--stats")) {
@@ -143,9 +148,9 @@ int main(int argc, char **argv)
 	signal(SIGINT, on_sigint);
 	signal(SIGTERM, on_sigint);
 
-	int fd = open(NPU_TAP_DEV, O_RDWR);
+	int fd = open(tap_dev, O_RDWR);
 	if (fd < 0) {
-		fprintf(stderr, "open(%s): %s\n", NPU_TAP_DEV, strerror(errno));
+		fprintf(stderr, "open(%s): %s\n", tap_dev, strerror(errno));
 		return 1;
 	}
 

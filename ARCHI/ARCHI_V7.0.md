@@ -151,7 +151,7 @@ Le mixer ne fait **aucun appel au DSP**. Il prend N inputs (DSP cap, USB cap, ph
 | **E1** | Topology simplifiée + ALSA low-lat Linux : retirer mixer16/deinterleave/interleave, PCM 1 → SAI7 TX direct, MMAP + SCHED_FIFO + mlockall | latence boucle ALSA mesurée < 10 ms, 0 xrun sur 60 s |
 | **E2** | Pipe cap : remplacer `eq_iir` par `multiband_drc` (8 ch multi-blob, patch state arrays) | 8 multibandes indép, latence E1 préservée |
 | **E3** | Pipe play : strips OUT `multiband_drc → pga` (8 ch indép) — drc final retiré après diag tic tic | 8 voies play indép, audio OK, latence préservée |
-| **E4** | **Tap IN brut** (PIPE 1) : adapter `apply-npu-tap-dt.py` (carve `tap-in`) + hook post-DAI RX + module `imx-audio-tap-in` + `/dev/imx-audio-tap-in` | dump 1 s 8 ch brut wave correct |
+| **E4 ✓** | **Tap IN brut** (PIPE 1) : `apply-npu-tap-dt.py` refactoré 2 carves + 2 nodes, module multi-instance via prop DT `device-name`, hook firmware `dai_dma_cb` capture, `/dev/imx-audio-tap-in` + `/dev/imx-audio-tap-out` exposés | **GO 2026-05-11** — tap-in 1.22 MB/s, tap-out V3.2.2 non régressé, loopback E3 préservé |
 | **E5** | **Tap OUT post-FX** (PIPE 2) : 2e reserved-mem `tap-out`, hook post-strips/pre-DAI TX, `/dev/imx-audio-tap-out` | dump 1 s 8 ch post-effets ≠ signal mixer entrant |
 | **E6** | USB gadget audio 8×8 + intégration téléphone 2×2 dans le mixer Linux | 3 paires de PCMs visibles, routing N×M opérationnel |
 | **E7** | **GUI de test V7.0** : app Linux (Qt / Flutter / web) — mixer N×M visuel + sliders pour tous les paramètres effets DSP/TAC (kcontrols ALSA + SOF tplg) | tous effets pilotables en direct, audio reste < 10 ms |
@@ -164,7 +164,7 @@ Le mixer ne fait **aucun appel au DSP**. Il prend N inputs (DSP cap, USB cap, ph
 | `spdif.cfg`, `disable-at24.cfg` | Garder | Hors scope audio principal |
 | SOF imx-probes (`imx-probes.c`, `apply-imx-probes.py`, `sof-imx-probes.cfg`) | Garder | Debug auxiliaire |
 | TAC5212 (`tac5212.c/h`, `apply-tac5212-dt.py`, `tac5212.cfg`) | Obligatoire | Sans ça, pas d'audio |
-| `apply-npu-tap-dt.py` (1 reserved-mem) | **Adapter** | V7.0 dual-tap : 2 reserved-mem (`tap-in` + `tap-out`) + 2 nodes |
+| `apply-npu-tap-dt.py` (2 reserved-mem V7.0-E4) | **OK V7.0-E4** | `tap_in_buffer@94270000` + `tap_out_buffer@942B0000`, 2 nodes `imx_audio_tap_in/out` (prop `device-name`) |
 | `apply-sdram2-dt.py` (8 MB DSP-only) | Évaluer | mixer16 retiré mais multiband_drc/drc blobs peuvent réclamer la mémoire ; confirmer E2/E3 |
 | **`apply-v6-always-on.py`** (K0+K1+K2+K4+K5) | **RETIRER (E0)** | V6.0 only ; V7.0 a PCM HOST anchors → start standard ALSA |
 
