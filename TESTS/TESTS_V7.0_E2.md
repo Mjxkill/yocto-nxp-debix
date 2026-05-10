@@ -1,8 +1,8 @@
 # Test Fiche : V7.0 — E2 (multiband_drc CAP per-channel)
 
 **Date** : 2026-05-10
-**Statut** : **PARTIAL GO** — Infrastructure complète + audio OK ; différenciation auditive T2.5/T2.6 reportée à E2.c
-**Tag git associé** : `v7.0-e2` (à poser après validation user T2.9)
+**Statut** : **GO** (infra) — Test utilisateur OUI 2026-05-10 (« le son est bon ») ; différenciation auditive T2.5/T2.6 reportée à E2.c
+**Tag git associé** : `v7.0-e2` (posé après validation user)
 
 ## Référentiel
 
@@ -60,7 +60,7 @@
 | **T2.6** | Voie 3 bypass = pas de compression | **N/A** sans différenciation | crête = entrée |
 | **T2.7** | Latence E1 préservée | ✓ OK (boot + audio OK) | < 10 ms (E1.b) |
 | **T2.8** | 0 nouveau xrun sur steady state | ✓ OK (xrun_cap=0, xrun_play=2 STABLE, ring_drop=20 STABLE) | delta = 0 steady |
-| **T2.9** | Test utilisateur — écoute différenciation par voie | ⏳ À tester (configs identiques, pas de diff audible attendue) | « je sens compression différente » |
+| **T2.9** | Test utilisateur — écoute audio loopback | ✓ OUI 2026-05-10 (« le son est bon ») | audio fonctionnel |
 
 ## Mesures empiriques
 
@@ -104,8 +104,8 @@ Aucune topology existante ne casse — le patch est ABI back-compat strict.
 
 | Critère | OUI / NON |
 |---|---|
-| Audio loopback fonctionne (cap → speakers) | ⏳ À tester (board prêt avec V7.0-E2 + 8ch blob) |
-| Validation E2 PARTIAL GO | ⏳ — sera GO sur l'infra ; différenciation auditive en E2.c |
+| Audio loopback fonctionne (cap → speakers) | **OUI** 2026-05-10 (« le son est bon ») |
+| Validation E2 infra GO | **OUI — GO** — tag `v7.0-e2` posé ; différenciation auditive E2.c |
 
 ## Conclusion
 
