@@ -449,9 +449,14 @@
   <h2><span class="num">4.</span> Pipeline 2 — Playback (8 voies)</h2>
   <div class="lede">
     Strictement indépendante de PIPE 1. Reçoit 8 ch depuis Linux via PCM HOST 1,
-    traverse <b>multiband_drc → pga → drc</b> (limiteur final), puis SAI7 TX 8 ch.
+    traverse <b>multiband_drc → pga</b>, puis SAI7 TX 8 ch.
     Le <b>Tap OUT post-effets</b> est splitté juste avant SAI7 TX. Aucun mixer,
     aucun deinterleave/interleave.
+    <br><br>
+    <b>Note V7.0-E3 final (2026-05-11)</b> : le <code>drc</code> limiteur final a été retiré
+    après diagnostic T3.9 (artefact « tic à l'attack » sur voix temps réel, causé par les
+    coeffs default issus de la chaîne musique + double compression avec <code>multiband_drc</code>).
+    Réintroduction en <b>E3.b</b> avec coeffs calibrés voix.
   </div>
 
   <div class="figure">
@@ -549,7 +554,7 @@
     <thead><tr><th style="width:20%">Sens</th><th>Chaîne complète</th></tr></thead>
     <tbody>
       <tr><td><b>Capture</b></td><td>mics → <span class="pill purple">TAC ADC</span> AGC → HPF → biquads → gain → decim → SAI7 RX → <span class="pill pink">DSP cap</span> multiband_drc → drc D3 → pga → PCM 0</td></tr>
-      <tr><td><b>Playback</b></td><td>PCM 1 → <span class="pill pink">DSP play</span> multiband_drc → pga → drc → SAI7 TX → <span class="pill purple">TAC DAC</span> interp → biquads → DRC → gain → limiter+foldback → speakers</td></tr>
+      <tr><td><b>Playback</b></td><td>PCM 1 → <span class="pill pink">DSP play</span> multiband_drc → pga → SAI7 TX → <span class="pill purple">TAC DAC</span> interp → biquads → DRC → gain → limiter+foldback → speakers</td></tr>
     </tbody>
   </table>
 </section>
@@ -621,7 +626,7 @@
       <tr><td><b>E0</b></td><td>Branche créée depuis <code>0580b5f14</code>, doc V7.0 commit/push, audit patches kernel V6.0→V7.0 appliqué (retirer <code>apply-v6-always-on.py</code>), <b>audit driver <code>tac5212.c</code></b> (vérifier qu'il expose tous les effets ADC + DAC en kcontrols ALSA), fiche E0 baseline E6.a re-vérifiée</td><td>boot OK, audio loopback Linux OK, kernel sans patches V6.0, kcontrols TAC visibles via <code>amixer</code></td></tr>
       <tr><td><b>E1</b></td><td>Topology simplifiée + ALSA low-lat Linux : retirer mixer16/deinterleave/interleave, PCM 1 → SAI7 TX direct, MMAP + SCHED_FIFO + mlockall sur le loopback de test</td><td>latence boucle ALSA → DSP play → SAI loopback PCB → DSP cap → ALSA mesurée &lt; 10 ms, 0 xrun sur 60 s</td></tr>
       <tr><td><b>E2</b></td><td>Pipe cap : remplacer <code>eq_iir</code> par <code>multiband_drc</code> (8 ch multi-blob, patch state arrays)</td><td>8 multibandes indép vérifiables, latence E1 préservée</td></tr>
-      <tr><td><b>E3</b></td><td>Pipe play : strips OUT <code>multiband_drc → pga → drc</code> (8 ch indép)</td><td>8 voies play indép paramétrables, audio OK, latence préservée</td></tr>
+      <tr><td><b>E3</b></td><td>Pipe play : strips OUT <code>multiband_drc → pga</code> (8 ch indép) — drc final retiré après diag tic tic</td><td>8 voies play indép paramétrables, audio OK, latence préservée</td></tr>
       <tr><td><b>E4</b></td><td>Tap IN brut (PIPE 1) : adapter <code>apply-npu-tap-dt.py</code> (carve <code>tap-in</code>) + hook post-DAI RX + module <code>imx-audio-tap-in</code> + <code>/dev/imx-audio-tap-in</code></td><td>dump 1 s 8 ch brut wave correct</td></tr>
       <tr><td><b>E5</b></td><td>Tap OUT post-FX (PIPE 2) : 2e reserved-memory <code>tap-out</code>, hook post-strips/pre-DAI TX, <code>/dev/imx-audio-tap-out</code></td><td>dump 1 s 8 ch post-effets ≠ signal Linux mixer entrant</td></tr>
       <tr><td><b>E6</b></td><td>USB gadget audio 8×8 + intégration téléphone 2×2 dans le mixer Linux</td><td>3 paires de PCMs visibles, routing N×M opérationnel</td></tr>
@@ -777,7 +782,7 @@
       <tr><td><b>E0</b></td><td><code>v7.0-e0</code></td><td>Branche + audit kernel + audit driver TAC + baseline E6.a re-vérifiée</td><td><code>TESTS_V7.0_E0.md</code></td><td>doc V7.0 mergée</td></tr>
       <tr><td><b>E1</b></td><td><code>v7.0-e1</code></td><td>Topology simplifiée (sans mixer16) + ALSA low-lat &lt; 10 ms</td><td><code>TESTS_V7.0_E1.md</code></td><td>E0 GO</td></tr>
       <tr><td><b>E2</b></td><td><code>v7.0-e2</code></td><td><code>multiband_drc</code> CAP 8 ch indép (patch state arrays + multi-blob)</td><td><code>TESTS_V7.0_E2.md</code></td><td>E1 GO</td></tr>
-      <tr><td><b>E3</b></td><td><code>v7.0-e3</code></td><td>Strips OUT play 8 ch (multiband_drc → pga → drc)</td><td><code>TESTS_V7.0_E3.md</code></td><td>E2 GO</td></tr>
+      <tr><td><b>E3</b></td><td><code>v7.0-e3</code></td><td>Strips OUT play 8 ch (multiband_drc → pga) — drc final retiré (diag tic tic)</td><td><code>TESTS_V7.0_E3.md</code></td><td>E2 GO</td></tr>
       <tr><td><b>E4</b></td><td><code>v7.0-e4</code></td><td>Tap IN brut + reserved-mem + module kernel + <code>/dev/imx-audio-tap-in</code></td><td><code>TESTS_V7.0_E4.md</code></td><td>E3 GO</td></tr>
       <tr><td><b>E5</b></td><td><code>v7.0-e5</code></td><td>Tap OUT post-FX + 2e reserved-mem + <code>/dev/imx-audio-tap-out</code></td><td><code>TESTS_V7.0_E5.md</code></td><td>E4 GO</td></tr>
       <tr><td><b>E6</b></td><td><code>v7.0-e6</code></td><td>USB gadget 8×8 + téléphone 2×2 dans le mixer Linux</td><td><code>TESTS_V7.0_E6.md</code></td><td>E5 GO</td></tr>
@@ -876,7 +881,7 @@
   <table>
     <thead><tr><th style="width:18%">Domaine</th><th>Travaux</th></tr></thead>
     <tbody>
-      <tr><td>topology</td><td>Ajouter strips OUT (<code>multiband_drc → pga → drc</code>) en aval de PCM 1, 8 ch indép. Charger 8 blobs distincts par étage par voie.</td></tr>
+      <tr><td>topology</td><td>Ajouter strips OUT (<code>multiband_drc → pga</code>) en aval de PCM 1, 8 ch indép. drc final retiré en V7.0-E3 (diag tic tic, voir <code>TESTS_V7.0_E3.md</code>). Réintroduction en E3.b avec coeffs voix.</td></tr>
       <tr><td>SOF source</td><td>Vérifier que <code>drc</code> D3 patché en E5.e.2-D3 supporte 2 instances simultanées (1 cap + 1 play). Patcher si nécessaire (pas attendu).</td></tr>
       <tr><td>config</td><td>Blobs play : limiteur dur sur voie 8 (test soft-clip), bypass sur voie 1, compression musique sur voies 2-7</td></tr>
     </tbody>

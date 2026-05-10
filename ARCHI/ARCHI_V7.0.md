@@ -99,9 +99,11 @@ mics → [TAC ADC : AGC → HPF → biquads → gain → decim] → SAI7 RX
      → [DSP cap : multiband_drc → drc D3 → pga] → PCM 0
 
 Playback :
-PCM 1 → [DSP play : multiband_drc → pga → drc] → SAI7 TX
+PCM 1 → [DSP play : multiband_drc → pga] → SAI7 TX
       → [TAC DAC : interp → biquads → DRC → gain → limiter+foldback] → speakers
 ```
+
+> **Note V7.0-E3 final (2026-05-11)** : le `drc` limiteur final côté play a été retiré après diag T3.9. Les coeffs default (héritage musique) provoquaient un pattern « tic à l'attack » incompatible avec la voix temps réel ; la double compression (`multiband_drc` + `drc`) était redondante. Un vrai limiteur calibré voix pourra revenir en **E3.b** (futur sprint).
 
 **Effets TAC5212 ADC (capture)** : AGC · HPF · Biquad filters par canal · Gain/Volume · Phase & gain calibration · Decimation filter (linear-phase / low-lat / ultra-low-lat) · Digital channel mixer · Mic bias programmable · PDM mic decimation (jusqu'à 4 mics PDM)
 
@@ -148,7 +150,7 @@ Le mixer ne fait **aucun appel au DSP**. Il prend N inputs (DSP cap, USB cap, ph
 | **E0** | Branche `feature/v7.0-multiband-drc-tap` créée depuis `0580b5f14`, doc V7.0 commit/push, **retrait `apply-v6-always-on.py`**, fiche E0 baseline E6.a re-vérifiée | boot OK, audio loopback OK, kernel sans patches V6.0 |
 | **E1** | Topology simplifiée + ALSA low-lat Linux : retirer mixer16/deinterleave/interleave, PCM 1 → SAI7 TX direct, MMAP + SCHED_FIFO + mlockall | latence boucle ALSA mesurée < 10 ms, 0 xrun sur 60 s |
 | **E2** | Pipe cap : remplacer `eq_iir` par `multiband_drc` (8 ch multi-blob, patch state arrays) | 8 multibandes indép, latence E1 préservée |
-| **E3** | Pipe play : strips OUT `multiband_drc → pga → drc` (8 ch indép) | 8 voies play indép, audio OK, latence préservée |
+| **E3** | Pipe play : strips OUT `multiband_drc → pga` (8 ch indép) — drc final retiré après diag tic tic | 8 voies play indép, audio OK, latence préservée |
 | **E4** | **Tap IN brut** (PIPE 1) : adapter `apply-npu-tap-dt.py` (carve `tap-in`) + hook post-DAI RX + module `imx-audio-tap-in` + `/dev/imx-audio-tap-in` | dump 1 s 8 ch brut wave correct |
 | **E5** | **Tap OUT post-FX** (PIPE 2) : 2e reserved-mem `tap-out`, hook post-strips/pre-DAI TX, `/dev/imx-audio-tap-out` | dump 1 s 8 ch post-effets ≠ signal mixer entrant |
 | **E6** | USB gadget audio 8×8 + intégration téléphone 2×2 dans le mixer Linux | 3 paires de PCMs visibles, routing N×M opérationnel |

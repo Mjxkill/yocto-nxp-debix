@@ -1,8 +1,8 @@
 # Test Fiche : V7.0 — E3 (strips OUT play 8 ch)
 
 **Date** : 2026-05-10
-**Statut** : DRAFT — en attente validation user T3.9
-**Tag git associé** : `v7.0-e3` (à poser après OUI)
+**Statut** : **GO** — Test utilisateur OUI 2026-05-11 (« ok parfait »). Chaîne play simplifiée à `multiband_drc + pga` (drc final retiré après diag tic tic).
+**Tag git associé** : `v7.0-e3` (posé après OUI)
 
 ## Référentiel
 
@@ -13,8 +13,8 @@
 | Branche yocto | `feature/v7.0-multiband-drc-tap` |
 | Branche SOF | `feature/v7.0-multiband-drc-tap` |
 | HEAD SOF (E3) | `75635305e` (pipe macro play) |
-| Firmware md5 board | `547ecfe1f32122574ffe59cc40b52c55` (inchangé vs E2, pas de SOF source change) |
-| Topology .tplg md5 board | `f5d772f82236d6adcf30416c27b5a608` (V7.0-E3) |
+| Firmware md5 board | `aca4b7f5c3d26a54b66b2fac6fe45760` (production rebuild post-perf debug) |
+| Topology .tplg md5 board | `0363fd2806b9d2adfbd4f4cf994dc6e9` (V7.0-E3 final : multiband + pga play) |
 
 ## Travaux exécutés
 
@@ -24,15 +24,35 @@
 | Topology top | Switch PIPE 2 du toplevel `sof-imx8mp-tac5212-V7.0.m4` vers le nouveau pipe |
 | SOF source | **Aucune modif** (multiband_drc / drc / pga déjà patchés en E2 et E5.e.2-D3, supports multi-instance) |
 
-## Architecture V7.0-E3 (chaîne complète)
+## Architecture V7.0-E3 finale (chaîne complète)
 
 ```
 PIPE 1 cap (E2 GO inchangé) :
   SAI7 RX 8ch -> multiband_drc(8 ch, params_per_band=8) -> drc D3 -> pga -> PCM 0
 
-PIPE 2 play (E3 NEW) :
-  PCM 1 -> multiband_drc(8 ch indép) -> pga(8 strips OUT) -> drc(limiteur 8 ch) -> SAI7 TX
+PIPE 2 play (E3 NEW, sans drc final) :
+  PCM 1 -> multiband_drc(8 ch indép) -> pga(8 strips OUT) -> SAI7 TX
 ```
+
+### Pourquoi le drc final a été retiré
+
+Pendant les tests T3.9, l'utilisateur a rapporté un pattern audio : **« tic tic au début, puis voix propre, puis re-tic périodique »**. Diagnostic ciblé :
+
+| Test | Pipe play | xrun_play steady | « tic tic » audible |
+|---|---|---|---|
+| diag passthrough | host → SAI direct | 56 stable | — |
+| **E3 initial avec drc final** | multiband → pga → drc | 8 stable | **OUI** |
+| **E3 final sans drc final** | multiband → pga | **1 stable** | **NON** |
+
+Le pattern empirique correspond exactement à un compresseur dynamique qui claque à l'attack :
+1. Voix démarre → signal dépasse `db_threshold` → DRC réduit gain → **tic d'attaque**
+2. Compression stable → voix propre
+3. Silence + release passé → gain revient à 1.0
+4. Voix reprend → **re-tic** à l'attack
+
+**Cause** : les coeffs default `drc_coef_default_8ch.m4` (héritage Google master musique : threshold ~-24dBFS, attack ~3ms, ratio agressif, hard knee) ne sont pas adaptés à la voix temps réel. Aggravé par la **double compression** (multiband_drc + drc final) sur la chaîne play.
+
+**Décision** : retirer le `drc` final pour V7.0-E3 GO. Le `multiband_drc` (3 bandes × DRC interne) compresse déjà. Un vrai limiteur calibré pourra revenir en E3.b (futur sprint) avec params adaptés voix.
 
 ## Build & deploy
 

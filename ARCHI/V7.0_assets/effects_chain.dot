@@ -23,7 +23,7 @@ digraph effectschain {
   pcm1    [label="PCM 1\n(ASIO OUT)" fillcolor="#dcfce7" color="#15803d"]
   p_mb    [label="multiband_drc" fillcolor="#fce7f3" color="#be185d"]
   p_pga   [label="pga" fillcolor="#fce7f3" color="#be185d"]
-  p_drc   [label="drc (lim)" fillcolor="#fce7f3" color="#be185d"]
+  p_drc   [label="drc (lim)\nretiré V7.0-E3" fillcolor="#fee2e2" color="#b91c1c" style="rounded,filled,dashed"]
   saitx   [label="SAI7 TX" fillcolor="#dbeafe" color="#1d4ed8"]
   d_int   [label="Interp" fillcolor="#e9d5ff" color="#6b21a8"]
   d_bq    [label="Biquads" fillcolor="#e9d5ff" color="#6b21a8"]
@@ -32,7 +32,8 @@ digraph effectschain {
   d_lim   [label="Limiter +\nfoldback" fillcolor="#e9d5ff" color="#6b21a8"]
   spk     [label="speakers" fillcolor="#e0e7ff" color="#3730a3" width=0.9]
 
-  pcm1 -> p_mb -> p_pga -> p_drc -> saitx -> d_int -> d_bq -> d_drc -> d_gn -> d_lim -> spk
+  pcm1 -> p_mb -> p_pga -> saitx -> d_int -> d_bq -> d_drc -> d_gn -> d_lim -> spk
+  p_pga -> p_drc [style=dashed color="#b91c1c"]
 
   // NPU control
   npu [label="NPU\n(pilote TOUT)" fillcolor="#ede9fe" color="#6d28d9" shape=octagon]

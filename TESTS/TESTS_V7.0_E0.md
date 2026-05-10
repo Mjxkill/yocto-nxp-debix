@@ -1,8 +1,8 @@
 # Test Fiche : V7.0 — E0 (baseline + audit kernel + audit driver TAC)
 
 **Date** : 2026-05-10
-**Statut** : **GO** (pending Test utilisateur OUI)
-**Tag git associé** : `v7.0-e0` (à poser après validation user)
+**Statut** : **GO** — Test utilisateur OUI 2026-05-10 (« le son est bon »)
+**Tag git associé** : `v7.0-e0` (posé sur `eacf6c20`, pushé 2026-05-10)
 
 ## Référentiel
 
@@ -55,7 +55,7 @@
 | **T0.5** | kcontrols TAC visibles côté ALSA | ✓ OK (50 kcontrols `TAC0 *`) | liste non vide, AGC absent (TODO E2/E3) |
 | **T0.6** | Pas de régression vs E6.a | ✓ OK (xrun_play 7 = ≤ E6.a 7 stable, ring_drop 70 ≈ E6.a 74) | ≤ valeurs E6.a |
 | **T0.7** | Plus aucune trace V6.0 dans dmesg | ✓ OK (0 occurrences "V6.0", 0 "pipe_trigger", 0 "ipc tx error") | 0 trace |
-| **T0.8** | Test utilisateur — écoute audio | ⏳ À compléter | « le son est bon » |
+| **T0.8** | Test utilisateur — écoute audio | ✓ OUI (2026-05-10) | « le son est bon » |
 
 ## kcontrols TAC5212 exposés par `tac5212.c` (50 kcontrols)
 
@@ -130,8 +130,8 @@ in=330752 (+47104 f/s) out=311296 (+47104 f/s) xrun cap=0 play=7 ring_drop=70
 
 | Critère | OUI / NON |
 |---|---|
-| Audio loopback audible (mics → speakers via loopback-c) | ⏳ À tester (board en attente d'écoute user) |
-| Validation E0 GO | ⏳ — sera GO si OUI ci-dessus |
+| Audio loopback audible (mics → speakers via loopback-c) | **OUI** — « le son est bon » (2026-05-10) |
+| Validation E0 GO | **OUI — GO** — tag `v7.0-e0` posé |
 
 ## Conclusion
 
