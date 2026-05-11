@@ -26,14 +26,17 @@
 
 #include <stdint.h>
 
-#define MIXER_VERSION  "v7.0-e6g.p2"
+#define MIXER_VERSION  "v7.0-e6h"
 
-/* E6.g Phase 2 : ring buffer SPSC entre thread audio (cap+mix) et thread
- * play DSP. Taille = N_RING_PERIODS périodes × 18 ch × 4 B.
- * 32 périodes × 96 frames × 18 × 4 = ~221 KB → tient en RAM A53 large.
- * Tampon de 64 ms permet d'absorber un recover SOF (~60 ms observé).
+/* E6.g Phase 2 + E6.h tuning : ring buffer SPSC entre thread audio (cap+mix)
+ * et thread play DSP. Taille = N_RING_PERIODS périodes × 18 ch × 4 B.
+ * 8 périodes × 96 frames × 18 × 4 = 55 KB → tient en L1+L2 A53.
+ * Tampon de 16 ms = compromis latence/recover :
+ *   - absorbe < 16 ms de jitter sans drop
+ *   - recover SOF > 16 ms (peut atteindre 60 ms) → drops bornés visibles
+ *     dans ring_drops, audio coupé pendant le recover (acceptable, rare)
  */
-#define N_RING_PERIODS  32
+#define N_RING_PERIODS  8
 #define RING_FRAMES     (PERIOD_FRAMES * N_RING_PERIODS)
 
 #define N_INPUT_MICS    8      /* DSP TAC5212 cap */

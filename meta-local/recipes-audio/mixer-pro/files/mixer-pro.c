@@ -32,6 +32,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/eventfd.h>
 #include <unistd.h>
 #include <alsa/asoundlib.h>
 
@@ -97,6 +98,11 @@ struct mixer_state {
 	atomic_uint  ring_write_idx;
 	atomic_uint  ring_read_idx;
 	atomic_ulong ring_drops;          /* nb de samples écrasés (ring full) */
+
+	/* E6.h : eventfd signalé par audio_thread après push, attendu par
+	 * play_thread → wakeup immédiat sans polling nanosleep.
+	 */
+	int          ring_event_fd;
 };
 
 /* E6.f : sanity check atomicité (suggestion critic #2) :
@@ -319,10 +325,10 @@ static void *audio_thread(void *arg)
 	memset(play_uac2_buf, 0, sizeof(play_uac2_buf));
 	memset(play_phone_buf, 0, sizeof(play_phone_buf));
 
-	/* Ring prefill : 2 périodes (4 ms) — minimum pour que play_thread démarre
-	 * sans underrun mais latence ring minimale.
+	/* E6.h : Ring prefill = 1 période (2 ms) seulement. Le play_thread
+	 * démarre dès la 1ère push depuis l'audio_thread, latence ring minimale.
 	 */
-	for (int prime = 0; prime < 2; prime++) {
+	for (int prime = 0; prime < 1; prime++) {
 		unsigned wi = atomic_load_explicit(&g_st.ring_write_idx, memory_order_relaxed);
 		for (int f = 0; f < PERIOD_FRAMES; f++) {
 			unsigned slot = (wi + f) % RING_FRAMES;
@@ -440,6 +446,12 @@ static void *audio_thread(void *arg)
 		atomic_store_explicit(&g_st.ring_write_idx, wi + PERIOD_FRAMES,
 				      memory_order_release);
 
+		/* E6.h : signal play_thread (eventfd compteur, write 1 = 1 nouvelle
+		 * période dispo). play_thread bloque sur read(eventfd) jusqu'au signal.
+		 */
+		uint64_t one = 1;
+		(void)write(g_st.ring_event_fd, &one, sizeof(one));
+
 		/* UAC2/Phone restent dans le thread audio (NONBLOCK donc non bloquant) */
 		if (!g_skip_uac2) {
 			r = snd_pcm_writei(g_st.play_uac2.pcm, play_uac2_buf, PERIOD_FRAMES);
@@ -494,9 +506,12 @@ static void *play_thread(void *arg)
 		unsigned avail = wi - ri;
 
 		if (avail < PERIOD_FRAMES) {
-			/* Pas assez de samples dans le ring : attendre 1 ms */
-			struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
-			nanosleep(&ts, NULL);
+			/* E6.h : bloque sur eventfd jusqu'à signal du push.
+			 * eventfd_t = uint64, semaphore-style accumule les signaux.
+			 * On consomme tout d'un coup, peu importe la valeur.
+			 */
+			uint64_t consumed;
+			(void)read(g_st.ring_event_fd, &consumed, sizeof(consumed));
 			continue;
 		}
 
@@ -809,6 +824,11 @@ static void on_signal(int sig)
 {
 	(void)sig;
 	atomic_store(&g_st.running, 0);
+	/* E6.h : débloquer play_thread qui peut être en read(eventfd) bloquant */
+	if (g_st.ring_event_fd >= 0) {
+		uint64_t one = 1;
+		(void)write(g_st.ring_event_fd, &one, sizeof(one));
+	}
 }
 
 /* ============================== Main =============================== */
@@ -842,6 +862,15 @@ int main(int argc, char **argv)
 	g_st.mute_mask = 0;
 	pthread_mutex_init(&g_st.target_lock, NULL);
 	atomic_store(&g_st.running, 1);
+
+	/* E6.h : eventfd pour signaler le play_thread depuis l'audio_thread.
+	 * EFD_SEMAPHORE-like accumule les writes ; on lit en bloc.
+	 */
+	g_st.ring_event_fd = eventfd(0, EFD_CLOEXEC);
+	if (g_st.ring_event_fd < 0) {
+		mlog("ERROR: eventfd failed: %s", strerror(errno));
+		return 1;
+	}
 
 	/* Init FX engines : 0=compressor, 1=reverb, 2=delay, 3=eq */
 	if (!fx_init_compressor(&g_st.fx_engines[0], (float)SAMPLE_RATE) ||
@@ -884,6 +913,7 @@ int main(int argc, char **argv)
 	if (!g_skip_phone) snd_pcm_close(g_st.play_phone.pcm);
 	for (int b = 0; b < N_BUS_FX; b++)
 		fx_free(&g_st.fx_engines[b]);
+	if (g_st.ring_event_fd >= 0) close(g_st.ring_event_fd);
 	pthread_mutex_destroy(&g_st.target_lock);
 	mlog("mixer-pro exit clean");
 	return 0;
