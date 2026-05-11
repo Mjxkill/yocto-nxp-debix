@@ -79,7 +79,21 @@ struct mixer_state {
 	atomic_ulong frames_processed;
 	atomic_ulong xrun_count;
 	atomic_int   running;
+
+	/* E6.f profiling : timings en microsecondes du dernier cycle complet.
+	 * Permet d'identifier le hotspot (cap_read vs mix vs play_write).
+	 */
+	atomic_long  last_cap_read_us;
+	atomic_long  last_mix_us;
+	atomic_long  last_play_write_us;
+	atomic_long  last_iter_us;
 };
+
+/* E6.f : sanity check atomicité (suggestion critic #2) :
+ * sur ARM64 aligned 4-byte float load/store sont atomiques de facto.
+ */
+_Static_assert(sizeof(float) == 4, "float must be 4 bytes for atomicity assumption");
+_Static_assert(_Alignof(float) <= 4, "float alignment compatible with atomicity");
 
 static struct mixer_state g_st;
 
@@ -304,8 +318,12 @@ static void *audio_thread(void *arg)
 	if (!g_skip_uac2)  snd_pcm_start(g_st.cap_uac2.pcm);
 	if (!g_skip_phone) snd_pcm_start(g_st.cap_phone.pcm);
 
+	struct timespec t_iter_start, t_cap_done, t_mix_done, t_play_done;
+
 	while (atomic_load(&g_st.running)) {
 		snd_pcm_sframes_t r;
+
+		clock_gettime(CLOCK_MONOTONIC, &t_iter_start);
 
 		/* 1. DSP cap = horloge maître (blocking read) */
 		r = snd_pcm_readi(g_st.cap_dsp.pcm, cap_dsp_buf, PERIOD_FRAMES);
@@ -332,6 +350,8 @@ static void *audio_thread(void *arg)
 				if (r < 0 && r != -EAGAIN) snd_pcm_recover(g_st.cap_phone.pcm, r, 1);
 			}
 		}
+
+		clock_gettime(CLOCK_MONOTONIC, &t_cap_done);
 
 		/* 2. Mixer loop frame-par-frame */
 		pthread_mutex_lock(&g_st.target_lock);
@@ -362,6 +382,8 @@ static void *audio_thread(void *arg)
 					f_to_s32(out[N_OUTPUT_DSP + N_OUTPUT_UAC2 + o]);
 		}
 
+		clock_gettime(CLOCK_MONOTONIC, &t_mix_done);
+
 		atomic_fetch_add(&g_st.frames_processed, PERIOD_FRAMES);
 
 		/* 3. Write 3 playbacks (DSP play blocking, UAC2/Phone NONBLOCK) */
@@ -376,6 +398,22 @@ static void *audio_thread(void *arg)
 			r = snd_pcm_writei(g_st.play_phone.pcm, play_phone_buf, PERIOD_FRAMES);
 			if (r < 0 && r != -EAGAIN) snd_pcm_recover(g_st.play_phone.pcm, r, 1);
 		}
+
+		clock_gettime(CLOCK_MONOTONIC, &t_play_done);
+
+		/* E6.f profiling : update atomic stats. Faible overhead (~50 ns × 3). */
+		long us_cap  = (t_cap_done.tv_sec  - t_iter_start.tv_sec)  * 1000000L
+		             + (t_cap_done.tv_nsec - t_iter_start.tv_nsec) / 1000L;
+		long us_mix  = (t_mix_done.tv_sec  - t_cap_done.tv_sec)    * 1000000L
+		             + (t_mix_done.tv_nsec - t_cap_done.tv_nsec)   / 1000L;
+		long us_play = (t_play_done.tv_sec - t_mix_done.tv_sec)    * 1000000L
+		             + (t_play_done.tv_nsec - t_mix_done.tv_nsec)  / 1000L;
+		long us_iter = (t_play_done.tv_sec - t_iter_start.tv_sec)  * 1000000L
+		             + (t_play_done.tv_nsec - t_iter_start.tv_nsec)/ 1000L;
+		atomic_store(&g_st.last_cap_read_us,   us_cap);
+		atomic_store(&g_st.last_mix_us,        us_mix);
+		atomic_store(&g_st.last_play_write_us, us_play);
+		atomic_store(&g_st.last_iter_us,       us_iter);
 	}
 
 	mlog("audio thread exiting");
@@ -529,13 +567,19 @@ static void handle_cmd(int fd, const char *line)
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"version\":\"%s\",\"frames\":%lu,\"xrun\":%lu,"
 			 "\"mute_mask\":%u,\"cap_delay_frames\":%ld,\"play_delay_frames\":%ld,"
-			 "\"latency_us_one_way\":%ld}\n",
+			 "\"latency_us_one_way\":%ld,"
+			 "\"prof_cap_us\":%ld,\"prof_mix_us\":%ld,\"prof_play_us\":%ld,"
+			 "\"prof_iter_us\":%ld}\n",
 			 MIXER_VERSION,
 			 (unsigned long)atomic_load(&g_st.frames_processed),
 			 (unsigned long)atomic_load(&g_st.xrun_count),
 			 g_st.mute_mask,
 			 (long)cap_d, (long)play_d,
-			 (long)((cap_d + play_d) * 1000000L / SAMPLE_RATE));
+			 (long)((cap_d + play_d) * 1000000L / SAMPLE_RATE),
+			 (long)atomic_load(&g_st.last_cap_read_us),
+			 (long)atomic_load(&g_st.last_mix_us),
+			 (long)atomic_load(&g_st.last_play_write_us),
+			 (long)atomic_load(&g_st.last_iter_us));
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "set_fx_param")) {
