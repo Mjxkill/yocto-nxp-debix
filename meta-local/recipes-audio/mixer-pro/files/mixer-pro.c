@@ -327,6 +327,9 @@ static void *audio_thread(void *arg)
 
 	/* E6.h : Ring prefill = 1 période (2 ms) seulement. Le play_thread
 	 * démarre dès la 1ère push depuis l'audio_thread, latence ring minimale.
+	 * E6.i : signal eventfd post-prefill pour que play_thread draine
+	 * immédiatement la période de silence et démarre ALSA proprement,
+	 * sans attendre le premier push audio_thread (évite 1 période d'asymétrie).
 	 */
 	for (int prime = 0; prime < 1; prime++) {
 		unsigned wi = atomic_load_explicit(&g_st.ring_write_idx, memory_order_relaxed);
@@ -337,6 +340,10 @@ static void *audio_thread(void *arg)
 		}
 		atomic_store_explicit(&g_st.ring_write_idx, wi + PERIOD_FRAMES,
 				      memory_order_release);
+	}
+	{
+		uint64_t one = 1;
+		(void)write(g_st.ring_event_fd, &one, sizeof(one));
 	}
 
 	if (!g_skip_uac2)
@@ -487,7 +494,13 @@ static void *audio_thread(void *arg)
 
 /* Thread dédié au write DSP play. Découple le recover SOF (~60 ms) du flux
  * cap+mix. Lit le ring SPSC alimenté par le thread audio.
- * E6.g Phase 2.
+ * E6.g Phase 2 + E6.h eventfd + E6.i drainage agressif.
+ *
+ * E6.i : la boucle de drainage interne consomme TOUT le ring tant qu'ALSA
+ * accepte, dans la limite MAX_DRAIN_PERIODS pour ne pas starve audio_thread.
+ * snd_pcm_writei reste blocking : ALSA régule mécaniquement à 48 kHz si son
+ * buffer est plein. Cela transfère le tampon ring → ALSA buffer SANS ajouter
+ * de latence, et casse l'équilibre dynamique qui maintenait ring_fill à 6-8 ms.
  */
 static void *play_thread(void *arg)
 {
@@ -501,36 +514,41 @@ static void *play_thread(void *arg)
 	int32_t period_buf[PERIOD_FRAMES * N_OUTPUT_DSP];
 
 	while (atomic_load(&g_st.running)) {
-		unsigned wi = atomic_load_explicit(&g_st.ring_write_idx, memory_order_acquire);
-		unsigned ri = atomic_load_explicit(&g_st.ring_read_idx,  memory_order_relaxed);
-		unsigned avail = wi - ri;
-
-		if (avail < PERIOD_FRAMES) {
-			/* E6.h : bloque sur eventfd jusqu'à signal du push.
-			 * eventfd_t = uint64, semaphore-style accumule les signaux.
-			 * On consomme tout d'un coup, peu importe la valeur.
-			 */
-			uint64_t consumed;
-			(void)read(g_st.ring_event_fd, &consumed, sizeof(consumed));
-			continue;
-		}
-
-		/* Pop 96 frames du ring */
-		for (int f = 0; f < PERIOD_FRAMES; f++) {
-			unsigned slot = (ri + f) % RING_FRAMES;
-			memcpy(&period_buf[f * N_OUTPUT_DSP],
-			       &g_st.ring_buf[slot * N_OUTPUT_DSP],
-			       N_OUTPUT_DSP * sizeof(int32_t));
-		}
-		atomic_store_explicit(&g_st.ring_read_idx, ri + PERIOD_FRAMES,
-				      memory_order_release);
-
-		/* Write DSP play (peut bloquer 60 ms sur recover, mais le thread
-		 * audio continue de drain le cap en parallèle).
+		/* Bloque sur eventfd jusqu'au prochain push audio_thread.
+		 * eventfd_t = uint64 semaphore-style accumule les signaux.
 		 */
-		snd_pcm_sframes_t r = snd_pcm_writei(g_st.play_dsp.pcm,
-						     period_buf, PERIOD_FRAMES);
-		if (r < 0) pcm_recover(g_st.play_dsp.pcm, r);
+		uint64_t consumed;
+		(void)read(g_st.ring_event_fd, &consumed, sizeof(consumed));
+
+		/* E6.i — boucle de drainage : vider le ring jusqu'à épuisement
+		 * ou MAX_DRAIN_PERIODS atteint (garde anti-starvation audio_thread).
+		 */
+		for (int drained = 0; drained < MAX_DRAIN_PERIODS; drained++) {
+			unsigned wi = atomic_load_explicit(&g_st.ring_write_idx, memory_order_acquire);
+			unsigned ri = atomic_load_explicit(&g_st.ring_read_idx,  memory_order_relaxed);
+			if ((wi - ri) < PERIOD_FRAMES)
+				break;  /* ring insuffisant → retour eventfd_read */
+
+			/* Pop 96 frames du ring */
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				unsigned slot = (ri + f) % RING_FRAMES;
+				memcpy(&period_buf[f * N_OUTPUT_DSP],
+				       &g_st.ring_buf[slot * N_OUTPUT_DSP],
+				       N_OUTPUT_DSP * sizeof(int32_t));
+			}
+			atomic_store_explicit(&g_st.ring_read_idx, ri + PERIOD_FRAMES,
+					      memory_order_release);
+
+			/* Write DSP play blocking : régule à 48 kHz si ALSA plein.
+			 * Recover ~60 ms géré (rare, init only).
+			 */
+			snd_pcm_sframes_t r = snd_pcm_writei(g_st.play_dsp.pcm,
+							     period_buf, PERIOD_FRAMES);
+			if (r < 0) {
+				pcm_recover(g_st.play_dsp.pcm, r);
+				break;  /* sortir du drain sur recover */
+			}
+		}
 	}
 	return NULL;
 }

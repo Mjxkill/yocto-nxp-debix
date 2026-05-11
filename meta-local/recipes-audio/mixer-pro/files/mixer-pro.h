@@ -26,7 +26,7 @@
 
 #include <stdint.h>
 
-#define MIXER_VERSION  "v7.0-e6h"
+#define MIXER_VERSION  "v7.0-e6i"
 
 /* E6.g Phase 2 + E6.h tuning : ring buffer SPSC entre thread audio (cap+mix)
  * et thread play DSP. Taille = N_RING_PERIODS périodes × 18 ch × 4 B.
@@ -57,8 +57,14 @@
 
 #define SAMPLE_RATE     48000
 #define PERIOD_FRAMES   96      /* 2 ms @ 48 kHz */
-#define N_PERIODS       4       /* 4 periods = 8 ms buffer ALSA (E6.g.p2 : le ring SPSC absorbe les recover) */
+#define N_PERIODS       2       /* E6.i : 4 → 2 periods = 4 ms ALSA buffer. Le ring SPSC
+				   absorbe le jitter scheduler (< 2 ms sur PREEMPT).
+				   Couplé au drainage agressif play_thread pour viser < 10 ms E2E. */
 #define BUFFER_FRAMES   (PERIOD_FRAMES * N_PERIODS)
+
+/* E6.i : limite drainage agressif play_thread pour éviter starvation
+ * audio_thread. 4 périodes = 8 ms consécutifs maximum avant retour eventfd_read. */
+#define MAX_DRAIN_PERIODS 4
 
 /* Smoothing : 64 frames de ramp (= 1.33 ms) sur changement de gain */
 #define GAIN_RAMP_FRAMES 64
