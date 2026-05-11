@@ -87,6 +87,16 @@ struct mixer_state {
 	atomic_long  last_mix_us;
 	atomic_long  last_play_write_us;
 	atomic_long  last_iter_us;
+
+	/* E6.g Phase 2 : ring buffer SPSC (single producer = thread audio,
+	 * single consumer = thread play DSP). Interleaved 8 ch S32_LE.
+	 * write_idx avance par thread audio, read_idx par thread play.
+	 * Lockfree : ARM64 atomic 32-bit suffit (uint32 aligned).
+	 */
+	int32_t      ring_buf[RING_FRAMES * N_OUTPUT_DSP];
+	atomic_uint  ring_write_idx;
+	atomic_uint  ring_read_idx;
+	atomic_ulong ring_drops;          /* nb de samples écrasés (ring full) */
 };
 
 /* E6.f : sanity check atomicité (suggestion critic #2) :
@@ -288,22 +298,41 @@ static void *audio_thread(void *arg)
 		snd_pcm_nonblock(g_st.play_phone.pcm, 1);
 	}
 
-	/* Link DSP cap ↔ play : démarrage sample-précis simultané. */
-	int link_err = snd_pcm_link(g_st.cap_dsp.pcm, g_st.play_dsp.pcm);
-	if (link_err < 0)
-		mlog("WARN: snd_pcm_link DSP cap/play failed: %s", snd_strerror(link_err));
+	/* E6.g Phase 1 : RETRAIT snd_pcm_link.
+	 * Le link forçait un snd_pcm_recover simultané sur cap+play à chaque
+	 * underrun de l'un, multipliant les blocages 500 ms observés en E6.f.
+	 * Sans link, cap et play sont gérés indépendamment côté ALSA — le
+	 * recover d'un PCM ne bloque pas l'autre.
+	 *
+	 * Tradeoff : on n'a plus la garantie sample-précis sur le start. Mais
+	 * les 2 PCMs partagent la même horloge hardware SAI7 (i.MX8MP), donc
+	 * la sync de phase est garantie par le hardware. Le start non-link
+	 * peut décaler l'origine de quelques ms, ce qui est dans le buffer.
+	 */
 
-	/* Prefill PLAY avec un buffer presque plein (N-1 periods). Le 1er write
-	 * dans la boucle complète le buffer → DMA play part avec un buffer plein
-	 * et la cadence est marrowée par cap_read (blocking 2 ms) puis play_write
-	 * (qui n'attend que 2 ms puisque le buffer perd 1 période par cycle).
+	/* E6.g Phase 2 : DSP play prefill géré par le play_thread. Ici on
+	 * prefill juste le ring avec quelques périodes de silence pour que
+	 * play_thread démarre immédiatement.
+	 * UAC2/Phone restent prefillés ici (NONBLOCK directs).
 	 */
 	memset(play_dsp_buf, 0, sizeof(play_dsp_buf));
 	memset(play_uac2_buf, 0, sizeof(play_uac2_buf));
 	memset(play_phone_buf, 0, sizeof(play_phone_buf));
-	for (int prime = 0; prime < N_PERIODS - 1; prime++) {
-		snd_pcm_writei(g_st.play_dsp.pcm, play_dsp_buf, PERIOD_FRAMES);
+
+	/* Ring prefill : 2 périodes (4 ms) — minimum pour que play_thread démarre
+	 * sans underrun mais latence ring minimale.
+	 */
+	for (int prime = 0; prime < 2; prime++) {
+		unsigned wi = atomic_load_explicit(&g_st.ring_write_idx, memory_order_relaxed);
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			unsigned slot = (wi + f) % RING_FRAMES;
+			memset(&g_st.ring_buf[slot * N_OUTPUT_DSP], 0,
+			       N_OUTPUT_DSP * sizeof(int32_t));
+		}
+		atomic_store_explicit(&g_st.ring_write_idx, wi + PERIOD_FRAMES,
+				      memory_order_release);
 	}
+
 	if (!g_skip_uac2)
 		for (int prime = 0; prime < N_PERIODS - 1; prime++)
 			snd_pcm_writei(g_st.play_uac2.pcm, play_uac2_buf, PERIOD_FRAMES);
@@ -386,10 +415,32 @@ static void *audio_thread(void *arg)
 
 		atomic_fetch_add(&g_st.frames_processed, PERIOD_FRAMES);
 
-		/* 3. Write 3 playbacks (DSP play blocking, UAC2/Phone NONBLOCK) */
-		r = snd_pcm_writei(g_st.play_dsp.pcm, play_dsp_buf, PERIOD_FRAMES);
-		if (r < 0) pcm_recover(g_st.play_dsp.pcm, r);
+		/* 3. E6.g Phase 2 : DSP play traité par thread séparé via ring SPSC.
+		 *    Le thread audio ne fait QUE push dans le ring (rapide, atomic).
+		 *    Si ring full → on écrase le plus vieux (drop policy) pour ne
+		 *    jamais bloquer la cap.
+		 */
+		unsigned wi = atomic_load_explicit(&g_st.ring_write_idx, memory_order_relaxed);
+		unsigned ri = atomic_load_explicit(&g_st.ring_read_idx,  memory_order_acquire);
+		unsigned avail = wi - ri;   /* unsigned arithmetic wraps OK */
+		if (avail + PERIOD_FRAMES > RING_FRAMES) {
+			/* Drop policy : avance read_idx pour faire de la place */
+			unsigned drop = avail + PERIOD_FRAMES - RING_FRAMES;
+			atomic_store_explicit(&g_st.ring_read_idx, ri + drop,
+					      memory_order_release);
+			atomic_fetch_add(&g_st.ring_drops, drop);
+		}
+		/* Copy 96 frames × 8 ch dans le ring (avec wrap modulo RING_FRAMES) */
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			unsigned slot = (wi + f) % RING_FRAMES;
+			memcpy(&g_st.ring_buf[slot * N_OUTPUT_DSP],
+			       &play_dsp_buf[f * N_OUTPUT_DSP],
+			       N_OUTPUT_DSP * sizeof(int32_t));
+		}
+		atomic_store_explicit(&g_st.ring_write_idx, wi + PERIOD_FRAMES,
+				      memory_order_release);
 
+		/* UAC2/Phone restent dans le thread audio (NONBLOCK donc non bloquant) */
 		if (!g_skip_uac2) {
 			r = snd_pcm_writei(g_st.play_uac2.pcm, play_uac2_buf, PERIOD_FRAMES);
 			if (r < 0 && r != -EAGAIN) snd_pcm_recover(g_st.play_uac2.pcm, r, 1);
@@ -417,6 +468,55 @@ static void *audio_thread(void *arg)
 	}
 
 	mlog("audio thread exiting");
+	return NULL;
+}
+
+/* ============================== Play thread DSP ==================== */
+
+/* Thread dédié au write DSP play. Découple le recover SOF (~60 ms) du flux
+ * cap+mix. Lit le ring SPSC alimenté par le thread audio.
+ * E6.g Phase 2.
+ */
+static void *play_thread(void *arg)
+{
+	(void)arg;
+	struct sched_param sp = { .sched_priority = RT_PRIO_AUDIO + 1 };
+	if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) != 0)
+		mlog("WARN: play_thread SCHED_FIFO failed: %s", strerror(errno));
+	else
+		mlog("play_thread : SCHED_FIFO prio %d", RT_PRIO_AUDIO + 1);
+
+	int32_t period_buf[PERIOD_FRAMES * N_OUTPUT_DSP];
+
+	while (atomic_load(&g_st.running)) {
+		unsigned wi = atomic_load_explicit(&g_st.ring_write_idx, memory_order_acquire);
+		unsigned ri = atomic_load_explicit(&g_st.ring_read_idx,  memory_order_relaxed);
+		unsigned avail = wi - ri;
+
+		if (avail < PERIOD_FRAMES) {
+			/* Pas assez de samples dans le ring : attendre 1 ms */
+			struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };
+			nanosleep(&ts, NULL);
+			continue;
+		}
+
+		/* Pop 96 frames du ring */
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			unsigned slot = (ri + f) % RING_FRAMES;
+			memcpy(&period_buf[f * N_OUTPUT_DSP],
+			       &g_st.ring_buf[slot * N_OUTPUT_DSP],
+			       N_OUTPUT_DSP * sizeof(int32_t));
+		}
+		atomic_store_explicit(&g_st.ring_read_idx, ri + PERIOD_FRAMES,
+				      memory_order_release);
+
+		/* Write DSP play (peut bloquer 60 ms sur recover, mais le thread
+		 * audio continue de drain le cap en parallèle).
+		 */
+		snd_pcm_sframes_t r = snd_pcm_writei(g_st.play_dsp.pcm,
+						     period_buf, PERIOD_FRAMES);
+		if (r < 0) pcm_recover(g_st.play_dsp.pcm, r);
+	}
 	return NULL;
 }
 
@@ -569,7 +669,8 @@ static void handle_cmd(int fd, const char *line)
 			 "\"mute_mask\":%u,\"cap_delay_frames\":%ld,\"play_delay_frames\":%ld,"
 			 "\"latency_us_one_way\":%ld,"
 			 "\"prof_cap_us\":%ld,\"prof_mix_us\":%ld,\"prof_play_us\":%ld,"
-			 "\"prof_iter_us\":%ld}\n",
+			 "\"prof_iter_us\":%ld,\"ring_drops\":%lu,"
+			 "\"ring_fill_frames\":%u}\n",
 			 MIXER_VERSION,
 			 (unsigned long)atomic_load(&g_st.frames_processed),
 			 (unsigned long)atomic_load(&g_st.xrun_count),
@@ -579,7 +680,10 @@ static void handle_cmd(int fd, const char *line)
 			 (long)atomic_load(&g_st.last_cap_read_us),
 			 (long)atomic_load(&g_st.last_mix_us),
 			 (long)atomic_load(&g_st.last_play_write_us),
-			 (long)atomic_load(&g_st.last_iter_us));
+			 (long)atomic_load(&g_st.last_iter_us),
+			 (unsigned long)atomic_load(&g_st.ring_drops),
+			 (unsigned)(atomic_load(&g_st.ring_write_idx) -
+				    atomic_load(&g_st.ring_read_idx)));
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "set_fx_param")) {
@@ -763,11 +867,13 @@ int main(int argc, char **argv)
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
 
-	pthread_t th_audio, th_ctrl;
+	pthread_t th_audio, th_ctrl, th_play;
 	pthread_create(&th_ctrl, NULL, control_thread, NULL);
+	pthread_create(&th_play, NULL, play_thread, NULL);   /* E6.g Phase 2 */
 	pthread_create(&th_audio, NULL, audio_thread, NULL);
 
 	pthread_join(th_audio, NULL);
+	pthread_join(th_play, NULL);
 	pthread_join(th_ctrl, NULL);
 
 	snd_pcm_close(g_st.cap_dsp.pcm);
