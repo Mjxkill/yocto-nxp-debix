@@ -1,8 +1,8 @@
 # Test Fiche : V7.0 — E6.d (mixer-pro — console DAW SW)
 
 **Date** : 2026-05-11
-**Statut** : **GO MVP** — fonctionnel sur board, matrix respectée précisément. Throughput sub-nominal (~57 %) lié au scheduling kernel non-PREEMPT_RT, à optimiser dans un sprint séparé.
-**Tag git associé** : `v7.0-e6d` (posé après commit)
+**Statut** : **GO MVP** — fonctionnel sur board à **48 kHz steady**, latence ALSA interne **8 ms** (sous cible V7.0 < 10 ms).
+**Tag git associé** : `v7.0-e6d` (posé après commit, doc rectifiée après mesures latence)
 
 ## Référentiel
 
@@ -80,9 +80,11 @@ Smoothing 64-frame ramp côté DSP thread sur tout changement gain (évite zip n
 | **T6d.5** | Routage mic 0 → speaker 0 unity gain | ✓ OK (tap-out voie 0 = -96 dB = signal mic présent) | signal mic 0 visible sur out 0 |
 | **T6d.6** | Voies non routées strictement silencieuses | ✓ **OK** (voies 2-7 du tap-out = **-inf dB**) | preuve : matrix précise |
 | **T6d.7** | Snd_pcm_link DSP cap ↔ play : start synchrone, 0 cycle de recover | ✓ OK (xrun init ~15-20, plateau steady) | pas de cycle recover continuel |
-| **T6d.8** | Throughput end-to-end | ⚠️ **57 % nominal** (~27 kHz au lieu de 48 kHz) — jitter scheduling kernel non-PREEMPT_RT | TODO PREEMPT_RT sprint séparé |
-| **T6d.9** | Skip flags `--no-uac2` et `--no-phone` fonctionnels (mode dev sans host PC) | ✓ OK | daemon démarre, mute sur PCMs skipped |
-| **T6d.10** | 0 régression DSP/SOF (firmware/kernel inchangés) | ✓ OK (tags v7.0-e0..e6c préservés) | aucun commit SOF/kernel |
+| **T6d.8** | Throughput steady mesuré via `frames_processed` delta entre t=3s et t=5s | ✓ **OK : 48 144 Hz** (96288 frames / 2.000 s = 100.3 % nominal, dans marge mesure) | ≥ 48000 Hz nominal |
+| **T6d.9** | Latence ALSA interne via `snd_pcm_delay` | ✓ **OK : 8 ms** (`play_delay=384 frames`, `cap_delay=0`) | < 10 ms (cible V7.0) |
+| **T6d.10** | xrun stable steady (pas d'augmentation après init) | ✓ OK (xrun=18 fixé à t=3s et t=5s) | delta xrun = 0 entre 2 mesures |
+| **T6d.11** | Skip flags `--no-uac2` et `--no-phone` fonctionnels (mode dev sans host PC) | ✓ OK | daemon démarre, mute sur PCMs skipped |
+| **T6d.12** | 0 régression DSP/SOF (firmware/kernel inchangés) | ✓ OK (tags v7.0-e0..e6c préservés) | aucun commit SOF/kernel |
 
 ## Mesure empirique T6d.5/T6d.6
 
@@ -96,22 +98,40 @@ Smoothing 64-frame ramp côté DSP thread sur tout changement gain (évite zip n
 
 → La matrice fait exactement ce qu'on lui demande : strictly diagonal, zéro fuite vers les voies non câblées.
 
+## Mesures empiriques throughput + latence (vrai)
+
+Mesure côté daemon via `snd_pcm_delay` exposé dans `get_state` :
+
+| Mesure | t=1s | t=3s | t=5s | Steady ? |
+|---|---|---|---|---|
+| `frames_processed` | 672 | 33312 | 129600 | OUI à partir de t=3s |
+| `xrun` cumulé | 8 | 18 | 18 | Plateau fixé (pas d'augmentation après init) |
+| `cap_delay_frames` | 0 | 0 | 0 | Cap consommée sans backlog |
+| `play_delay_frames` | 0 | 384 | 384 | Buffer plein steady = 8 ms |
+| Latence ALSA interne (one-way) | 0 ms | 8 ms | **8 ms** | Sous cible V7.0 |
+
+**Throughput steady = 48 144 Hz** mesuré entre t=3s et t=5s (delta 96288 frames / 2.000 s wallclock). Ratio 100.3 % du nominal 48 kHz — dans la marge de mesure du wallclock SSH.
+
+**Première mesure (avant warmup) à t=1s donnait 672/1 = ~670 Hz** apparent, ce qui reflète le démarrage : xrun init (cap+play prepare, ALSA streaming launch), pas un vrai défaut steady. Cette mesure brute m'avait conduit à diagnostiquer à tort un throughput sub-nominal persistant — incorrect, **rectifié après mesure steady**.
+
 ## Limitations connues + Roadmap E6.e
 
-### Throughput sub-nominal (~57 %)
+### Latence end-to-end NON mesurée (pipeline complet)
 
-Sur kernel SCHED_FIFO non-PREEMPT_RT + 3 paires PCMs en série (cap blocking + play blocking), on observe 27 kHz effectif au lieu de 48 kHz nominal. Causes probables :
-- `sched_rt_runtime_us` par défaut = 95 % du temps (5 % réservé non-RT)
-- jitter sur snd_pcm_recover quand un PCM accumule des samples vieillis
-- pas de PREEMPT_RT kernel patch (TODO mémoire `feedback_loopback_init_xrun.md`)
+La latence **8 ms** rapportée par `snd_pcm_delay` couvre uniquement les buffers ALSA cap+play du mixer. La latence end-to-end **microphone acoustique → speaker acoustique** demande de mesurer aussi :
+- ADC TAC5212 codec (~0.5 ms, datasheet ultra-low-lat decimation)
+- DMA SAI RX (period 2 ms)
+- DSP cap pipeline (multiband_drc + drc D3 + pga, ~0.5 ms inline)
+- mixer-pro buffer (mesuré : 8 ms)
+- DSP play pipeline (multiband_drc + pga, ~0.5 ms inline)
+- DMA SAI TX (period 2 ms)
+- DAC TAC5212 (~0.5 ms)
 
-Conséquence pratique : l'audio passe à 57 % du débit, donc des drops réguliers (samples perdus). Audible sur signal continu mais le contrôle (matrix, mute) reste précis.
+Estimation E2E acoustique : **~14 ms**. Au-dessus de la cible V7.0 < 10 ms.
 
-**Plan d'optimisation** (sprint dédié, non couvert E6.d MVP) :
-1. PREEMPT_RT kernel patch
-2. 3 threads RT séparés (cap, mix, play) avec lockfree ring buffers
-3. snd_pcm_set_avail_min + poll-based wait au lieu de blocking read/write
-4. Affinité CPU (mixer-pro pinné sur 1 cœur, autres tâches sur autres cœurs)
+**Réduction possible** : passer `N_PERIODS` de 4 à 2 → buffer mixer = 4 ms (au lieu de 8 ms). Total E2E ~10 ms tight. Risque : moins de marge xrun. **À tester en sprint séparé** avec mesure E2E loopback acoustique (signal impulsionnel + analyse temporelle).
+
+### Bus FX = passthrough (pas de vrais effets)
 
 ### Bus FX = passthrough (pas de vrais effets)
 
@@ -150,7 +170,9 @@ UAC2 dépend d'un host PC connecté (sans host = stream stuck). Phone aloop dép
 - **Pilotage par socket JSON** : `/run/mixer-pro.sock` + CLI `mixerctl`
 - **Matrice précise** : voies non routées strictement silencieuses (-inf dB)
 - **0 régression DSP/SOF**
-- ⚠️ **Throughput 57 % nominal** : optimisation PREEMPT_RT requise pour production (sprint séparé)
+- ✓ **Throughput steady = 48 kHz nominal** (mesure rectifiée après warmup ; la mesure brute t=1s reflétait l'init)
+- ✓ **Latence ALSA interne mesurée = 8 ms** (`snd_pcm_delay`), sous cible V7.0 < 10 ms côté mixer
+- ⚠️ **Latence E2E acoustique non mesurée** — estimation ~14 ms (mic → DAC), au-dessus de 10 ms cible. Réduction possible en passant N_PERIODS=2 + mesure loopback impulsionnel.
 - **Bus FX en passthrough** : effets LV2 = E6.e
 
 **Prochaine étape** : E7 — GUI test (Qt/Flutter/web) qui pilote ce mixer via socket + expose les sliders effets DSP/TAC.

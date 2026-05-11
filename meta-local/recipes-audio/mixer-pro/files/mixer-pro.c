@@ -488,13 +488,24 @@ static void handle_cmd(int fd, const char *line)
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "get_state")) {
+		/* snd_pcm_delay : nb de frames entre le pointeur applicatif et le hw.
+		 * cap delay = samples accumulés non encore lus
+		 * play delay = samples écrits non encore joués
+		 * latence DSP one-way ≈ play_delay / 48 ms (à 48 kHz).
+		 */
+		snd_pcm_sframes_t cap_d = 0, play_d = 0;
+		snd_pcm_delay(g_st.cap_dsp.pcm,  &cap_d);
+		snd_pcm_delay(g_st.play_dsp.pcm, &play_d);
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"version\":\"%s\",\"frames\":%lu,\"xrun\":%lu,"
-			 "\"mute_mask\":%u}\n",
+			 "\"mute_mask\":%u,\"cap_delay_frames\":%ld,\"play_delay_frames\":%ld,"
+			 "\"latency_us_one_way\":%ld}\n",
 			 MIXER_VERSION,
 			 (unsigned long)atomic_load(&g_st.frames_processed),
 			 (unsigned long)atomic_load(&g_st.xrun_count),
-			 g_st.mute_mask);
+			 g_st.mute_mask,
+			 (long)cap_d, (long)play_d,
+			 (long)((cap_d + play_d) * 1000000L / SAMPLE_RATE));
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "reset")) {
