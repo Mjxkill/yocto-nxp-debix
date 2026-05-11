@@ -53,7 +53,7 @@ Hypothèses pour expliquer les 500 ms de blocking ALSA :
 
 1. **Cycle xrun-recover SOF** : quand `snd_pcm_link(cap, play)` est actif et l'une des deux PCMs underrun/overrun, ALSA force `snd_pcm_recover` sur les 2. Le recover SOF i.MX8MP demande au DSP de re-préparer la pipeline via IPC + DMA reset → **plusieurs centaines de ms** observées sur ce projet (voir mémoire `feedback_loopback_init_xrun.md`).
 
-2. **mlockall + SCHED_FIFO sans PREEMPT_RT** : sur kernel CFS standard, le scheduler peut préempter le thread RT et le re-réveiller après que ALSA a déjà accumulé un large backlog → cascade xrun.
+2. **Scheduling** : ~~mlockall + SCHED_FIFO sans PREEMPT_RT~~ **Correction post-vérif board** : le kernel Debix V1.0.4 a `CONFIG_PREEMPT=y` (low-latency preemption activée). Pas full PREEMPT_RT mais PREEMPT basique. Jitter typique ~100 µs (≪ budget 2 ms). Ce n'est probablement PAS le cause des 500 ms de blocage observés (PREEMPT_RT ne réduirait que de 100 µs à 10 µs, négligeable face à 500 ms).
 
 3. **Budget cycle 2 ms trop tendu** : avec snd_pcm_link, le système doit livrer cap+play simultanément à chaque période 2 ms. Tout jitter > 2 ms = xrun automatique.
 
@@ -66,16 +66,24 @@ Hypothèses pour expliquer les 500 ms de blocking ALSA :
 - Le vrai bottleneck = **ALSA scheduling + cycle xrun-recover SOF**
 - L'optim doit cibler le kernel/scheduling, pas le code mixer userspace
 
-## Recommandations pour E6.g (vrai sprint optim)
+## Recommandations pour E6.g (vrai sprint optim) — RÉVISÉES POST-VÉRIF KERNEL
 
-D'après le diagnostic E6.f, le plan correct pour atteindre 48 kHz steady avec effets actifs :
+**Vérification kernel board (uname/proc/config)** :
+- `CONFIG_PREEMPT=y` : **déjà actif** (low-latency preemption, jitter scheduling ~100 µs typique)
+- `CONFIG_PREEMPT_RT` : non activé. Gain potentiel = jitter 100 µs → 10 µs (négligeable face aux 500 ms observés).
 
-1. **PREEMPT_RT kernel patch** : élimine le jitter scheduling qui cause les xrun. Sprint dédié (mémoire `feedback_loopback_init_xrun.md`).
-2. **Plus grand buffer ALSA** : passer de N_PERIODS=4 (8 ms) à N_PERIODS=8 (16 ms). Tradeoff : latence +8 ms. Acceptable si latence E2E reste < 20 ms.
-3. **Retrait `snd_pcm_link`** : passer en async parallèle (3 threads RT séparés cap/mix/play + lockfree ring buffers). Complexité élevée mais découple les xrun.
-4. **CPU pinning + isolcpus** : dédier 1 cœur Cortex-A53 (sur 4) au mixer-pro via `isolcpus=3` kernel cmdline.
+Donc PREEMPT_RT n'est PAS la priorité. Les vrais leviers :
 
-Aucune de ces actions ne touche au code mixer-pro/effects.c lui-même. **Les effets restent en place tels quels.**
+1. **Retirer `snd_pcm_link` DSP cap/play** : ce link force `snd_pcm_recover` sur les 2 PCMs liés à chaque underrun de l'un, multipliant les blocages. Tester avec link désactivé + sync manuel via prefill buffer.
+2. **Investiguer la durée du recover SOF IPC** : pourquoi `snd_pcm_recover` sur DSP prend-il ~500 ms ? Tracer `/sys/kernel/debug/sof/` pendant un cycle xrun. Hypothèse : re-prepare pipeline complet via mailbox IPC, optim envisageable côté driver kernel.
+3. **Plus grand buffer ALSA** : N_PERIODS=4 (8 ms) → N_PERIODS=8 (16 ms). Tradeoff : latence +8 ms. Évite les sub-ms-jitter de causer un xrun.
+4. **3 threads RT cap/mix/play + lockfree ring buffers** : découple les xrun. Si play subit un recover, cap continue à accumuler dans le ring → on rattrape après. Complexité élevée, MAIS la bonne architecture pour un mixer audio pro.
+5. **CPU pinning** : `taskset -c 3 mixer-pro` ou `CPUAffinity=3` dans `.service`. Sur i.MX8MP 4 cores, isole le mixer du reste du système.
+6. **isolcpus=3** (kernel cmdline) : optionnel, exclut un cœur du scheduler général. Modif `bootargs` dans U-Boot ou DT.
+
+Priorité estimée : (1) + (3) sont les **leviers majeurs**, faisables sans modif kernel.
+
+Aucune de ces actions ne touche au code mixer-pro/effects.c. **Les effets restent en place tels quels.**
 
 ## Tests T6f.X
 
@@ -115,6 +123,6 @@ Cohérent avec ratio observé E6.e (4 bus = 36 % nominal ≈ 17 kHz → cycles u
 - **Hotspot identifié et documenté** : ALSA snd_pcm_readi/writei sur DSP, pas les effets
 - **Hypothèse E6.e ("effets lents") empiriquement invalidée**
 - **Aucune optim algorithmique effets nécessaire** (mix = 473 µs = 24 % budget)
-- **Sprint E6.g recommandé** : PREEMPT_RT kernel + buffer plus grand + retrait snd_pcm_link (complexe)
+- **Sprint E6.g recommandé** (post-vérif kernel) : retrait `snd_pcm_link` + 3-thread + lockfree (kernel a déjà PREEMPT, RT pas critique)
 
 E6.f est un **succès méthodologique** : on ne fait PAS d'optim spéculative. On mesure d'abord, on conclut, on documente.
