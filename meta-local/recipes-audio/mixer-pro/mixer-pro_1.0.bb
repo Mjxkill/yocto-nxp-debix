@@ -3,8 +3,8 @@ DESCRIPTION = "Daemon C userspace temps-réel. Lit 3 paires de PCMs ALSA (DSP \
 TAC5212, UAC2 gadget, Phone aloop), applique une matrice de routing avec 4 \
 sends stéréo vers 4 bus FX, recombine via une matrice master 34 → 18 outputs. \
 Latence cible < 10 ms. Contrôle via socket Unix /run/mixer-pro.sock (JSON). \
-Effets LV2 sur les bus = post-MVP (E6.e). Désactivé par défaut (le user/GUI E7 \
-active manuellement)."
+E6.e : 4 effets natifs C par bus (compressor, reverb, delay, eq) pilotables \
+via set_fx_param. Désactivé par défaut (le user/GUI E7 active manuellement)."
 HOMEPAGE = "https://github.com/Mjxkill/yocto-nxp-debix"
 LICENSE = "GPL-2.0-or-later"
 LIC_FILES_CHKSUM = "file://mixer-pro.c;beginline=1;endline=2;md5=cfa333c28b94c54d228eecd95f238319"
@@ -12,6 +12,8 @@ LIC_FILES_CHKSUM = "file://mixer-pro.c;beginline=1;endline=2;md5=cfa333c28b94c54
 SRC_URI = " \
     file://mixer-pro.c \
     file://mixer-pro.h \
+    file://effects.c \
+    file://effects.h \
     file://mixerctl.c \
     file://Makefile \
     file://mixer-pro.service \

@@ -36,6 +36,7 @@
 #include <alsa/asoundlib.h>
 
 #include "mixer-pro.h"
+#include "effects.h"
 
 /* ============================== State ============================== */
 
@@ -58,8 +59,13 @@ struct mixer_state {
 	float master_gain[N_INPUT_TOTAL][N_OUTPUT_TOTAL];
 	float master_target[N_INPUT_TOTAL][N_OUTPUT_TOTAL];
 
-	float fx_bus_gain[N_BUS_FX_CH];   /* gain bus (= "FX strength", MVP = identity) */
+	float fx_bus_gain[N_BUS_FX_CH];   /* gain bus output (post-effet, dry/wet implicite) */
 	float fx_bus_target[N_BUS_FX_CH];
+
+	/* E6.e : 1 moteur d'effet par bus (4 bus × stéréo, géré par fx_engine).
+	 * Defaults : 0=compressor, 1=reverb, 2=delay, 3=eq.
+	 */
+	fx_engine_t fx_engines[N_BUS_FX];
 
 	uint32_t mute_mask;              /* bit i = mute src i (32 bits, 26 src réels < 32 OK) */
 
@@ -209,10 +215,17 @@ static void mix_frame(const float in[N_INPUT_REAL], float out[N_OUTPUT_TOTAL])
 			bus[b] += in[i] * g_st.send_gain[i][b];
 	}
 
-	/* 2. Bus FX (MVP = passthrough avec gain bus). E6.e ajoutera LV2 plugins. */
+	/* 2. Bus FX (E6.e) : chaque paire (L,R) traverse 1 fx_engine. Le gain
+	 * fx_bus_gain[L]/fx_bus_gain[R] est appliqué post-effet (wet niveau).
+	 */
 	float ret[N_RETURN_CH];
-	for (int b = 0; b < N_BUS_FX_CH; b++)
-		ret[b] = bus[b] * g_st.fx_bus_gain[b];
+	for (int b = 0; b < N_BUS_FX; b++) {
+		float l = bus[b * 2], r = bus[b * 2 + 1];
+		float out_l, out_r;
+		g_st.fx_engines[b].process(&g_st.fx_engines[b], l, r, &out_l, &out_r);
+		ret[b * 2]     = out_l * g_st.fx_bus_gain[b * 2];
+		ret[b * 2 + 1] = out_r * g_st.fx_bus_gain[b * 2 + 1];
+	}
 
 	/* 3. Master : 26 sources = 18 in + 8 returns → 18 outputs */
 	float src[N_INPUT_TOTAL];
@@ -374,6 +387,23 @@ static void *audio_thread(void *arg)
 /* Cherche une clé numérique dans une string JSON simple. -1 si absent.
  * Très minimaliste — pas un parser JSON complet, juste `"key":<number>`.
  */
+/* Extrait une string entre guillemets pour une clé "key":"..." */
+static int json_get_str(const char *s, const char *key, char *out, int max)
+{
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+	const char *p = strstr(s, pattern);
+	if (!p) return -1;
+	p += strlen(pattern);
+	while (*p == ' ' || *p == ':' || *p == '\t') p++;
+	if (*p != '"') return -1;
+	p++;
+	int i = 0;
+	while (*p && *p != '"' && i < max - 1) out[i++] = *p++;
+	out[i] = 0;
+	return (*p == '"') ? 0 : -1;
+}
+
 static int json_get_int(const char *s, const char *key, int *out)
 {
 	char pattern[64];
@@ -508,6 +538,55 @@ static void handle_cmd(int fd, const char *line)
 			 (long)((cap_d + play_d) * 1000000L / SAMPLE_RATE));
 		write(fd, reply, strlen(reply));
 
+	} else if (json_has_op(line, "set_fx_param")) {
+		int bus;
+		char param[32];
+		float value = 0;
+		if (json_get_int(line, "bus", &bus) < 0 ||
+		    json_get_str(line, "param", param, sizeof(param)) < 0 ||
+		    json_get_float(line, "value", &value) < 0 ||
+		    bus < 0 || bus >= N_BUS_FX) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_fx_param args\"}\n");
+			return;
+		}
+		pthread_mutex_lock(&g_st.target_lock);
+		int rc = g_st.fx_engines[bus].set_param(&g_st.fx_engines[bus], param, value);
+		pthread_mutex_unlock(&g_st.target_lock);
+		if (rc < 0) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"unknown fx param\"}\n");
+		} else {
+			snprintf(reply, sizeof(reply),
+				 "{\"ok\":true,\"op\":\"set_fx_param\",\"bus\":%d,"
+				 "\"param\":\"%s\",\"value\":%.4f}\n",
+				 bus, param, value);
+			write(fd, reply, strlen(reply));
+		}
+
+	} else if (json_has_op(line, "get_fx")) {
+		int bus;
+		if (json_get_int(line, "bus", &bus) < 0 ||
+		    bus < 0 || bus >= N_BUS_FX) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad get_fx args\"}\n");
+			return;
+		}
+		char body[512];
+		g_st.fx_engines[bus].get_state(&g_st.fx_engines[bus], body, sizeof(body));
+		snprintf(reply, sizeof(reply),
+			 "{\"ok\":true,\"bus\":%d,%s}\n", bus, body);
+		write(fd, reply, strlen(reply));
+
+	} else if (json_has_op(line, "reset_fx")) {
+		int bus;
+		if (json_get_int(line, "bus", &bus) < 0 ||
+		    bus < 0 || bus >= N_BUS_FX) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad reset_fx args\"}\n");
+			return;
+		}
+		pthread_mutex_lock(&g_st.target_lock);
+		g_st.fx_engines[bus].reset(&g_st.fx_engines[bus]);
+		pthread_mutex_unlock(&g_st.target_lock);
+		dprintf(fd, "{\"ok\":true,\"op\":\"reset_fx\",\"bus\":%d}\n", bus);
+
 	} else if (json_has_op(line, "reset")) {
 		pthread_mutex_lock(&g_st.target_lock);
 		memset(g_st.send_target,   0, sizeof(g_st.send_target));
@@ -616,6 +695,16 @@ int main(int argc, char **argv)
 	pthread_mutex_init(&g_st.target_lock, NULL);
 	atomic_store(&g_st.running, 1);
 
+	/* Init FX engines : 0=compressor, 1=reverb, 2=delay, 3=eq */
+	if (!fx_init_compressor(&g_st.fx_engines[0], (float)SAMPLE_RATE) ||
+	    !fx_init_reverb    (&g_st.fx_engines[1], (float)SAMPLE_RATE) ||
+	    !fx_init_delay     (&g_st.fx_engines[2], (float)SAMPLE_RATE) ||
+	    !fx_init_eq        (&g_st.fx_engines[3], (float)SAMPLE_RATE)) {
+		mlog("ERROR: fx_init failed");
+		return 1;
+	}
+	mlog("FX engines : 0=compressor 1=reverb 2=delay 3=eq");
+
 	/* Open ALSA streams (skip selon flags command-line) */
 	if (pcm_open(&g_st.cap_dsp,   PCM_DSP_CAP,   N_INPUT_MICS,   SND_PCM_STREAM_CAPTURE)  < 0) goto err;
 	if (!g_skip_uac2)  { if (pcm_open(&g_st.cap_uac2,  PCM_UAC2_CAP,  N_INPUT_STEMS,  SND_PCM_STREAM_CAPTURE)  < 0) goto err; }
@@ -643,6 +732,8 @@ int main(int argc, char **argv)
 	snd_pcm_close(g_st.play_dsp.pcm);
 	if (!g_skip_uac2)  snd_pcm_close(g_st.play_uac2.pcm);
 	if (!g_skip_phone) snd_pcm_close(g_st.play_phone.pcm);
+	for (int b = 0; b < N_BUS_FX; b++)
+		fx_free(&g_st.fx_engines[b]);
 	pthread_mutex_destroy(&g_st.target_lock);
 	mlog("mixer-pro exit clean");
 	return 0;

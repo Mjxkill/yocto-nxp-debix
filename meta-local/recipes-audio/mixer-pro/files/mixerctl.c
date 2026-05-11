@@ -52,13 +52,22 @@ static int send_json(const char *json)
 static void usage(void)
 {
 	fputs("usage:\n"
-	      "  mixerctl send   <in> <bus> <gain>\n"
-	      "  mixerctl master <src> <out> <gain>\n"
-	      "  mixerctl fx     <bus> <gain>\n"
-	      "  mixerctl mute   <src> {0|1}\n"
+	      "  mixerctl send    <in> <bus> <gain>\n"
+	      "  mixerctl master  <src> <out> <gain>\n"
+	      "  mixerctl fx      <bus> <gain>           (level bus output)\n"
+	      "  mixerctl fxp     <bus> <param> <value>  (set effect parameter)\n"
+	      "  mixerctl getfx   <bus>                  (dump effect state)\n"
+	      "  mixerctl resetfx <bus>                  (clear effect internal buffers)\n"
+	      "  mixerctl mute    <src> {0|1}\n"
 	      "  mixerctl state\n"
 	      "  mixerctl reset\n"
-	      "  mixerctl raw    '{\"op\":...}'\n",
+	      "  mixerctl raw     '{\"op\":...}'\n"
+	      "\n"
+	      "Default FX per bus :\n"
+	      "  bus 0 = compressor  (params: threshold, ratio, attack, release, makeup)\n"
+	      "  bus 1 = reverb      (params: room_size, damping, wet)\n"
+	      "  bus 2 = delay       (params: delay_ms, feedback, wet)\n"
+	      "  bus 3 = eq 3-band   (params: low_gain, mid_gain, mid_freq, mid_q, high_gain)\n",
 	      stderr);
 }
 
@@ -84,6 +93,25 @@ int main(int argc, char **argv)
 		snprintf(json, sizeof(json),
 			 "{\"op\":\"set_fx_bus\",\"bus\":%s,\"gain\":%s}",
 			 argv[2], argv[3]);
+		return send_json(json);
+	}
+	if (!strcmp(argv[1], "fxp") && argc == 5) {
+		/* fxp <bus> <param> <value> — set effect parameter
+		 * ex: mixerctl fxp 0 threshold -20
+		 */
+		snprintf(json, sizeof(json),
+			 "{\"op\":\"set_fx_param\",\"bus\":%s,\"param\":\"%s\",\"value\":%s}",
+			 argv[2], argv[3], argv[4]);
+		return send_json(json);
+	}
+	if (!strcmp(argv[1], "getfx") && argc == 3) {
+		snprintf(json, sizeof(json),
+			 "{\"op\":\"get_fx\",\"bus\":%s}", argv[2]);
+		return send_json(json);
+	}
+	if (!strcmp(argv[1], "resetfx") && argc == 3) {
+		snprintf(json, sizeof(json),
+			 "{\"op\":\"reset_fx\",\"bus\":%s}", argv[2]);
 		return send_json(json);
 	}
 	if (!strcmp(argv[1], "mute") && argc == 4) {
