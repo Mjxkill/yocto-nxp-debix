@@ -164,8 +164,36 @@ Le mixer ne fait **aucun appel au DSP**. Il prend N inputs (DSP cap, USB cap, ph
 | **E6.i ✗** | Drainage agressif play_thread BLOCKING + N_PERIODS=2 (MAX_DRAIN_PERIODS=4) | **KO 2026-05-11 reverted** (`e32d184c` → `493d8217`) — empirique board : `ring_fill steady 768` (max, vs cible 0-96), latence côté play **20 ms** vs 12 ms E6.h. Cause : `snd_pcm_writei` blocking est self-limiting à 48 kHz → drain ne consomme jamais plus vite que la production → ring se remplit au max. Fiche `TESTS_V7.0_E6i.md` |
 | **E6.j ✗** | Drainage NONBLOCK `snd_pcm_writei` + `snd_pcm_avail_update` (path workers deepseek/glm) | **KO 2026-05-11 non commité** — empirique board : Δ ring_drops ~50 000 frames/s continu, Δ xrun ~7-11/s steady, ring_fill 672 + spikes 3456. Cause : `snd_pcm_writei` NONBLOCK retourne quasi-systématiquement `-EAGAIN` sur SOF i.MX8MP → drain ne s'exécute pas, audio_thread drop massif. Warning anticipé par les workers (comportement non vérifié sur SOF). Fiche `TESTS_V7.0_E6j.md` |
 | **E6.k ✗** | N_PERIODS=2 SEUL (logic play_thread blocking E6.h conservée 1:1) | **KO 2026-05-11 non commité** — empirique board : ring saturé MAX 768 (+14 ms vs E6.h), Δ ring_drops 19/s continu en steady, latence côté play **18-20 ms** vs 12-14 ms E6.h. Cause : réduire ALSA buffer (8 ms → 4 ms) transfère le tampon vers le ring SPSC car le système est self-régulé à 48 kHz. Gain ALSA -2 ms < régression ring +8 ms. Fiche `TESTS_V7.0_E6k.md` |
-| **E6.l ?** | Investigation alternative latence (critic_submit avec contexte des 3 échecs) | À planifier — voies à explorer : kernel/SOF patch, isolcpus, IRQ affinity, SOF ASYNC clock domain, mixer DSP SOF léger. Si pas de voie viable userspace : E6.h = baseline V7.0 finale, on passe à E7. |
-| **E7** | **GUI de test V7.0** : app Linux (Qt / Flutter / web) — mixer N×M visuel + sliders pour tous les paramètres effets DSP/TAC (kcontrols ALSA + SOF tplg) | tous effets pilotables en direct, audio reste < 14 ms (E6.h confirmé) |
+| **E6.l ✗** | Single-thread (suppression ring SPSC + play_thread + eventfd) + N_PERIODS=2 | **KO 2026-05-11 non commité** — empirique board : throughput effondré à **1 546 Hz (3.2 % nominal)**, `prof_iter_us` cyclique **122 ms** toutes les 5 s, Δ xrun **16/s**. Cause : recover SOF 60 ms en single-thread bloque cap+play **en cascade** (`prof_cap_us=60ms` ET `prof_play_us=60ms`). Le ring SPSC d'E6.h absorbait ces recover en isolant les threads — supprimé, cercle vicieux. Convergence avec théorème de Little (worker claude-code) : plancher physique architectural ~10 ms = cible inatteignable. Fiche `TESTS_V7.0_E6l.md` |
+| **E7** ⭐ | **GUI HTTP V7.0** : daemon C `mixer-gui-http` (libmicrohttpd) + frontend Alpine.js + Tailwind via CDN. Mixer N×M visuel + sliders effets DSP/TAC. Polling REST pour meters | tous effets pilotables en direct, audio reste **14 ms E6.h confirmé** (cible < 10 ms reportée V8.0) |
+
+### Bilan final optim latence userspace V7.0 (E6.i/j/k/l)
+
+**4 itérations empiriques d'optim latence userspace ont échoué** :
+
+| Sprint | Approche | Verdict | Latence mesurée |
+|---|---|---|---|
+| E6.h ✓ | eventfd + ring 8 périodes | baseline | 14 ms côté mixer |
+| E6.i ✗ | drainage blocking + MAX_DRAIN=4 | reverted | ring saturé 16 ms |
+| E6.j ✗ | drainage NONBLOCK + avail_update | non commité | EAGAIN systématique, drops 50k/s |
+| E6.k ✗ | N_PERIODS=2 seul | non commité | ring saturé 16 ms, +6 ms régression |
+| E6.l ✗ | single-thread + N_PERIODS=2 | non commité | recover cascade 122 ms, throughput 3.2 % |
+
+**Conclusion architecturale** (théorème de Little, claude-code worker) :
+
+> Plancher physique V7.0 = TAC ADC 0.5 + DMA RX 2 + cap pipe 0.5 + ALSA cap min 2
+> + mix 0.5 + ALSA play min 2 + DMA TX 2 + DAC 0.5 = **10 ms exact AVANT marge anti-xrun**.
+
+La cible < 10 ms acoustique V7.0 est **mathématiquement inatteignable** sans
+refonte. E6.h (14 ms côté mixer, ~20 ms E2E) est la **limite pratique** sur
+ce SOF i.MX8MP en userspace.
+
+**Décision** :
+- E6.h = **baseline V7.0 finale**, livrable stable
+- Cible < 10 ms reportée à **V8.0 mixer DSP SOF natif** (piste 2 convergence 4/5 workers, effort 4-8 semaines, gain structurel -8 à -14 ms en éliminant ring + 1 ALSA buffer + 1 DMA traversée)
+
+Investigation critic E6.l (job `f9547d24`, 6 workers, 688 s) documente cette
+conclusion avec analyse exhaustive des 17+ pistes alternatives.
 
 ### Bilan optim latence userspace (E6.i/j/k)
 
