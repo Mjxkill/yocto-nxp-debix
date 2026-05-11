@@ -1,0 +1,15 @@
+[Unit]
+Description=V7.0-E7 mixer-gui-http daemon (HTTP GUI for mixer-pro)
+After=network.target mixer-pro.service
+Wants=mixer-pro.service
+Documentation=https://github.com/Mjxkill/yocto-nxp-debix
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mixer-gui-http
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

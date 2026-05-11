@@ -27,6 +27,9 @@ IMAGE_INSTALL:append = " alsa-route-bridge"
 # V7.0-E6.d — mixer-pro daemon console DAW SW (26 in / 4 bus FX / 18 out)
 IMAGE_INSTALL:append = " mixer-pro"
 
+# V7.0-E7 — mixer-gui-http : GUI HTTP (libmicrohttpd + Alpine.js/Tailwind CDN)
+IMAGE_INSTALL:append = " mixer-gui-http"
+
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 

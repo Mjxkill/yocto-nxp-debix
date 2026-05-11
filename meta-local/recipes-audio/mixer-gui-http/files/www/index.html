@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mixer-pro · V7.0</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  .strip { width: 56px; }
+  input[type=range][orient=vertical] { writing-mode: bt-lr; -webkit-appearance: slider-vertical; }
+  body { background:#1e1e1e; color:#e0e0e0; }
+  .panel { background:#2a2a2a; border:1px solid #3a3a3a; border-radius:6px; }
+  .label-mini { font-size:10px; color:#aaa; }
+  .meter { height:80px; width:8px; background:#000; position:relative; border-radius:2px; }
+  .meter-fill { position:absolute; bottom:0; left:0; right:0; background:linear-gradient(0deg,#0f0 60%,#ff0 80%,#f00 100%); border-radius:2px; transition:height 50ms linear; }
+</style>
+</head>
+<body class="font-sans" x-data="mixerApp()" x-init="init()">
+
+<header class="p-3 border-b border-gray-700 flex items-center gap-4">
+  <h1 class="text-xl font-bold">mixer-pro</h1>
+  <span class="text-xs text-gray-400" x-text="'version: ' + state.version"></span>
+  <span class="text-xs text-gray-400" x-text="'frames: ' + state.frames"></span>
+  <span class="text-xs" :class="state.xrun_delta > 0 ? 'text-red-400' : 'text-gray-400'"
+        x-text="'xrun: ' + state.xrun + (state.xrun_delta > 0 ? ' (+'+state.xrun_delta+')' : '')"></span>
+  <span class="text-xs text-gray-400" x-text="'lat: ' + state.latency_us_one_way + ' µs ALSA'"></span>
+  <span class="text-xs text-gray-400" x-text="'iter: ' + state.prof_iter_us + ' µs'"></span>
+  <span class="ml-auto text-xs" :class="connected ? 'text-green-400' : 'text-red-400'"
+        x-text="connected ? '● connected' : '○ disconnected'"></span>
+</header>
+
+<!-- INPUTS -->
+<section class="p-3">
+  <h2 class="text-sm font-semibold mb-2 text-gray-300">INPUTS (26)</h2>
+  <div class="flex gap-1 overflow-x-auto">
+    <template x-for="i in 26" :key="i">
+      <div class="strip panel p-2 text-center">
+        <div class="text-xs font-mono truncate" x-text="inputLabel(i-1)"></div>
+        <div class="my-1 flex justify-center"><div class="meter"><div class="meter-fill" style="height:0%"></div></div></div>
+        <input type="range" min="-60" max="6" step="0.5" x-model.number="masterIn[i-1]"
+               @input.debounce.50ms="setMasterIn(i-1, $event.target.value)" class="w-full">
+        <div class="label-mini" x-text="masterIn[i-1].toFixed(1) + ' dB'"></div>
+        <button @click="toggleMute(i-1)" class="mt-1 w-full text-xs py-0.5 rounded"
+                :class="mute[i-1] ? 'bg-red-700' : 'bg-gray-700'">
+          <span x-text="mute[i-1] ? 'M' : '·'"></span>
+        </button>
+        <div class="mt-1 grid grid-cols-2 gap-0.5">
+          <template x-for="b in 4" :key="b">
+            <button class="text-xs py-0.5 rounded"
+                    :class="sends[i-1] && sends[i-1][b-1] ? 'bg-blue-600' : 'bg-gray-700'"
+                    @click="toggleSend(i-1, b-1)" x-text="'FX'+b"></button>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+</section>
+
+<!-- BUS FX -->
+<section class="p-3">
+  <h2 class="text-sm font-semibold mb-2 text-gray-300">BUS FX (4 stéréo)</h2>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+    <template x-for="b in 4" :key="b">
+      <div class="panel p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-bold text-sm" x-text="'BUS FX '+b"></span>
+          <span class="text-xs text-gray-400" x-text="fxType[b-1]"></span>
+        </div>
+        <div class="text-xs">
+          <label>Bus L gain: <span x-text="fxBusGain[(b-1)*2].toFixed(2)"></span></label>
+          <input type="range" min="0" max="2" step="0.01" x-model.number="fxBusGain[(b-1)*2]"
+                 @input.debounce.50ms="setFxBus((b-1)*2, $event.target.value)" class="w-full">
+          <label>Bus R gain: <span x-text="fxBusGain[(b-1)*2+1].toFixed(2)"></span></label>
+          <input type="range" min="0" max="2" step="0.01" x-model.number="fxBusGain[(b-1)*2+1]"
+                 @input.debounce.50ms="setFxBus((b-1)*2+1, $event.target.value)" class="w-full">
+        </div>
+        <button @click="resetFx(b-1)" class="mt-2 w-full text-xs py-1 rounded bg-yellow-700">
+          Reset FX
+        </button>
+      </div>
+    </template>
+  </div>
+</section>
+
+<!-- OUTPUTS -->
+<section class="p-3">
+  <h2 class="text-sm font-semibold mb-2 text-gray-300">OUTPUTS (18)</h2>
+  <div class="flex gap-1 overflow-x-auto">
+    <template x-for="o in 18" :key="o">
+      <div class="strip panel p-2 text-center">
+        <div class="text-xs font-mono truncate" x-text="outputLabel(o-1)"></div>
+        <div class="my-1 flex justify-center"><div class="meter"><div class="meter-fill" style="height:0%"></div></div></div>
+        <div class="label-mini">out</div>
+      </div>
+    </template>
+  </div>
+</section>
+
+<script>
+function mixerApp() {
+  return {
+    state: { version:'?', frames:0, xrun:0, xrun_delta:0, latency_us_one_way:0, prof_iter_us:0 },
+    connected: false,
+    masterIn: Array.from({length:26}, () => 0),
+    mute:     Array.from({length:26}, () => false),
+    sends:    Array.from({length:26}, () => Array(4).fill(false)),
+    fxBusGain: Array.from({length:8}, () => 1.0),
+    fxType: ['compressor','reverb','delay','eq'],
+    _prevXrun: 0,
+
+    async init() {
+      await this.poll();
+      setInterval(() => this.poll(), 500);
+    },
+
+    async poll() {
+      try {
+        const r = await fetch('/api/state');
+        if (!r.ok) { this.connected = false; return; }
+        const j = await r.json();
+        if (j.ok === false) { this.connected = false; return; }
+        this.connected = true;
+        this.state.xrun_delta = j.xrun - this._prevXrun;
+        this._prevXrun = j.xrun;
+        this.state = { ...this.state, ...j };
+      } catch (e) { this.connected = false; }
+    },
+
+    async sendCmd(obj) {
+      try {
+        await fetch('/api/cmd', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(obj)
+        });
+      } catch(e) {}
+    },
+
+    inputLabel(i) {
+      if (i < 8)  return 'M'+(i+1);
+      if (i < 16) return 'U'+(i-7);
+      if (i < 18) return 'P'+(i-15);
+      return 'R'+(i-17);
+    },
+    outputLabel(o) {
+      if (o < 8)  return 'S'+(o+1);
+      if (o < 16) return 'U'+(o-7);
+      return 'P'+(o-15);
+    },
+
+    dbToGain(db) { return Math.pow(10, db/20); },
+
+    setMasterIn(i, db) {
+      const gain = this.dbToGain(parseFloat(db));
+      this.sendCmd({op:'set_master', src:i, out:0, gain});  /* simplifié : tous outs */
+    },
+    toggleMute(i) {
+      this.mute[i] = !this.mute[i];
+      this.sendCmd({op:'set_mute', src:i, mute: this.mute[i] ? 1 : 0});
+    },
+    toggleSend(i, b) {
+      this.sends[i][b] = !this.sends[i][b];
+      const gain = this.sends[i][b] ? 1.0 : 0;
+      this.sendCmd({op:'set_send', in:i, bus:b*2,   gain});
+      this.sendCmd({op:'set_send', in:i, bus:b*2+1, gain});
+    },
+    setFxBus(busCh, gain) {
+      this.sendCmd({op:'set_fx_bus', bus:busCh, gain: parseFloat(gain)});
+    },
+    resetFx(b) {
+      this.sendCmd({op:'reset_fx', bus:b});
+    },
+  };
+}
+</script>
+</body>
+</html>
