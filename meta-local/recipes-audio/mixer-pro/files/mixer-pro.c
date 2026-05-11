@@ -8,11 +8,12 @@
  *
  * Contrôle : socket Unix /run/mixer-pro.sock — protocole JSON ligne par ligne.
  *
- *   { "op":"set_send",   "in":<0..25>, "bus":<0..7>, "gain":<float> }
- *   { "op":"set_master", "src":<0..33>, "out":<0..17>, "gain":<float> }
- *   { "op":"set_mute",   "src":<0..33>, "mute":<0|1> }
+ *   { "op":"set_send",       "in":<0..25>, "bus":<0..7>, "gain":<float> }
+ *   { "op":"set_master",     "src":<0..25>, "out":<0..17>, "gain":<float> }
+ *   { "op":"set_input_gain", "src":<0..25>, "gain":<float> }  (E7.2 strip)
+ *   { "op":"set_mute",       "src":<0..25>, "mute":<0|1> }
  *   { "op":"get_state" }     → réponse JSON multilignes
- *   { "op":"reset" }         → toutes matrix à 0
+ *   { "op":"reset" }         → matrix à 0, strip gain à 1
  */
 
 #define _GNU_SOURCE
@@ -62,6 +63,13 @@ struct mixer_state {
 
 	float fx_bus_gain[N_BUS_FX_CH];   /* gain bus output (post-effet, dry/wet implicite) */
 	float fx_bus_target[N_BUS_FX_CH];
+
+	/* E7.2 : strip gain par input (DAW channel fader). S'applique AVANT
+	 * sends + master, donc affecte uniformément FX sends et master routing.
+	 * Indexé 0..N_INPUT_TOTAL-1 = 18 inputs réels + 8 returns.
+	 */
+	float input_gain[N_INPUT_TOTAL];
+	float input_target[N_INPUT_TOTAL];
 
 	/* E6.e : 1 moteur d'effet par bus (4 bus × stéréo, géré par fx_engine).
 	 * Defaults : 0=compressor, 1=reverb, 2=delay, 3=eq.
@@ -240,6 +248,10 @@ static void smooth_gains(void)
 	for (int b = 0; b < N_BUS_FX_CH; b++)
 		g_st.fx_bus_gain[b] +=
 			alpha * (g_st.fx_bus_target[b] - g_st.fx_bus_gain[b]);
+
+	for (int i = 0; i < N_INPUT_TOTAL; i++)
+		g_st.input_gain[i] +=
+			alpha * (g_st.input_target[i] - g_st.input_gain[i]);
 }
 
 /* Process 1 frame du mixer. Modifié en place : in[]→out[].
@@ -249,13 +261,14 @@ static void smooth_gains(void)
 static void mix_frame(const float in[N_INPUT_REAL], float out[N_OUTPUT_TOTAL],
 		      float bus_out[N_BUS_FX_CH], float ret_out[N_RETURN_CH])
 {
-	/* 1. Sends : 18 inputs → 8 bus channels */
+	/* 1. Sends : 18 inputs → 8 bus channels (post-strip-gain E7.2) */
 	float bus[N_BUS_FX_CH] = {0};
 	for (int i = 0; i < N_INPUT_REAL; i++) {
 		if (g_st.mute_mask & (1u << i))
 			continue;
+		float v_in = in[i] * g_st.input_gain[i];
 		for (int b = 0; b < N_BUS_FX_CH; b++)
-			bus[b] += in[i] * g_st.send_gain[i][b];
+			bus[b] += v_in * g_st.send_gain[i][b];
 	}
 	if (bus_out)
 		memcpy(bus_out, bus, sizeof(bus));
@@ -284,7 +297,7 @@ static void mix_frame(const float in[N_INPUT_REAL], float out[N_OUTPUT_TOTAL],
 		for (int s = 0; s < N_INPUT_TOTAL; s++) {
 			if (g_st.mute_mask & (1u << s))
 				continue;
-			v += src[s] * g_st.master_gain[s][o];
+			v += src[s] * g_st.input_gain[s] * g_st.master_gain[s][o];
 		}
 		out[o] = v;
 	}
@@ -721,6 +734,23 @@ static void handle_cmd(int fd, const char *line)
 			 bus, gain);
 		write(fd, reply, strlen(reply));
 
+	} else if (json_has_op(line, "set_input_gain")) {
+		int src;
+		float gain = 1.0f;
+		if (json_get_int(line, "src", &src) < 0 ||
+		    json_get_float(line, "gain", &gain) < 0 ||
+		    src < 0 || src >= N_INPUT_TOTAL) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_input_gain args\"}\n");
+			return;
+		}
+		pthread_mutex_lock(&g_st.target_lock);
+		g_st.input_target[src] = gain;
+		pthread_mutex_unlock(&g_st.target_lock);
+		snprintf(reply, sizeof(reply),
+			 "{\"ok\":true,\"op\":\"set_input_gain\",\"src\":%d,\"gain\":%.4f}\n",
+			 src, gain);
+		write(fd, reply, strlen(reply));
+
 	} else if (json_has_op(line, "set_mute")) {
 		int src, mute;
 		if (json_get_int(line, "src", &src) < 0 ||
@@ -847,6 +877,8 @@ static void handle_cmd(int fd, const char *line)
 		memset(g_st.master_target, 0, sizeof(g_st.master_target));
 		for (int b = 0; b < N_BUS_FX_CH; b++)
 			g_st.fx_bus_target[b] = 1.0f;
+		for (int i = 0; i < N_INPUT_TOTAL; i++)
+			g_st.input_target[i] = 1.0f;
 		g_st.mute_mask = 0;
 		pthread_mutex_unlock(&g_st.target_lock);
 		dprintf(fd, "{\"ok\":true,\"op\":\"reset\"}\n");
@@ -949,6 +981,11 @@ int main(int argc, char **argv)
 	for (int b = 0; b < N_BUS_FX_CH; b++) {
 		g_st.fx_bus_gain[b]   = 1.0f;
 		g_st.fx_bus_target[b] = 1.0f;
+	}
+	/* E7.2 : strip gain = unity gain par défaut (1.0 = 0 dB), 26 inputs */
+	for (int i = 0; i < N_INPUT_TOTAL; i++) {
+		g_st.input_gain[i]   = 1.0f;
+		g_st.input_target[i] = 1.0f;
 	}
 	g_st.mute_mask = 0;
 	pthread_mutex_init(&g_st.target_lock, NULL);

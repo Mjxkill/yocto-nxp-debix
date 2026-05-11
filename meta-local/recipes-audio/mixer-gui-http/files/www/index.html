@@ -4,100 +4,652 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>mixer-pro · V7.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-<script src="https://cdn.tailwindcss.com"></script>
 <style>
-  .strip { width: 56px; }
-  input[type=range][orient=vertical] { writing-mode: bt-lr; -webkit-appearance: slider-vertical; }
-  body { background:#1e1e1e; color:#e0e0e0; }
-  .panel { background:#2a2a2a; border:1px solid #3a3a3a; border-radius:6px; }
-  .label-mini { font-size:10px; color:#aaa; }
-  .meter { height:80px; width:8px; background:#000; position:relative; border-radius:2px; }
-  .meter-fill { position:absolute; bottom:0; left:0; right:0; background:linear-gradient(0deg,#0f0 60%,#ff0 80%,#f00 100%); border-radius:2px; transition:height 50ms linear; }
+:root {
+  --bg-base:      #0c0d10;
+  --bg-panel:     rgba(28, 30, 36, 0.78);
+  --bg-strip:     linear-gradient(to bottom, rgba(255,255,255,0.025), rgba(0,0,0,0.04));
+  --border:       rgba(255, 255, 255, 0.08);
+  --border-hi:    rgba(255, 255, 255, 0.16);
+  --text-pri:     #e7e9ee;
+  --text-sec:     #8b8e95;
+  --text-mute:    #4d5058;
+  --accent:       #2dd4bf;
+  --accent-2:     #f59e0b;
+  --good:         #34d399;
+  --bad:          #ef4444;
+  --radius-lg:    10px;
+  --radius-md:    6px;
+  --shadow-glass: 0 1px 0 rgba(255,255,255,0.04) inset, 0 6px 20px rgba(0,0,0,0.45);
+  --transition:   180ms cubic-bezier(.4,0,.2,1);
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+  font-size: 13px; line-height: 1.4;
+  color: var(--text-pri);
+  background:
+    radial-gradient(1200px 800px at 10% -10%, #1a1d24 0%, transparent 60%),
+    radial-gradient(1000px 700px at 90% 110%, #1a2225 0%, transparent 60%),
+    var(--bg-base);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* ========== HEADER ========== */
+.app-header {
+  display: flex; align-items: center; gap: 14px;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  position: sticky; top: 0; z-index: 10;
+}
+.app-title {
+  font-size: 15px; font-weight: 700; letter-spacing: 0.2px;
+  display: flex; align-items: baseline; gap: 4px;
+}
+.app-title .dot-pre {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+  display: inline-block; margin-right: 6px; align-self: center;
+}
+.app-title .accent { color: var(--accent); }
+.app-stat {
+  font-size: 11px; color: var(--text-sec); font-variant-numeric: tabular-nums;
+}
+.app-stat .v { color: var(--text-pri); margin-left: 3px; }
+.app-stat.warn .v { color: var(--bad); }
+.spacer { flex: 1; }
+.status-pill {
+  font-size: 10px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border-hi);
+  background: rgba(255,255,255,0.02);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-mute);
+  transition: all var(--transition);
+}
+.status-pill .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-mute);
+}
+.status-pill.ok { color: var(--good); border-color: rgba(52,211,153,0.3); }
+.status-pill.ok .dot { background: var(--good); box-shadow: 0 0 6px var(--good); }
+.status-pill.bad { color: var(--bad); border-color: rgba(239,68,68,0.3); }
+.status-pill.bad .dot { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
+
+/* ========== CONSOLE ========== */
+.console {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  gap: 14px;
+}
+.section {
+  background: var(--bg-panel);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-glass);
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 10px;
+  position: relative;
+}
+.section.full { grid-column: 1 / -1; }
+.section-title {
+  display: flex; align-items: baseline; gap: 10px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px;
+  color: var(--text-sec); font-weight: 700;
+  padding-bottom: 9px; border-bottom: 1px solid var(--border);
+}
+.section-title .accent-dot {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--accent);
+}
+.section.fx .section-title .accent-dot { background: var(--accent-2); }
+.section.outputs .section-title .accent-dot { background: var(--good); }
+.section-title .count { color: var(--text-mute); font-weight: 500; letter-spacing: 0.5px; }
+
+.strips-row {
+  display: flex; gap: 5px; overflow-x: auto;
+  padding: 4px 2px;
+  scrollbar-width: thin;
+}
+.strips-row::-webkit-scrollbar { height: 6px; }
+.strips-row::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+.strips-row::-webkit-scrollbar-track { background: transparent; }
+
+/* ========== STRIP (input) ========== */
+.strip {
+  width: 58px; flex-shrink: 0;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 6px; padding: 8px 5px;
+  background: var(--bg-strip);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition), background var(--transition);
+}
+.strip:hover { border-color: var(--border-hi); }
+.strip .label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+  color: var(--text-pri); font-variant-numeric: tabular-nums;
+}
+.strip .sublabel { font-size: 8.5px; color: var(--text-mute); font-weight: 500; }
+
+.fader-meter-pair {
+  display: flex; gap: 5px; align-items: center;
+  margin: 2px 0;
+}
+.fader-track {
+  position: relative;
+  width: 18px; height: 140px;
+  display: flex; justify-content: center;
+}
+.fader-track::before {
+  /* groove */
+  content: '';
+  position: absolute; top: 4px; bottom: 4px; left: 50%;
+  width: 4px; transform: translateX(-50%);
+  background: rgba(0,0,0,0.6);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+}
+.fader-track::after {
+  /* unity gain tick */
+  content: '';
+  position: absolute; left: 0; right: 0; top: 26.5%;
+  height: 1px; background: rgba(255,255,255,0.15);
+}
+.fader {
+  position: absolute; inset: 0;
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  writing-mode: vertical-lr; direction: rtl;
+  width: 18px; height: 140px;
+  background: transparent; margin: 0;
+  cursor: ns-resize;
+}
+.fader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 24px; height: 14px; border-radius: 3px;
+  background: linear-gradient(to bottom, #f0f2f6 0%, #c4c8cf 45%, #8e9298 100%);
+  border: 1px solid #2a2c30;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.5), inset 0 -1px 0 rgba(0,0,0,0.2);
+  cursor: ns-resize;
+}
+.fader::-moz-range-thumb {
+  width: 24px; height: 14px; border-radius: 3px;
+  background: linear-gradient(to bottom, #f0f2f6 0%, #c4c8cf 45%, #8e9298 100%);
+  border: 1px solid #2a2c30;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+}
+.meter {
+  width: 6px; height: 140px;
+  background: linear-gradient(to top, #000 0%, #0c0d10 100%);
+  border: 1px solid rgba(0,0,0,0.6);
+  border-radius: 3px; overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 0 4px rgba(0,0,0,0.7);
+}
+.meter-fill {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(to top,
+    #16a34a 0%, #84cc16 55%, #facc15 78%, #f97316 92%, #ef4444 100%);
+  transition: height 60ms linear;
+  border-radius: 3px 3px 0 0;
+}
+
+.db-readout {
+  font-size: 9.5px; font-variant-numeric: tabular-nums; font-weight: 500;
+  color: var(--text-sec); min-height: 12px;
+}
+
+.btn-tiny {
+  font-size: 9px; font-weight: 600; letter-spacing: 0.4px;
+  padding: 3px 0; width: 100%; line-height: 1.1;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.025);
+  color: var(--text-sec);
+  border-radius: 4px; cursor: pointer;
+  transition: all var(--transition);
+  text-transform: uppercase;
+}
+.btn-tiny:hover { background: rgba(255,255,255,0.06); color: var(--text-pri); border-color: var(--border-hi); }
+.btn-tiny.on {
+  background: var(--bad); color: white;
+  border-color: var(--bad);
+  box-shadow: 0 0 8px rgba(239,68,68,0.4);
+}
+.btn-tiny.send.on {
+  background: var(--accent); color: #0b0c0f;
+  border-color: var(--accent);
+  box-shadow: 0 0 6px rgba(45,212,191,0.3);
+}
+.send-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
+  width: 100%; margin-top: 2px;
+}
+.send-grid .btn-tiny { padding: 2px 0; font-size: 8.5px; }
+
+/* ========== BUS FX cards ========== */
+.fx-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+.fx-card {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.06) 0%, rgba(245, 158, 11, 0.01) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  transition: border-color var(--transition);
+}
+.fx-card:hover { border-color: rgba(245, 158, 11, 0.35); }
+.fx-card .fx-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 10px;
+}
+.fx-card .fx-name {
+  font-size: 12px; font-weight: 700; color: var(--accent-2);
+  letter-spacing: 0.4px;
+}
+.fx-card .fx-type {
+  font-size: 9.5px; color: var(--text-sec);
+  text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600;
+}
+.fx-card .fx-row {
+  display: flex; gap: 8px; align-items: center; margin-bottom: 6px;
+}
+.fx-card .fx-row-label { font-size: 10px; color: var(--text-sec); width: 38px; font-weight: 500; }
+.fx-card .fx-slider {
+  flex: 1; height: 6px; border-radius: 3px;
+  -webkit-appearance: none; appearance: none;
+  background: rgba(0,0,0,0.5);
+  outline: none;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+}
+.fx-card .fx-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent-2);
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(245,158,11,0.5), 0 1px 2px rgba(0,0,0,0.5);
+}
+.fx-card .fx-slider::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent-2);
+  box-shadow: 0 0 6px rgba(245,158,11,0.5);
+  border: 0;
+}
+.fx-card .fx-val {
+  font-size: 10px; font-variant-numeric: tabular-nums; font-weight: 600;
+  color: var(--text-pri); width: 36px; text-align: right;
+}
+.fx-card .fx-meters {
+  display: flex; gap: 4px; align-items: flex-end;
+  height: 44px; margin: 8px 0 10px 0;
+  padding: 0 4px;
+}
+.fx-card .fx-mini-meter {
+  flex: 1; height: 100%;
+  background: linear-gradient(to top, #000, #0c0d10);
+  border: 1px solid rgba(0,0,0,0.6);
+  border-radius: 2px; overflow: hidden; position: relative;
+}
+.fx-card .fx-mini-meter .fill {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(to top, #16a34a, #facc15, #ef4444);
+  transition: height 60ms linear;
+}
+.fx-card .fx-reset {
+  width: 100%; font-size: 10px; font-weight: 600;
+  background: rgba(245, 158, 11, 0.1); color: var(--accent-2);
+  border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 4px;
+  padding: 5px; cursor: pointer; margin-top: 4px;
+  transition: all var(--transition);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.fx-card .fx-reset:hover { background: rgba(245, 158, 11, 0.2); }
+.fx-card .fx-placeholder-knobs {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(245,158,11,0.1);
+}
+.knob-placeholder {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  opacity: 0.5;
+}
+.knob-svg {
+  width: 32px; height: 32px;
+}
+.knob-label {
+  font-size: 8px; color: var(--text-mute);
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+
+/* ========== OUTPUTS (master) ========== */
+.section.outputs {
+  background: linear-gradient(135deg, rgba(52, 211, 153, 0.04) 0%, var(--bg-panel) 60%);
+  border-color: rgba(52,211,153,0.15);
+}
+.outputs-groups {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+.out-group .out-group-title {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-sec); font-weight: 600;
+  margin-bottom: 6px;
+}
+
+/* utility */
+.tag {
+  display: inline-block;
+  font-size: 8px; padding: 2px 6px; border-radius: 999px;
+  background: rgba(45,212,191,0.1); color: var(--accent);
+  border: 1px solid rgba(45,212,191,0.3);
+  text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+}
 </style>
 </head>
-<body class="font-sans" x-data="mixerApp()" x-init="init()">
+<body x-data="mixerApp()" x-init="init()">
 
-<header class="p-3 border-b border-gray-700 flex items-center gap-4">
-  <h1 class="text-xl font-bold">mixer-pro</h1>
-  <span class="text-xs text-gray-400" x-text="'version: ' + state.version"></span>
-  <span class="text-xs text-gray-400" x-text="'frames: ' + state.frames"></span>
-  <span class="text-xs" :class="state.xrun_delta > 0 ? 'text-red-400' : 'text-gray-400'"
-        x-text="'xrun: ' + state.xrun + (state.xrun_delta > 0 ? ' (+'+state.xrun_delta+')' : '')"></span>
-  <span class="text-xs text-gray-400" x-text="'lat: ' + state.latency_us_one_way + ' µs ALSA'"></span>
-  <span class="text-xs text-gray-400" x-text="'iter: ' + state.prof_iter_us + ' µs'"></span>
-  <span class="ml-auto text-xs" :class="connected ? 'text-green-400' : 'text-red-400'"
-        x-text="connected ? '● connected' : '○ disconnected'"></span>
-  <span class="text-xs" :class="streaming ? 'text-green-400' : 'text-gray-500'"
-        x-text="streaming ? '◉ SSE 30Hz' : '○ no stream'"></span>
+<!-- ===== HEADER ===== -->
+<header class="app-header">
+  <div class="app-title"><span class="dot-pre"></span>mixer<span class="accent">·pro</span></div>
+  <span class="tag" x-text="state.version">v?</span>
+  <div class="app-stat">frames <span class="v" x-text="state.frames"></span></div>
+  <div class="app-stat" :class="state.xrun_delta > 0 ? 'warn' : ''">
+    xrun <span class="v" x-text="state.xrun + (state.xrun_delta > 0 ? ' (+'+state.xrun_delta+')' : '')"></span>
+  </div>
+  <div class="app-stat">lat <span class="v" x-text="state.latency_us_one_way"></span> µs</div>
+  <div class="app-stat">iter <span class="v" x-text="state.prof_iter_us"></span> µs</div>
+  <div class="spacer"></div>
+  <span class="status-pill" :class="connected ? 'ok' : 'bad'">
+    <span class="dot"></span><span x-text="connected ? 'Connected' : 'Offline'"></span>
+  </span>
+  <span class="status-pill" :class="streaming ? 'ok' : ''">
+    <span class="dot"></span><span x-text="streaming ? 'SSE 30Hz' : 'No stream'"></span>
+  </span>
 </header>
 
-<!-- INPUTS -->
-<section class="p-3">
-  <h2 class="text-sm font-semibold mb-2 text-gray-300">INPUTS (26)</h2>
-  <div class="flex gap-1 overflow-x-auto">
-    <template x-for="i in 26" :key="i">
-      <div class="strip panel p-2 text-center">
-        <div class="text-xs font-mono truncate" x-text="inputLabel(i-1)"></div>
-        <div class="my-1 flex justify-center"><div class="meter"><div class="meter-fill" :style="'height:' + peakDbPercent(peakIn[i-1]) + '%'"></div></div></div>
-        <input type="range" min="-60" max="6" step="0.5" x-model.number="masterIn[i-1]"
-               @input.debounce.50ms="setMasterIn(i-1, $event.target.value)" class="w-full">
-        <div class="label-mini" x-text="masterIn[i-1].toFixed(1) + ' dB'"></div>
-        <button @click="toggleMute(i-1)" class="mt-1 w-full text-xs py-0.5 rounded"
-                :class="mute[i-1] ? 'bg-red-700' : 'bg-gray-700'">
-          <span x-text="mute[i-1] ? 'M' : '·'"></span>
-        </button>
-        <div class="mt-1 grid grid-cols-2 gap-0.5">
-          <template x-for="b in 4" :key="b">
-            <button class="text-xs py-0.5 rounded"
-                    :class="sends[i-1] && sends[i-1][b-1] ? 'bg-blue-600' : 'bg-gray-700'"
-                    @click="toggleSend(i-1, b-1)" x-text="'FX'+b"></button>
+<!-- ===== CONSOLE ===== -->
+<div class="console">
+
+  <!-- ---------- DSP MICS ---------- -->
+  <section class="section">
+    <div class="section-title">
+      <span class="accent-dot"></span>DSP MICS
+      <span class="count">×8 · post-TAC ADC chain</span>
+    </div>
+    <div class="strips-row">
+      <template x-for="i in 8" :key="'mic'+i">
+        <div class="strip">
+          <div class="label" x-text="'M' + i"></div>
+          <div class="sublabel">DSP</div>
+          <div class="fader-meter-pair">
+            <div class="fader-track">
+              <input type="range" class="fader" min="-60" max="6" step="0.5"
+                     x-model.number="masterIn[i-1]"
+                     @input.debounce.50ms="setMasterIn(i-1, $event.target.value)">
+            </div>
+            <div class="meter">
+              <div class="meter-fill" :style="'height:' + peakDbPercent(peakIn[i-1]) + '%'"></div>
+            </div>
+          </div>
+          <div class="db-readout" x-text="masterIn[i-1].toFixed(1) + ' dB'"></div>
+          <button class="btn-tiny" :class="mute[i-1] ? 'on' : ''"
+                  @click="toggleMute(i-1)" x-text="mute[i-1] ? 'Mute' : 'M'"></button>
+          <div class="send-grid">
+            <template x-for="b in 4" :key="b">
+              <button class="btn-tiny send"
+                      :class="sends[i-1] && sends[i-1][b-1] ? 'on' : ''"
+                      @click="toggleSend(i-1, b-1)" x-text="'FX'+b"></button>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ---------- ASIO IN ---------- -->
+  <section class="section">
+    <div class="section-title">
+      <span class="accent-dot"></span>USB ASIO IN
+      <span class="count">×8 · stems DAW</span>
+    </div>
+    <div class="strips-row">
+      <template x-for="i in 8" :key="'asio'+i">
+        <div class="strip">
+          <div class="label" x-text="'U' + i"></div>
+          <div class="sublabel">UAC2</div>
+          <div class="fader-meter-pair">
+            <div class="fader-track">
+              <input type="range" class="fader" min="-60" max="6" step="0.5"
+                     x-model.number="masterIn[i+7]"
+                     @input.debounce.50ms="setMasterIn(i+7, $event.target.value)">
+            </div>
+            <div class="meter">
+              <div class="meter-fill" :style="'height:' + peakDbPercent(peakIn[i+7]) + '%'"></div>
+            </div>
+          </div>
+          <div class="db-readout" x-text="masterIn[i+7].toFixed(1) + ' dB'"></div>
+          <button class="btn-tiny" :class="mute[i+7] ? 'on' : ''"
+                  @click="toggleMute(i+7)" x-text="mute[i+7] ? 'Mute' : 'M'"></button>
+          <div class="send-grid">
+            <template x-for="b in 4" :key="b">
+              <button class="btn-tiny send"
+                      :class="sends[i+7] && sends[i+7][b-1] ? 'on' : ''"
+                      @click="toggleSend(i+7, b-1)" x-text="'FX'+b"></button>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ---------- PHONE ---------- -->
+  <section class="section">
+    <div class="section-title">
+      <span class="accent-dot"></span>PHONE
+      <span class="count">×2 · VoIP loopback</span>
+    </div>
+    <div class="strips-row">
+      <template x-for="i in 2" :key="'ph'+i">
+        <div class="strip">
+          <div class="label" x-text="'P' + i"></div>
+          <div class="sublabel">aloop</div>
+          <div class="fader-meter-pair">
+            <div class="fader-track">
+              <input type="range" class="fader" min="-60" max="6" step="0.5"
+                     x-model.number="masterIn[i+15]"
+                     @input.debounce.50ms="setMasterIn(i+15, $event.target.value)">
+            </div>
+            <div class="meter">
+              <div class="meter-fill" :style="'height:' + peakDbPercent(peakIn[i+15]) + '%'"></div>
+            </div>
+          </div>
+          <div class="db-readout" x-text="masterIn[i+15].toFixed(1) + ' dB'"></div>
+          <button class="btn-tiny" :class="mute[i+15] ? 'on' : ''"
+                  @click="toggleMute(i+15)" x-text="mute[i+15] ? 'Mute' : 'M'"></button>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ---------- RETURNS FX ---------- -->
+  <section class="section">
+    <div class="section-title">
+      <span class="accent-dot"></span>RETURNS FX
+      <span class="count">×8 · post-effets 4 bus stéréo</span>
+    </div>
+    <div class="strips-row">
+      <template x-for="i in 8" :key="'ret'+i">
+        <div class="strip">
+          <div class="label" x-text="'R' + i"></div>
+          <div class="sublabel" x-text="'FX' + (Math.floor((i-1)/2) + 1) + (i%2 ? 'L' : 'R')"></div>
+          <div class="fader-meter-pair">
+            <div class="fader-track">
+              <input type="range" class="fader" min="-60" max="6" step="0.5"
+                     x-model.number="masterIn[i+17]"
+                     @input.debounce.50ms="setMasterIn(i+17, $event.target.value)">
+            </div>
+            <div class="meter">
+              <div class="meter-fill" :style="'height:' + peakDbPercent(peakIn[i+17]) + '%'"></div>
+            </div>
+          </div>
+          <div class="db-readout" x-text="masterIn[i+17].toFixed(1) + ' dB'"></div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ---------- BUS FX SEND (4 stereo) ---------- -->
+  <section class="section fx full">
+    <div class="section-title">
+      <span class="accent-dot"></span>BUS FX SEND
+      <span class="count">×4 stéréo · compressor / reverb / delay / EQ</span>
+    </div>
+    <div class="fx-grid">
+      <template x-for="b in 4" :key="'fx'+b">
+        <div class="fx-card">
+          <div class="fx-head">
+            <span class="fx-name" x-text="'BUS FX ' + b"></span>
+            <span class="fx-type" x-text="fxType[b-1]"></span>
+          </div>
+          <div class="fx-meters">
+            <div class="fx-mini-meter">
+              <div class="fill" :style="'height:' + peakDbPercent(peakFx[(b-1)*2]) + '%'"></div>
+            </div>
+            <div class="fx-mini-meter">
+              <div class="fill" :style="'height:' + peakDbPercent(peakFx[(b-1)*2+1]) + '%'"></div>
+            </div>
+          </div>
+          <div class="fx-row">
+            <span class="fx-row-label">L gain</span>
+            <input type="range" class="fx-slider" min="0" max="2" step="0.01"
+                   x-model.number="fxBusGain[(b-1)*2]"
+                   @input.debounce.50ms="setFxBus((b-1)*2, $event.target.value)">
+            <span class="fx-val" x-text="fxBusGain[(b-1)*2].toFixed(2)"></span>
+          </div>
+          <div class="fx-row">
+            <span class="fx-row-label">R gain</span>
+            <input type="range" class="fx-slider" min="0" max="2" step="0.01"
+                   x-model.number="fxBusGain[(b-1)*2+1]"
+                   @input.debounce.50ms="setFxBus((b-1)*2+1, $event.target.value)">
+            <span class="fx-val" x-text="fxBusGain[(b-1)*2+1].toFixed(2)"></span>
+          </div>
+          <!-- placeholder knobs (E7.3 will wire actual params) -->
+          <div class="fx-placeholder-knobs">
+            <div class="knob-placeholder" title="E7.3 — to wire">
+              <svg class="knob-svg" viewBox="0 0 40 40">
+                <circle cx="20" cy="20" r="16" fill="#1c1e24" stroke="#3a3d44" stroke-width="1"/>
+                <circle cx="20" cy="20" r="13" fill="none" stroke="#f59e0b" stroke-width="2"
+                        stroke-dasharray="40 100" stroke-linecap="round"
+                        transform="rotate(-220 20 20)" opacity="0.55"/>
+                <line x1="20" y1="9" x2="20" y2="14" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+              <span class="knob-label">P1</span>
+            </div>
+            <div class="knob-placeholder">
+              <svg class="knob-svg" viewBox="0 0 40 40">
+                <circle cx="20" cy="20" r="16" fill="#1c1e24" stroke="#3a3d44" stroke-width="1"/>
+                <circle cx="20" cy="20" r="13" fill="none" stroke="#f59e0b" stroke-width="2"
+                        stroke-dasharray="55 100" stroke-linecap="round"
+                        transform="rotate(-200 20 20)" opacity="0.55"/>
+                <line x1="20" y1="9" x2="20" y2="14" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"
+                      transform="rotate(20 20 20)"/>
+              </svg>
+              <span class="knob-label">P2</span>
+            </div>
+            <div class="knob-placeholder">
+              <svg class="knob-svg" viewBox="0 0 40 40">
+                <circle cx="20" cy="20" r="16" fill="#1c1e24" stroke="#3a3d44" stroke-width="1"/>
+                <circle cx="20" cy="20" r="13" fill="none" stroke="#f59e0b" stroke-width="2"
+                        stroke-dasharray="70 100" stroke-linecap="round"
+                        transform="rotate(-180 20 20)" opacity="0.55"/>
+                <line x1="20" y1="9" x2="20" y2="14" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"
+                      transform="rotate(40 20 20)"/>
+              </svg>
+              <span class="knob-label">P3</span>
+            </div>
+          </div>
+          <button class="fx-reset" @click="resetFx(b-1)">Reset bus</button>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ---------- OUTPUTS (master section) ---------- -->
+  <section class="section outputs full">
+    <div class="section-title">
+      <span class="accent-dot"></span>OUTPUTS
+      <span class="count">×18 · DSP play / USB ASIO out / Phone out</span>
+    </div>
+    <div class="outputs-groups">
+      <div class="out-group">
+        <div class="out-group-title">DSP PLAY · ×8</div>
+        <div class="strips-row">
+          <template x-for="o in 8" :key="'op'+o">
+            <div class="strip">
+              <div class="label" x-text="'S' + o"></div>
+              <div class="sublabel">DSP</div>
+              <div class="fader-meter-pair" style="justify-content:center;">
+                <div class="meter" style="width:8px">
+                  <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o-1]) + '%'"></div>
+                </div>
+              </div>
+              <div class="db-readout" x-text="peakDb(peakOut[o-1]).toFixed(0) + ' dB'"></div>
+            </div>
           </template>
         </div>
       </div>
-    </template>
-  </div>
-</section>
-
-<!-- BUS FX -->
-<section class="p-3">
-  <h2 class="text-sm font-semibold mb-2 text-gray-300">BUS FX (4 stéréo)</h2>
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
-    <template x-for="b in 4" :key="b">
-      <div class="panel p-3">
-        <div class="flex items-center justify-between mb-2">
-          <span class="font-bold text-sm" x-text="'BUS FX '+b"></span>
-          <span class="text-xs text-gray-400" x-text="fxType[b-1]"></span>
+      <div class="out-group">
+        <div class="out-group-title">USB ASIO OUT · ×8</div>
+        <div class="strips-row">
+          <template x-for="o in 8" :key="'ou'+o">
+            <div class="strip">
+              <div class="label" x-text="'U' + o"></div>
+              <div class="sublabel">UAC2</div>
+              <div class="fader-meter-pair" style="justify-content:center;">
+                <div class="meter" style="width:8px">
+                  <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o+7]) + '%'"></div>
+                </div>
+              </div>
+              <div class="db-readout" x-text="peakDb(peakOut[o+7]).toFixed(0) + ' dB'"></div>
+            </div>
+          </template>
         </div>
-        <div class="text-xs">
-          <label>Bus L gain: <span x-text="fxBusGain[(b-1)*2].toFixed(2)"></span></label>
-          <input type="range" min="0" max="2" step="0.01" x-model.number="fxBusGain[(b-1)*2]"
-                 @input.debounce.50ms="setFxBus((b-1)*2, $event.target.value)" class="w-full">
-          <label>Bus R gain: <span x-text="fxBusGain[(b-1)*2+1].toFixed(2)"></span></label>
-          <input type="range" min="0" max="2" step="0.01" x-model.number="fxBusGain[(b-1)*2+1]"
-                 @input.debounce.50ms="setFxBus((b-1)*2+1, $event.target.value)" class="w-full">
+      </div>
+      <div class="out-group">
+        <div class="out-group-title">PHONE OUT · ×2</div>
+        <div class="strips-row">
+          <template x-for="o in 2" :key="'op2'+o">
+            <div class="strip">
+              <div class="label" x-text="'P' + o"></div>
+              <div class="sublabel">aloop</div>
+              <div class="fader-meter-pair" style="justify-content:center;">
+                <div class="meter" style="width:8px">
+                  <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o+15]) + '%'"></div>
+                </div>
+              </div>
+              <div class="db-readout" x-text="peakDb(peakOut[o+15]).toFixed(0) + ' dB'"></div>
+            </div>
+          </template>
         </div>
-        <button @click="resetFx(b-1)" class="mt-2 w-full text-xs py-1 rounded bg-yellow-700">
-          Reset FX
-        </button>
       </div>
-    </template>
-  </div>
-</section>
+    </div>
+  </section>
 
-<!-- OUTPUTS -->
-<section class="p-3">
-  <h2 class="text-sm font-semibold mb-2 text-gray-300">OUTPUTS (18)</h2>
-  <div class="flex gap-1 overflow-x-auto">
-    <template x-for="o in 18" :key="o">
-      <div class="strip panel p-2 text-center">
-        <div class="text-xs font-mono truncate" x-text="outputLabel(o-1)"></div>
-        <div class="my-1 flex justify-center"><div class="meter"><div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o-1]) + '%'"></div></div></div>
-        <div class="label-mini" x-text="peakDb(peakOut[o-1]).toFixed(0) + ' dB'"></div>
-      </div>
-    </template>
-  </div>
-</section>
+</div>
 
 <script>
 function mixerApp() {
@@ -109,7 +661,7 @@ function mixerApp() {
     mute:     Array.from({length:26}, () => false),
     sends:    Array.from({length:26}, () => Array(4).fill(false)),
     fxBusGain: Array.from({length:8}, () => 1.0),
-    fxType: ['compressor','reverb','delay','eq'],
+    fxType: ['Compressor','Reverb','Delay','EQ'],
     peakIn:  Array.from({length:26}, () => 0),
     peakOut: Array.from({length:18}, () => 0),
     peakFx:  Array.from({length:8},  () => 0),
@@ -141,10 +693,8 @@ function mixerApp() {
       if (!p || p === 0) return -120;
       return 20 * Math.log10(p / 2147483647.0);
     },
-
     peakDbPercent(p) {
       const db = this.peakDb(p);
-      /* Échelle -60 → 0 dBFS mappée 0 → 100 % */
       return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
     },
 
@@ -171,23 +721,13 @@ function mixerApp() {
       } catch(e) {}
     },
 
-    inputLabel(i) {
-      if (i < 8)  return 'M'+(i+1);
-      if (i < 16) return 'U'+(i-7);
-      if (i < 18) return 'P'+(i-15);
-      return 'R'+(i-17);
-    },
-    outputLabel(o) {
-      if (o < 8)  return 'S'+(o+1);
-      if (o < 16) return 'U'+(o-7);
-      return 'P'+(o-15);
-    },
-
     dbToGain(db) { return Math.pow(10, db/20); },
 
     setMasterIn(i, db) {
+      /* E7.2 : strip fader = per-input gain (post-fader), affecte
+       * uniformément sends FX + master matrix côté mixer-pro. */
       const gain = this.dbToGain(parseFloat(db));
-      this.sendCmd({op:'set_master', src:i, out:0, gain});  /* simplifié : tous outs */
+      this.sendCmd({op:'set_input_gain', src:i, gain});
     },
     toggleMute(i) {
       this.mute[i] = !this.mute[i];
