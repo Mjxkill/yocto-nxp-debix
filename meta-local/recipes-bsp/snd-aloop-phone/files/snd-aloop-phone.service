@@ -1,0 +1,11 @@
+[Unit]
+Description=V7.0-E6.b Phone simulated PCM (snd-aloop 2x2)
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/modprobe snd-aloop
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
