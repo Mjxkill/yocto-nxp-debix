@@ -1,0 +1,22 @@
+[Unit]
+Description=V7.0-E6.d mixer-pro daemon (console DAW SW, 26 in / 4 bus FX / 18 out)
+After=sound.target snd-aloop-phone.service usb-uac2-gadget.service
+Documentation=man:mixer-pro(8) file:///etc/alsa-route-bridge.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mixer-pro
+Restart=on-failure
+RestartSec=2
+
+# RT capabilities
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=80
+
+# Run as root (need SCHED_FIFO + mlockall + audio group)
+User=root
+
+[Install]
+WantedBy=multi-user.target

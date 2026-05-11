@@ -24,6 +24,9 @@ IMAGE_INSTALL:append = " snd-aloop-phone"
 # V7.0-E6.c — ALSA route bridge (matrice N×M déclarative, disabled by default)
 IMAGE_INSTALL:append = " alsa-route-bridge"
 
+# V7.0-E6.d — mixer-pro daemon console DAW SW (26 in / 4 bus FX / 18 out)
+IMAGE_INSTALL:append = " mixer-pro"
+
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 

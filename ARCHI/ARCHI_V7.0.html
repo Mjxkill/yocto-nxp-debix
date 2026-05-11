@@ -631,7 +631,8 @@
       <tr><td><b>E5 ✓</b></td><td>Tap OUT post-FX (PIPE 2) : plomberie livrée en E4 (refactor dual-tap), validation empirique E5</td><td><b>GO 2026-05-11</b> — modulation PGA Strip1 -40 dB visible exactement sur tap-out, tap-in/-out simultanés OK</td></tr>
       <tr><td><b>E6.a ✓</b></td><td>USB gadget UAC2 8×8 isolé (configfs + systemd, <code>libcomposite + usb_f_uac2</code> builtin)</td><td><b>GO 2026-05-11</b> — bidir validé : PC→board sine 880 -4.4 dBFS, board→PC sine 440 -6 dBFS sur 8 voies, format S32_LE 48 kHz négocié high-speed, 0 régression DSP</td></tr>
       <tr><td><b>E6.b ✓</b></td><td>Téléphone 2×2 (snd-aloop simulé, faute de modem hardware)</td><td><b>GO 2026-05-11</b> — card 10 <code>Phone</code>, sine 1 kHz aloop bidir préservé -6 dBFS</td></tr>
-      <tr><td><b>E6.c ✓</b></td><td>Routing mixer N×M (alsa-route-bridge déclaratif via alsaloop)</td><td><b>GO 2026-05-11</b> — route E2E DSP cap → UAC2 → PC <code>arecord</code> validée (4.6 MB/3 s, débit nominal). PipeWire dispo en réserve</td></tr>
+      <tr><td><b>E6.c ✓</b></td><td>Routing ALSA paire-à-paire (alsa-route-bridge déclaratif via alsaloop)</td><td><b>GO 2026-05-11</b> — route E2E DSP cap → UAC2 → PC <code>arecord</code> validée (4.6 MB/3 s, débit nominal). PipeWire dispo en réserve</td></tr>
+      <tr><td><b>E6.d ✓ MVP</b></td><td>Mixer console DAW SW (<code>mixer-pro</code> daemon C) — 26 in × 18 out, 4 bus FX stéréo + sends, socket JSON <code>/run/mixer-pro.sock</code></td><td><b>GO MVP 2026-05-11</b> — matrice précise (voies non routées = -inf dB), control socket fonctionnel. Throughput 57 % nominal (TODO PREEMPT_RT), bus FX en passthrough (TODO E6.e LV2 plugins)</td></tr>
       <tr><td><b>E7</b></td><td><b>GUI de test V7.0</b> : app Linux (Qt / Flutter / web) — mixer N×M visuel + sliders pour <b>tous les effets de la chaîne unifiée</b> : TAC ADC (AGC, HPF, biquads, gain, decim) + DSP cap (multiband_drc, drc, pga) + DSP play (multiband_drc, pga, drc) + TAC DAC (interp, biquads, DRC, gain, limiter, foldback, VAD, tone gen)</td><td>tous effets TAC + DSP pilotables en direct depuis le GUI, audio reste &lt; 10 ms</td></tr>
     </tbody>
   </table>
@@ -789,7 +790,8 @@
       <tr><td><b>E5</b></td><td><code>v7.0-e5</code></td><td>Tap OUT post-FX + 2e reserved-mem + <code>/dev/imx-audio-tap-out</code></td><td><code>TESTS_V7.0_E5.md</code></td><td>E4 GO</td></tr>
       <tr><td><b>E6.a ✓</b></td><td><code>v7.0-e6a</code></td><td>USB gadget UAC2 8×8 isolé (configfs + systemd)</td><td><code>TESTS_V7.0_E6a.md</code></td><td>E5 GO</td></tr>
       <tr><td><b>E6.b ✓</b></td><td><code>v7.0-e6b</code></td><td>Téléphone 2×2 (snd-aloop simulé)</td><td><code>TESTS_V7.0_E6b.md</code></td><td>E6.a GO</td></tr>
-      <tr><td><b>E6.c ✓</b></td><td><code>v7.0-e6c</code></td><td>Routing mixer N×M (alsa-route-bridge via alsaloop)</td><td><code>TESTS_V7.0_E6c.md</code></td><td>E6.b GO</td></tr>
+      <tr><td><b>E6.c ✓</b></td><td><code>v7.0-e6c</code></td><td>Routing ALSA paire-à-paire (alsa-route-bridge via alsaloop)</td><td><code>TESTS_V7.0_E6c.md</code></td><td>E6.b GO</td></tr>
+      <tr><td><b>E6.d ✓ MVP</b></td><td><code>v7.0-e6d</code></td><td>Mixer-pro console DAW SW (26 in / 4 bus FX / 18 out + socket JSON)</td><td><code>TESTS_V7.0_E6d.md</code></td><td>E6.c GO</td></tr>
       <tr><td><b>E7</b></td><td><code>v7.0-e7</code></td><td>GUI test V7.0 — pilotage de tous les effets TAC + DSP en direct</td><td><code>TESTS_V7.0_E7.md</code></td><td>E6 GO</td></tr>
     </tbody>
   </table>
