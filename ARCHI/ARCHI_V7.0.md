@@ -152,7 +152,7 @@ Le mixer ne fait **aucun appel au DSP**. Il prend N inputs (DSP cap, USB cap, ph
 | **E2** | Pipe cap : remplacer `eq_iir` par `multiband_drc` (8 ch multi-blob, patch state arrays) | 8 multibandes indép, latence E1 préservée |
 | **E3** | Pipe play : strips OUT `multiband_drc → pga` (8 ch indép) — drc final retiré après diag tic tic | 8 voies play indép, audio OK, latence préservée |
 | **E4 ✓** | **Tap IN brut** (PIPE 1) : `apply-npu-tap-dt.py` refactoré 2 carves + 2 nodes, module multi-instance via prop DT `device-name`, hook firmware `dai_dma_cb` capture, `/dev/imx-audio-tap-in` + `/dev/imx-audio-tap-out` exposés | **GO 2026-05-11** — tap-in 1.22 MB/s, tap-out V3.2.2 non régressé, loopback E3 préservé |
-| **E5** | **Tap OUT post-FX** (PIPE 2) : 2e reserved-mem `tap-out`, hook post-strips/pre-DAI TX, `/dev/imx-audio-tap-out` | dump 1 s 8 ch post-effets ≠ signal mixer entrant |
+| **E5 ✓** | **Tap OUT post-FX** (PIPE 2) : plomberie livrée en E4 (refactor dual-tap), validation empirique en E5 | **GO 2026-05-11** — modulation PGA Strip1 -40 dB visible exactement sur tap-out, tap-in/-out simultanés OK |
 | **E6** | USB gadget audio 8×8 + intégration téléphone 2×2 dans le mixer Linux | 3 paires de PCMs visibles, routing N×M opérationnel |
 | **E7** | **GUI de test V7.0** : app Linux (Qt / Flutter / web) — mixer N×M visuel + sliders pour tous les paramètres effets DSP/TAC (kcontrols ALSA + SOF tplg) | tous effets pilotables en direct, audio reste < 10 ms |
 
