@@ -28,6 +28,8 @@
   <span class="text-xs text-gray-400" x-text="'iter: ' + state.prof_iter_us + ' µs'"></span>
   <span class="ml-auto text-xs" :class="connected ? 'text-green-400' : 'text-red-400'"
         x-text="connected ? '● connected' : '○ disconnected'"></span>
+  <span class="text-xs" :class="streaming ? 'text-green-400' : 'text-gray-500'"
+        x-text="streaming ? '◉ SSE 30Hz' : '○ no stream'"></span>
 </header>
 
 <!-- INPUTS -->
@@ -37,7 +39,7 @@
     <template x-for="i in 26" :key="i">
       <div class="strip panel p-2 text-center">
         <div class="text-xs font-mono truncate" x-text="inputLabel(i-1)"></div>
-        <div class="my-1 flex justify-center"><div class="meter"><div class="meter-fill" style="height:0%"></div></div></div>
+        <div class="my-1 flex justify-center"><div class="meter"><div class="meter-fill" :style="'height:' + peakDbPercent(peakIn[i-1]) + '%'"></div></div></div>
         <input type="range" min="-60" max="6" step="0.5" x-model.number="masterIn[i-1]"
                @input.debounce.50ms="setMasterIn(i-1, $event.target.value)" class="w-full">
         <div class="label-mini" x-text="masterIn[i-1].toFixed(1) + ' dB'"></div>
@@ -90,8 +92,8 @@
     <template x-for="o in 18" :key="o">
       <div class="strip panel p-2 text-center">
         <div class="text-xs font-mono truncate" x-text="outputLabel(o-1)"></div>
-        <div class="my-1 flex justify-center"><div class="meter"><div class="meter-fill" style="height:0%"></div></div></div>
-        <div class="label-mini">out</div>
+        <div class="my-1 flex justify-center"><div class="meter"><div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o-1]) + '%'"></div></div></div>
+        <div class="label-mini" x-text="peakDb(peakOut[o-1]).toFixed(0) + ' dB'"></div>
       </div>
     </template>
   </div>
@@ -102,16 +104,48 @@ function mixerApp() {
   return {
     state: { version:'?', frames:0, xrun:0, xrun_delta:0, latency_us_one_way:0, prof_iter_us:0 },
     connected: false,
+    streaming: false,
     masterIn: Array.from({length:26}, () => 0),
     mute:     Array.from({length:26}, () => false),
     sends:    Array.from({length:26}, () => Array(4).fill(false)),
     fxBusGain: Array.from({length:8}, () => 1.0),
     fxType: ['compressor','reverb','delay','eq'],
+    peakIn:  Array.from({length:26}, () => 0),
+    peakOut: Array.from({length:18}, () => 0),
+    peakFx:  Array.from({length:8},  () => 0),
     _prevXrun: 0,
+    _es: null,
 
     async init() {
       await this.poll();
       setInterval(() => this.poll(), 500);
+      this.initStream();
+    },
+
+    initStream() {
+      if (this._es) this._es.close();
+      this._es = new EventSource('/api/stream');
+      this._es.onmessage = (e) => {
+        try {
+          const m = JSON.parse(e.data);
+          if (Array.isArray(m.in))  this.peakIn  = m.in;
+          if (Array.isArray(m.out)) this.peakOut = m.out;
+          if (Array.isArray(m.fx))  this.peakFx  = m.fx;
+          this.streaming = true;
+        } catch(err) {}
+      };
+      this._es.onerror = () => { this.streaming = false; };
+    },
+
+    peakDb(p) {
+      if (!p || p === 0) return -120;
+      return 20 * Math.log10(p / 2147483647.0);
+    },
+
+    peakDbPercent(p) {
+      const db = this.peakDb(p);
+      /* Échelle -60 → 0 dBFS mappée 0 → 100 % */
+      return Math.max(0, Math.min(100, (db + 60) / 60 * 100));
     },
 
     async poll() {

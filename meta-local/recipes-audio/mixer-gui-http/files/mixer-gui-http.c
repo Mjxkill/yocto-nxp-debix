@@ -35,14 +35,14 @@
 #include <unistd.h>
 #include <microhttpd.h>
 
-#define GUI_VERSION       "v7.0-e7"
+#define GUI_VERSION       "v7.0-e7.1"
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
-#define SOCK_POOL_SIZE    4
 #define POST_MAX_BYTES    4096
 #define SOCK_RECV_TIMEO_MS 200
-#define MHD_THREAD_POOL   4
+#define MHD_THREAD_POOL   8       /* E7.1 : 4 SSE persistants + 4 REST/static */
+#define STREAM_PERIOD_US  33333   /* E7.1 : 30 Hz SSE */
 
 /* libmicrohttpd 1.0.x : MHD_Result enum introduit récemment.
  * Fallback pour anciennes versions où c'était `int`. */
@@ -111,6 +111,38 @@ static int mixer_request(const char *req_line, char *out, size_t out_sz)
 		return -1;
 	}
 	return (int)total;
+}
+
+/* ============================== SSE streaming ===================== */
+
+/* E7.1 : callback chunked appelé en boucle par MHD pour pousser des frames
+ * SSE meters au navigateur. usleep 33 ms entre frames = 30 Hz. Bloque le
+ * worker MHD pendant le sleep — c'est OK avec MHD_THREAD_POOL=8.
+ * Format RFC 8895 : `data: <json>\n\n` (double newline).
+ */
+static ssize_t sse_stream_callback(void *cls, uint64_t pos, char *buf, size_t max)
+{
+	(void)cls; (void)pos;
+	usleep(STREAM_PERIOD_US);
+
+	char meters_json[2048];
+	int n = mixer_request("{\"op\":\"get_meters\"}\n", meters_json, sizeof(meters_json));
+	if (n <= 0) {
+		/* mixer-pro down : keep-alive comment frame pour que EventSource
+		 * ne ferme pas la connexion (retry sera plus long sinon). */
+		const char *keep = ": ka\n\n";
+		size_t len = strlen(keep);
+		if (len >= max) return MHD_CONTENT_READER_END_OF_STREAM;
+		memcpy(buf, keep, len);
+		return (ssize_t)len;
+	}
+
+	/* Strip trailing newline du JSON si présent (SSE va en ajouter 2) */
+	if (n > 0 && meters_json[n-1] == '\n') meters_json[--n] = '\0';
+
+	int len = snprintf(buf, max, "data: %s\n\n", meters_json);
+	if (len < 0 || (size_t)len >= max) return MHD_CONTENT_READER_END_OF_STREAM;
+	return len;
 }
 
 /* ============================== HTTP helpers ====================== */
@@ -238,6 +270,28 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			char reply[8192];
 			int n = mixer_request("{\"op\":\"get_state\"}\n", reply, sizeof(reply));
 			return send_json(conn, n > 0 ? 200 : 503, reply);
+		}
+
+		if (!strcmp(url, "/api/meters")) {
+			/* E7.1 : REST polling fallback / debug curl */
+			char reply[2048];
+			int n = mixer_request("{\"op\":\"get_meters\"}\n", reply, sizeof(reply));
+			return send_json(conn, n > 0 ? 200 : 503, reply);
+		}
+
+		if (!strcmp(url, "/api/stream")) {
+			/* E7.1 : SSE meters stream 30 Hz (chunked callback) */
+			struct MHD_Response *r = MHD_create_response_from_callback(
+				MHD_SIZE_UNKNOWN, 4096, &sse_stream_callback, NULL, NULL);
+			if (!r) return MHD_NO;
+			MHD_add_response_header(r, "Content-Type", "text/event-stream");
+			MHD_add_response_header(r, "Cache-Control", "no-cache");
+			MHD_add_response_header(r, "Connection", "keep-alive");
+			MHD_add_response_header(r, "X-Accel-Buffering", "no");
+			add_cors_headers(r);
+			enum MHD_Result ret = MHD_queue_response(conn, 200, r);
+			MHD_destroy_response(r);
+			return ret;
 		}
 
 		if (!strncmp(url, "/static/", 8)) {

@@ -103,6 +103,15 @@ struct mixer_state {
 	 * play_thread → wakeup immédiat sans polling nanosleep.
 	 */
 	int          ring_event_fd;
+
+	/* E7.1 : peak meters par voie (uint32 raw abs S32_LE).
+	 * Calculés post-mix dans audio_thread, lus par control_thread (op get_meters).
+	 * memory_order_relaxed suffit : usage purement visuel, pas de synchro corrélée.
+	 * Decay backend ≈ 12 dB/s appliqué par bloc 2 ms (× 0.9375).
+	 */
+	atomic_uint  peak_in[N_INPUT_TOTAL];    /* 26 voies */
+	atomic_uint  peak_out[N_OUTPUT_TOTAL];  /* 18 voies */
+	atomic_uint  peak_fx[N_BUS_FX_CH];      /* 8 voies post-FX (returns) */
 };
 
 /* E6.f : sanity check atomicité (suggestion critic #2) :
@@ -233,8 +242,12 @@ static void smooth_gains(void)
 			alpha * (g_st.fx_bus_target[b] - g_st.fx_bus_gain[b]);
 }
 
-/* Process 1 frame du mixer. Modifié en place : in[]→out[]. */
-static void mix_frame(const float in[N_INPUT_REAL], float out[N_OUTPUT_TOTAL])
+/* Process 1 frame du mixer. Modifié en place : in[]→out[].
+ * E7.1 : `bus_out` et `ret_out` exposent les bus FX pre/post-effets pour les
+ * peak meters (lus par audio_thread après la boucle frame).
+ */
+static void mix_frame(const float in[N_INPUT_REAL], float out[N_OUTPUT_TOTAL],
+		      float bus_out[N_BUS_FX_CH], float ret_out[N_RETURN_CH])
 {
 	/* 1. Sends : 18 inputs → 8 bus channels */
 	float bus[N_BUS_FX_CH] = {0};
@@ -244,6 +257,8 @@ static void mix_frame(const float in[N_INPUT_REAL], float out[N_OUTPUT_TOTAL])
 		for (int b = 0; b < N_BUS_FX_CH; b++)
 			bus[b] += in[i] * g_st.send_gain[i][b];
 	}
+	if (bus_out)
+		memcpy(bus_out, bus, sizeof(bus));
 
 	/* 2. Bus FX (E6.e) : chaque paire (L,R) traverse 1 fx_engine. Le gain
 	 * fx_bus_gain[L]/fx_bus_gain[R] est appliqué post-effet (wet niveau).
@@ -256,6 +271,8 @@ static void mix_frame(const float in[N_INPUT_REAL], float out[N_OUTPUT_TOTAL])
 		ret[b * 2]     = out_l * g_st.fx_bus_gain[b * 2];
 		ret[b * 2 + 1] = out_r * g_st.fx_bus_gain[b * 2 + 1];
 	}
+	if (ret_out)
+		memcpy(ret_out, ret, sizeof(ret));
 
 	/* 3. Master : 26 sources = 18 in + 8 returns → 18 outputs */
 	float src[N_INPUT_TOTAL];
@@ -396,6 +413,12 @@ static void *audio_thread(void *arg)
 		float in[N_INPUT_REAL];
 		float out[N_OUTPUT_TOTAL];
 
+		/* E7.1 : peaks per channel calculés frame-par-frame, agrégés en
+		 * uint32_t raw abs (scaled S32). Decay backend après la loop. */
+		uint32_t pk_in[N_INPUT_TOTAL] = {0};
+		uint32_t pk_out[N_OUTPUT_TOTAL] = {0};
+		uint32_t pk_fx[N_BUS_FX_CH] = {0};
+
 		for (int f = 0; f < PERIOD_FRAMES; f++) {
 			for (int i = 0; i < N_INPUT_MICS; i++)
 				in[i] = s32_to_f(cap_dsp_buf[f * N_INPUT_MICS + i]);
@@ -405,7 +428,9 @@ static void *audio_thread(void *arg)
 				in[N_INPUT_MICS + N_INPUT_STEMS + i] =
 					s32_to_f(cap_phone_buf[f * N_INPUT_PHONE + i]);
 
-			mix_frame(in, out);
+			float bus_pre[N_BUS_FX_CH];
+			float ret_post[N_RETURN_CH];
+			mix_frame(in, out, bus_pre, ret_post);
 
 			for (int o = 0; o < N_OUTPUT_DSP; o++)
 				play_dsp_buf[f * N_OUTPUT_DSP + o] = f_to_s32(out[o]);
@@ -415,6 +440,51 @@ static void *audio_thread(void *arg)
 			for (int o = 0; o < N_OUTPUT_PHONE; o++)
 				play_phone_buf[f * N_OUTPUT_PHONE + o] =
 					f_to_s32(out[N_OUTPUT_DSP + N_OUTPUT_UAC2 + o]);
+
+			/* E7.1 peaks : inputs réels (18) depuis in[], returns (8)
+			 * depuis ret_post[], bus pre-FX (8) depuis bus_pre[], outputs
+			 * (18) depuis out[]. Tous en float [-1.0, 1.0] → scale uint32. */
+			for (int i = 0; i < N_INPUT_REAL; i++) {
+				float v = in[i] < 0 ? -in[i] : in[i];
+				uint32_t a = (uint32_t)(v * 2147483647.0f);
+				if (a > pk_in[i]) pk_in[i] = a;
+			}
+			for (int i = 0; i < N_RETURN_CH; i++) {
+				float v = ret_post[i] < 0 ? -ret_post[i] : ret_post[i];
+				uint32_t a = (uint32_t)(v * 2147483647.0f);
+				if (a > pk_in[N_INPUT_REAL + i]) pk_in[N_INPUT_REAL + i] = a;
+			}
+			for (int b = 0; b < N_BUS_FX_CH; b++) {
+				float v = bus_pre[b] < 0 ? -bus_pre[b] : bus_pre[b];
+				uint32_t a = (uint32_t)(v * 2147483647.0f);
+				if (a > pk_fx[b]) pk_fx[b] = a;
+			}
+			for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
+				float v = out[o] < 0 ? -out[o] : out[o];
+				uint32_t a = (uint32_t)(v * 2147483647.0f);
+				if (a > pk_out[o]) pk_out[o] = a;
+			}
+		}
+
+		/* E7.1 decay backend × 240/256 (≈ 0.9375) appliqué par bloc 2 ms.
+		 * Fall ≈ 12 dB/s, suffisant pour un VU visuel à 30 Hz refresh. */
+		for (int i = 0; i < N_INPUT_TOTAL; i++) {
+			uint32_t prev = atomic_load_explicit(&g_st.peak_in[i], memory_order_relaxed);
+			uint32_t decay = (uint32_t)((uint64_t)prev * 240u / 256u);
+			uint32_t v = (pk_in[i] > decay) ? pk_in[i] : decay;
+			atomic_store_explicit(&g_st.peak_in[i], v, memory_order_relaxed);
+		}
+		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
+			uint32_t prev = atomic_load_explicit(&g_st.peak_out[o], memory_order_relaxed);
+			uint32_t decay = (uint32_t)((uint64_t)prev * 240u / 256u);
+			uint32_t v = (pk_out[o] > decay) ? pk_out[o] : decay;
+			atomic_store_explicit(&g_st.peak_out[o], v, memory_order_relaxed);
+		}
+		for (int b = 0; b < N_BUS_FX_CH; b++) {
+			uint32_t prev = atomic_load_explicit(&g_st.peak_fx[b], memory_order_relaxed);
+			uint32_t decay = (uint32_t)((uint64_t)prev * 240u / 256u);
+			uint32_t v = (pk_fx[b] > decay) ? pk_fx[b] : decay;
+			atomic_store_explicit(&g_st.peak_fx[b], v, memory_order_relaxed);
 		}
 
 		clock_gettime(CLOCK_MONOTONIC, &t_mix_done);
@@ -736,6 +806,27 @@ static void handle_cmd(int fd, const char *line)
 		g_st.fx_engines[bus].get_state(&g_st.fx_engines[bus], body, sizeof(body));
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"bus\":%d,%s}\n", bus, body);
+		write(fd, reply, strlen(reply));
+
+	} else if (json_has_op(line, "get_meters")) {
+		/* E7.1 : retourne 3 tableaux peak compact (uint32 raw abs S32).
+		 * Conversion dBFS côté client : 20 * log10(peak / 2147483648.0).
+		 */
+		char reply[2048];
+		int n = 0;
+		n += snprintf(reply + n, sizeof(reply) - n, "{\"ok\":true,\"in\":[");
+		for (int i = 0; i < N_INPUT_TOTAL && n < (int)sizeof(reply); i++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", i ? "," : "",
+				      atomic_load_explicit(&g_st.peak_in[i], memory_order_relaxed));
+		n += snprintf(reply + n, sizeof(reply) - n, "],\"out\":[");
+		for (int o = 0; o < N_OUTPUT_TOTAL && n < (int)sizeof(reply); o++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", o ? "," : "",
+				      atomic_load_explicit(&g_st.peak_out[o], memory_order_relaxed));
+		n += snprintf(reply + n, sizeof(reply) - n, "],\"fx\":[");
+		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(reply); b++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", b ? "," : "",
+				      atomic_load_explicit(&g_st.peak_fx[b], memory_order_relaxed));
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "reset_fx")) {
