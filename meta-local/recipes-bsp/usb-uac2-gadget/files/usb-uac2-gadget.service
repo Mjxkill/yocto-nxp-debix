@@ -1,0 +1,13 @@
+[Unit]
+Description=V7.0-E6.a USB UAC2 8x8 gadget setup via configfs
+After=sys-kernel-config.mount
+Requires=sys-kernel-config.mount
+ConditionPathExists=/sys/class/udc/38100000.usb
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/usb-uac2-setup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -15,6 +15,9 @@ IMAGE_INSTALL:append = " kernel-module-imx-audio-tap"
 # TAC5212 boot-time init (tac-reset script + systemd service)
 IMAGE_INSTALL:append = " tac5212-service"
 
+# V7.0-E6.a — USB UAC2 8x8 gadget (expose board as USB sound card)
+IMAGE_INSTALL:append = " usb-uac2-gadget"
+
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 

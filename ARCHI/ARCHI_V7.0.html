@@ -629,7 +629,9 @@
       <tr><td><b>E3</b></td><td>Pipe play : strips OUT <code>multiband_drc → pga</code> (8 ch indép) — drc final retiré après diag tic tic</td><td>8 voies play indép paramétrables, audio OK, latence préservée</td></tr>
       <tr><td><b>E4 ✓</b></td><td>Tap IN brut (PIPE 1) : <code>apply-npu-tap-dt.py</code> refactoré 2 carves + 2 nodes, module multi-instance via prop DT <code>device-name</code>, hook firmware <code>dai_dma_cb</code> capture, <code>/dev/imx-audio-tap-in</code> + <code>/dev/imx-audio-tap-out</code> exposés</td><td><b>GO 2026-05-11</b> — tap-in 1.22 MB/s, tap-out V3.2.2 non régressé, loopback E3 préservé</td></tr>
       <tr><td><b>E5 ✓</b></td><td>Tap OUT post-FX (PIPE 2) : plomberie livrée en E4 (refactor dual-tap), validation empirique E5</td><td><b>GO 2026-05-11</b> — modulation PGA Strip1 -40 dB visible exactement sur tap-out, tap-in/-out simultanés OK</td></tr>
-      <tr><td><b>E6</b></td><td>USB gadget audio 8×8 + intégration téléphone 2×2 dans le mixer Linux</td><td>3 paires de PCMs visibles, routing N×M opérationnel</td></tr>
+      <tr><td><b>E6.a ✓</b></td><td>USB gadget UAC2 8×8 isolé (configfs + systemd, <code>libcomposite + usb_f_uac2</code> builtin)</td><td><b>GO board 2026-05-11</b> — carte ALSA <code>UAC2Gadget</code> visible (card 5), UDC high-speed, 0 régression DSP. Test PC host (câble USB) à valider</td></tr>
+      <tr><td><b>E6.b</b></td><td>Téléphone 2×2 (snd-aloop simulé, faute de modem hardware)</td><td>2 PCMs téléphone côté Linux, audible</td></tr>
+      <tr><td><b>E6.c</b></td><td>Routing mixer N×M (PipeWire ou app userspace)</td><td>matrice DSP↔UAC2↔téléphone opérationnelle</td></tr>
       <tr><td><b>E7</b></td><td><b>GUI de test V7.0</b> : app Linux (Qt / Flutter / web) — mixer N×M visuel + sliders pour <b>tous les effets de la chaîne unifiée</b> : TAC ADC (AGC, HPF, biquads, gain, decim) + DSP cap (multiband_drc, drc, pga) + DSP play (multiband_drc, pga, drc) + TAC DAC (interp, biquads, DRC, gain, limiter, foldback, VAD, tone gen)</td><td>tous effets TAC + DSP pilotables en direct depuis le GUI, audio reste &lt; 10 ms</td></tr>
     </tbody>
   </table>
@@ -785,7 +787,9 @@
       <tr><td><b>E3</b></td><td><code>v7.0-e3</code></td><td>Strips OUT play 8 ch (multiband_drc → pga) — drc final retiré (diag tic tic)</td><td><code>TESTS_V7.0_E3.md</code></td><td>E2 GO</td></tr>
       <tr><td><b>E4</b></td><td><code>v7.0-e4</code></td><td>Tap IN brut + reserved-mem + module kernel + <code>/dev/imx-audio-tap-in</code></td><td><code>TESTS_V7.0_E4.md</code></td><td>E3 GO</td></tr>
       <tr><td><b>E5</b></td><td><code>v7.0-e5</code></td><td>Tap OUT post-FX + 2e reserved-mem + <code>/dev/imx-audio-tap-out</code></td><td><code>TESTS_V7.0_E5.md</code></td><td>E4 GO</td></tr>
-      <tr><td><b>E6</b></td><td><code>v7.0-e6</code></td><td>USB gadget 8×8 + téléphone 2×2 dans le mixer Linux</td><td><code>TESTS_V7.0_E6.md</code></td><td>E5 GO</td></tr>
+      <tr><td><b>E6.a ✓</b></td><td><code>v7.0-e6a</code></td><td>USB gadget UAC2 8×8 isolé (configfs + systemd)</td><td><code>TESTS_V7.0_E6a.md</code></td><td>E5 GO</td></tr>
+      <tr><td><b>E6.b</b></td><td><code>v7.0-e6b</code></td><td>Téléphone 2×2 (snd-aloop simulé)</td><td><code>TESTS_V7.0_E6b.md</code></td><td>E6.a GO</td></tr>
+      <tr><td><b>E6.c</b></td><td><code>v7.0-e6c</code></td><td>Routing mixer N×M (PipeWire / app userspace)</td><td><code>TESTS_V7.0_E6c.md</code></td><td>E6.b GO</td></tr>
       <tr><td><b>E7</b></td><td><code>v7.0-e7</code></td><td>GUI test V7.0 — pilotage de tous les effets TAC + DSP en direct</td><td><code>TESTS_V7.0_E7.md</code></td><td>E6 GO</td></tr>
     </tbody>
   </table>
