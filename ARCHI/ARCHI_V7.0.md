@@ -153,7 +153,7 @@ Le mixer ne fait **aucun appel au DSP**. Il prend N inputs (DSP cap, USB cap, ph
 | **E3** | Pipe play : strips OUT `multiband_drc → pga` (8 ch indép) — drc final retiré après diag tic tic | 8 voies play indép, audio OK, latence préservée |
 | **E4 ✓** | **Tap IN brut** (PIPE 1) : `apply-npu-tap-dt.py` refactoré 2 carves + 2 nodes, module multi-instance via prop DT `device-name`, hook firmware `dai_dma_cb` capture, `/dev/imx-audio-tap-in` + `/dev/imx-audio-tap-out` exposés | **GO 2026-05-11** — tap-in 1.22 MB/s, tap-out V3.2.2 non régressé, loopback E3 préservé |
 | **E5 ✓** | **Tap OUT post-FX** (PIPE 2) : plomberie livrée en E4 (refactor dual-tap), validation empirique en E5 | **GO 2026-05-11** — modulation PGA Strip1 -40 dB visible exactement sur tap-out, tap-in/-out simultanés OK |
-| **E6.a ✓** | USB gadget UAC2 8×8 isolé (configfs + systemd) | **GO board 2026-05-11** — carte ALSA `UAC2Gadget` visible, UDC high-speed, 0 régression DSP. Test PC host (câble USB) à valider |
+| **E6.a ✓** | USB gadget UAC2 8×8 isolé (configfs + systemd) | **GO 2026-05-11** — bidir validé : PC→board sine 880 -4.4 dBFS, board→PC sine 440 -6 dBFS sur 8 voies, format S32_LE 48kHz négocié high-speed, 0 régression DSP |
 | **E6.b** | Téléphone 2×2 (snd-aloop simulé, faute de modem hardware) | 2 PCMs téléphone côté Linux + audible |
 | **E6.c** | Routing mixer N×M (PipeWire ou app userspace) | matrice DSP↔UAC2↔téléphone opérationnelle |
 | **E7** | **GUI de test V7.0** : app Linux (Qt / Flutter / web) — mixer N×M visuel + sliders pour tous les paramètres effets DSP/TAC (kcontrols ALSA + SOF tplg) | tous effets pilotables en direct, audio reste < 10 ms |

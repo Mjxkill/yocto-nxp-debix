@@ -1,8 +1,8 @@
 # Test Fiche : V7.0 — E6.a (USB UAC2 8×8 gadget)
 
 **Date** : 2026-05-11
-**Statut** : **GO côté board** — test PC host (câble USB) à valider par l'utilisateur
-**Tag git associé** : `v7.0-e6a` (posé après OUI user PC host)
+**Statut** : **GO** — Test PC host validé empiriquement 2026-05-11 (sine bidir -6 dBFS / -4.4 dBFS visible sur les 2 côtés)
+**Tag git associé** : `v7.0-e6a` (posé après validation host)
 
 ## Référentiel
 
@@ -52,8 +52,9 @@ Le UAC2 gadget expose des PCMs **côté board** : `card5/pcm0p` (playback côté
 | **T6a.5** | aplay accepte format S32_LE 8ch 48kHz | ✓ OK (header WAV accepté, EIO seulement sans host PC connecté = attendu) | "Playing WAVE..." affiché |
 | **T6a.6** | DSP loopback E3 non régressé | ✓ OK (`loopback-c-lowlat` steady `+48000 f/s` in et out, xrun stable) | delta cap/play = 0 steady |
 | **T6a.7** | Cards 0-4 inchangées (HDMI/es8316/sof-ADC/sof-tac/sof-probes) | ✓ OK | 5 cards d'origine présentes |
-| **T6a.8** | Test PC host : board visible comme carte 8×8 ALSA via câble USB | ⏳ à valider user (câble USB physique requis) | `lsusb` PC + `aplay -l` PC voient Debix |
-| **T6a.9** | Test utilisateur — stream PC→board ou board→PC fonctionne | ⏳ à valider user | « j'entends le son envoyé par le PC » |
+| **T6a.8** | Test PC host : board visible comme carte 8×8 ALSA via câble USB | ✓ **OK** (`lsusb` 1d6b:0104 Multifunction, `aplay -l` carte 3 D8x8 high speed, `/proc/asound/card3/stream0` format S32_LE 8ch 48kHz négocié, packet interval 500 µs) | PC voit Debix UAC2 8×8 |
+| **T6a.9** | Stream PC → board UAC2 : sine 880 -4.4 dBFS injecté côté PC, capté côté board | ✓ **OK** (peak board -4.44 dB ≈ -4.4 dBFS PC, RMS -7.64 dB, 8 voies identiques) | signal préservé bout en bout |
+| **T6a.10** | Stream board → PC UAC2 : sine 440 -6 dBFS injecté côté board, capté côté PC | ✓ **OK** (peak PC -6.02 dB = -6 dBFS board, RMS -9.98 dB, 8 voies identiques) | signal préservé bout en bout |
 
 ## Procédure test PC host (à exécuter)
 
@@ -122,8 +123,9 @@ Hors scope E6.a — sera adressé en **E6.c** (ou intégré à E7 GUI test). Pip
 | Critère | OUI / NON |
 |---|---|
 | Board présente carte ALSA UAC2 sans dégrader le DSP | **OUI côté board** (cards 0-4 intacts, loopback steady) |
-| PC host voit le board comme carte son 8×8 via câble USB | ⏳ à valider (câble physique requis) |
-| Validation E6.a GO | ⏳ — sera GO si OUI ci-dessus |
+| PC host voit le board comme carte son 8×8 via câble USB | **OUI** (lsusb 1d6b:0104, carte 3 `Debix UAC2 8x8` high speed) |
+| Stream bidirectionnel UAC2 fonctionnel | **OUI** (PC→board -4.4 dBFS / board→PC -6 dBFS sur 8 voies) |
+| Validation E6.a GO | **OUI — GO** — tag `v7.0-e6a` posé |
 
 ## Conclusion
 
