@@ -161,7 +161,22 @@ Le mixer ne fait **aucun appel au DSP**. Il prend N inputs (DSP cap, USB cap, ph
 | **E6.f ✓ Diagnostic** | Profiling concret via `clock_gettime` exposé dans `get_state` JSON (`prof_cap_us`, `prof_mix_us`, `prof_play_us`, `prof_iter_us`) | **Diagnostic 2026-05-11 — Effets PAS le hotspot** : mix 4 effets actifs = **473 µs** (24 % budget) ; le coupable = `snd_pcm_readi/writei` DSP (512 ms par cycle = recover SOF IPC). → E6.g = retrait `snd_pcm_link` + 3-thread + lockfree ring buffers (kernel a déjà `CONFIG_PREEMPT=y`, PREEMPT_RT non critique) |
 | **E6.g ✓** | Refactor mixer-pro : retrait `snd_pcm_link` + 2 threads (audio cap+mix / play DSP) + ring SPSC 32 périodes | **GO 2026-05-11** — **48 288 Hz steady** (100.6 % nominal, vs 36 % avant) avec 4 bus FX actifs, **0 xrun steady**, latence ALSA 8 ms. Latence ring +58 ms (trade-off design, optim possible E6.h). Total E2E mixer ~66 ms |
 | **E6.h ✓** | Optim latence : `nanosleep` → eventfd + ring 32 → 8 périodes | **GO 2026-05-11** — **Latence E2E mixer 14 ms** (vs 66 ms E6.g), 48 224 Hz steady, 0 xrun. **E2E pipeline complet ~20 ms** (vs 72 ms). `ring_fill` 288-384 stable, `ring_drops` bornés à init |
-| **E7** | **GUI de test V7.0** : app Linux (Qt / Flutter / web) — mixer N×M visuel + sliders pour tous les paramètres effets DSP/TAC (kcontrols ALSA + SOF tplg) | tous effets pilotables en direct, audio reste < 10 ms |
+| **E6.i ✗** | Drainage agressif play_thread BLOCKING + N_PERIODS=2 (MAX_DRAIN_PERIODS=4) | **KO 2026-05-11 reverted** (`e32d184c` → `493d8217`) — empirique board : `ring_fill steady 768` (max, vs cible 0-96), latence côté play **20 ms** vs 12 ms E6.h. Cause : `snd_pcm_writei` blocking est self-limiting à 48 kHz → drain ne consomme jamais plus vite que la production → ring se remplit au max. Fiche `TESTS_V7.0_E6i.md` |
+| **E6.j ✗** | Drainage NONBLOCK `snd_pcm_writei` + `snd_pcm_avail_update` (path workers deepseek/glm) | **KO 2026-05-11 non commité** — empirique board : Δ ring_drops ~50 000 frames/s continu, Δ xrun ~7-11/s steady, ring_fill 672 + spikes 3456. Cause : `snd_pcm_writei` NONBLOCK retourne quasi-systématiquement `-EAGAIN` sur SOF i.MX8MP → drain ne s'exécute pas, audio_thread drop massif. Warning anticipé par les workers (comportement non vérifié sur SOF). Fiche `TESTS_V7.0_E6j.md` |
+| **E6.k ✗** | N_PERIODS=2 SEUL (logic play_thread blocking E6.h conservée 1:1) | **KO 2026-05-11 non commité** — empirique board : ring saturé MAX 768 (+14 ms vs E6.h), Δ ring_drops 19/s continu en steady, latence côté play **18-20 ms** vs 12-14 ms E6.h. Cause : réduire ALSA buffer (8 ms → 4 ms) transfère le tampon vers le ring SPSC car le système est self-régulé à 48 kHz. Gain ALSA -2 ms < régression ring +8 ms. Fiche `TESTS_V7.0_E6k.md` |
+| **E6.l ?** | Investigation alternative latence (critic_submit avec contexte des 3 échecs) | À planifier — voies à explorer : kernel/SOF patch, isolcpus, IRQ affinity, SOF ASYNC clock domain, mixer DSP SOF léger. Si pas de voie viable userspace : E6.h = baseline V7.0 finale, on passe à E7. |
+| **E7** | **GUI de test V7.0** : app Linux (Qt / Flutter / web) — mixer N×M visuel + sliders pour tous les paramètres effets DSP/TAC (kcontrols ALSA + SOF tplg) | tous effets pilotables en direct, audio reste < 14 ms (E6.h confirmé) |
+
+### Bilan optim latence userspace (E6.i/j/k)
+
+Trois itérations ont échoué empiriquement à descendre sous E6.h (14 ms). Conclusion :
+le système producteur-consommateur `audio_thread / play_thread` est self-régulé à
+48 kHz par le hardware DMA SOF. **Le tampon total (ring + ALSA) est conservatif** :
+on ne peut pas le réduire en touchant un seul paramètre côté userspace sans
+transférer la latence ailleurs ou casser la stabilité.
+
+Pour vraiment passer sous 10 ms acoustique, il faut envisager une voie architecturale
+(mixer DSP SOF natif, ou patch kernel SOF) — sprint E6.l à investiguer ou hors scope V7.0.
 
 ## 10. Patches kernel — audit V6.0 → V7.0
 
