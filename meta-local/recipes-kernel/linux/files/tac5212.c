@@ -30,6 +30,14 @@ struct tac5212_priv {
 	unsigned int base_slot;
 	bool is_bus_closest;	/* true for TAC0 (closest to host on shared DOUT) */
 	bool needs_reset;
+
+	/* V7.0-E7.4 : cached 20-byte coef blobs for the 12 ADC + 12 DAC
+	 * programmable biquads. Chip registers are effectively write-only ;
+	 * cache mirrors last value written so ALSA reads return what was set.
+	 */
+	struct tac5212_bq_blob adc_bq[TAC5212_N_BIQUADS];
+	struct tac5212_bq_blob dac_bq[TAC5212_N_BIQUADS];
+	struct mutex paged_lock;	/* serialise page-switched I2C accesses */
 };
 
 static const struct reg_default tac5212_reg_defaults[] = {
@@ -292,6 +300,115 @@ static SOC_ENUM_SINGLE_DECL(tac5212_micbias_enum,
 /* Fine gain calibration TLV: 0=-0.8dB, 8=0dB, 15=+0.7dB; step=0.1dB */
 static const DECLARE_TLV_DB_MINMAX(tac5212_fgain_tlv, -80, 70);
 
+/* ============================================================
+ * V7.0-E7.4 : Programmable biquad coefficient writes
+ * Datasheet TAC5212 SLASF23A, §8.2.1 (P8), §8.2.2 (P9), §8.2.5
+ * (P15), §8.2.6 (P16). Each biquad = 5×Q1.31 coefs (N0..D2)
+ * stored as 4 BE bytes each ; stride 0x14 within its page.
+ *
+ * Coefficient computation (RBJ from Hz/Q/gain) is done in
+ * userspace (no FPU in kernel) — the driver only stores 20
+ * raw bytes per biquad and writes them via I2C with page
+ * switching. Each biquad exposed as one SOC_BYTES_EXT control.
+ */
+
+/* Write `count` bytes starting at `reg` on the selected `page`.
+ * Switches to page, writes, restores page 0. Serialised by
+ * priv->paged_lock to keep page state coherent. */
+static int tac5212_paged_write_buf(struct tac5212_priv *priv, u8 page,
+				   u8 reg, const u8 *buf, size_t count)
+{
+	int ret;
+	size_t i;
+
+	mutex_lock(&priv->paged_lock);
+	ret = regmap_write(priv->regmap, TAC5212_PAGE_SEL, page);
+	if (ret)
+		goto out;
+	for (i = 0; i < count; i++) {
+		ret = regmap_write(priv->regmap, reg + i, buf[i]);
+		if (ret)
+			goto out_restore;
+	}
+out_restore:
+	regmap_write(priv->regmap, TAC5212_PAGE_SEL, 0);
+out:
+	mutex_unlock(&priv->paged_lock);
+	return ret;
+}
+
+/* private_value encoding for the biquad-coef byte controls :
+ *   bits 0-3  : biquad index 0..11
+ *   bit  4    : 0 = ADC chain, 1 = DAC chain
+ */
+#define TAC5212_BQ_BLOB_PV(is_dac, idx)	((((u32)(is_dac)) << 4) | ((u32)(idx) & 0xf))
+#define TAC5212_BQ_BLOB_PV_DAC(v)	(((v) >> 4) & 0x1)
+#define TAC5212_BQ_BLOB_PV_IDX(v)	((v) & 0xf)
+
+static int tac5212_bq_blob_info(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_BYTES;
+	uinfo->count = 20;
+	return 0;
+}
+
+static int tac5212_bq_blob_get(struct snd_kcontrol *kcontrol,
+			       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *cmp = snd_soc_kcontrol_component(kcontrol);
+	struct tac5212_priv *priv = snd_soc_component_get_drvdata(cmp);
+	u32 pv = (u32)kcontrol->private_value;
+	bool is_dac = TAC5212_BQ_BLOB_PV_DAC(pv);
+	int idx = TAC5212_BQ_BLOB_PV_IDX(pv);
+	const u8 *src = is_dac ? priv->dac_bq[idx].bytes
+			       : priv->adc_bq[idx].bytes;
+
+	memcpy(ucontrol->value.bytes.data, src, 20);
+	return 0;
+}
+
+static int tac5212_bq_blob_put(struct snd_kcontrol *kcontrol,
+			       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *cmp = snd_soc_kcontrol_component(kcontrol);
+	struct tac5212_priv *priv = snd_soc_component_get_drvdata(cmp);
+	u32 pv = (u32)kcontrol->private_value;
+	bool is_dac = TAC5212_BQ_BLOB_PV_DAC(pv);
+	int idx = TAC5212_BQ_BLOB_PV_IDX(pv);
+	u8 *dst = is_dac ? priv->dac_bq[idx].bytes
+			 : priv->adc_bq[idx].bytes;
+	u8 page;
+	int slot;
+	int ret;
+
+	if (idx < 6) {
+		page = is_dac ? TAC5212_PAGE_DAC_BQ_1_6
+			      : TAC5212_PAGE_ADC_BQ_1_6;
+		slot = idx;
+	} else {
+		page = is_dac ? TAC5212_PAGE_DAC_BQ_7_12
+			      : TAC5212_PAGE_ADC_BQ_7_12;
+		slot = idx - 6;
+	}
+
+	ret = tac5212_paged_write_buf(priv, page, TAC5212_BQ_OFFSET(slot),
+				      ucontrol->value.bytes.data, 20);
+	if (ret)
+		return ret;
+	memcpy(dst, ucontrol->value.bytes.data, 20);
+	return 0;
+}
+
+#define TAC5212_BQ_BLOB(name_, pv_)					\
+{									\
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = name_,		\
+	.info = tac5212_bq_blob_info,					\
+	.get = tac5212_bq_blob_get,					\
+	.put = tac5212_bq_blob_put,					\
+	.private_value = pv_,						\
+}
+
 static const struct snd_kcontrol_new tac5212_controls[] = {
 	/* === ADC Digital Volume (-80dB to +47dB, 0.5dB step) === */
 	SOC_SINGLE_TLV("ADC1 Digital Volume", TAC5212_ADC_CH1_CFG2,
@@ -374,6 +491,38 @@ static const struct snd_kcontrol_new tac5212_controls[] = {
 
 	/* === Activity Detection === */
 	SOC_SINGLE("VAD Enable", TAC5212_PWR_CFG, 2, 1, 0),
+
+	/* === V7.0-E7.4 : ADC programmable biquads (12) ===
+	 * 20-byte blobs (5 × Q1.31 BE coefs : N0, N1, N2, D1, D2).
+	 * RBJ coefficient math runs in userspace ; write raw bytes via
+	 * `amixer cset numid=X --` then 20-byte hex.
+	 */
+	TAC5212_BQ_BLOB("ADC BQ1 Coefs",  TAC5212_BQ_BLOB_PV(0,  0)),
+	TAC5212_BQ_BLOB("ADC BQ2 Coefs",  TAC5212_BQ_BLOB_PV(0,  1)),
+	TAC5212_BQ_BLOB("ADC BQ3 Coefs",  TAC5212_BQ_BLOB_PV(0,  2)),
+	TAC5212_BQ_BLOB("ADC BQ4 Coefs",  TAC5212_BQ_BLOB_PV(0,  3)),
+	TAC5212_BQ_BLOB("ADC BQ5 Coefs",  TAC5212_BQ_BLOB_PV(0,  4)),
+	TAC5212_BQ_BLOB("ADC BQ6 Coefs",  TAC5212_BQ_BLOB_PV(0,  5)),
+	TAC5212_BQ_BLOB("ADC BQ7 Coefs",  TAC5212_BQ_BLOB_PV(0,  6)),
+	TAC5212_BQ_BLOB("ADC BQ8 Coefs",  TAC5212_BQ_BLOB_PV(0,  7)),
+	TAC5212_BQ_BLOB("ADC BQ9 Coefs",  TAC5212_BQ_BLOB_PV(0,  8)),
+	TAC5212_BQ_BLOB("ADC BQ10 Coefs", TAC5212_BQ_BLOB_PV(0,  9)),
+	TAC5212_BQ_BLOB("ADC BQ11 Coefs", TAC5212_BQ_BLOB_PV(0, 10)),
+	TAC5212_BQ_BLOB("ADC BQ12 Coefs", TAC5212_BQ_BLOB_PV(0, 11)),
+
+	/* === V7.0-E7.4 : DAC programmable biquads (12) === */
+	TAC5212_BQ_BLOB("DAC BQ1 Coefs",  TAC5212_BQ_BLOB_PV(1,  0)),
+	TAC5212_BQ_BLOB("DAC BQ2 Coefs",  TAC5212_BQ_BLOB_PV(1,  1)),
+	TAC5212_BQ_BLOB("DAC BQ3 Coefs",  TAC5212_BQ_BLOB_PV(1,  2)),
+	TAC5212_BQ_BLOB("DAC BQ4 Coefs",  TAC5212_BQ_BLOB_PV(1,  3)),
+	TAC5212_BQ_BLOB("DAC BQ5 Coefs",  TAC5212_BQ_BLOB_PV(1,  4)),
+	TAC5212_BQ_BLOB("DAC BQ6 Coefs",  TAC5212_BQ_BLOB_PV(1,  5)),
+	TAC5212_BQ_BLOB("DAC BQ7 Coefs",  TAC5212_BQ_BLOB_PV(1,  6)),
+	TAC5212_BQ_BLOB("DAC BQ8 Coefs",  TAC5212_BQ_BLOB_PV(1,  7)),
+	TAC5212_BQ_BLOB("DAC BQ9 Coefs",  TAC5212_BQ_BLOB_PV(1,  8)),
+	TAC5212_BQ_BLOB("DAC BQ10 Coefs", TAC5212_BQ_BLOB_PV(1,  9)),
+	TAC5212_BQ_BLOB("DAC BQ11 Coefs", TAC5212_BQ_BLOB_PV(1, 10)),
+	TAC5212_BQ_BLOB("DAC BQ12 Coefs", TAC5212_BQ_BLOB_PV(1, 11)),
 };
 
 static const struct snd_soc_dapm_widget tac5212_dapm_widgets[] = {
@@ -910,6 +1059,25 @@ static int tac5212_i2c_probe(struct i2c_client *client)
 	if (IS_ERR(priv->regmap))
 		return dev_err_probe(dev, PTR_ERR(priv->regmap),
 				     "failed to init regmap\n");
+
+	mutex_init(&priv->paged_lock);
+
+	/* Seed the biquad cache to chip hard-reset defaults : unity all-pass
+	 * { N0 = 0x7FFFFFFF (Q1.31 ≈ +1.0), N1 = N2 = D1 = D2 = 0 }. ALSA
+	 * reads will then return the same blob the chip currently holds. */
+	{
+		int i;
+		for (i = 0; i < TAC5212_N_BIQUADS; i++) {
+			priv->adc_bq[i].bytes[0] = 0x7F;
+			priv->adc_bq[i].bytes[1] = 0xFF;
+			priv->adc_bq[i].bytes[2] = 0xFF;
+			priv->adc_bq[i].bytes[3] = 0xFF;
+			priv->dac_bq[i].bytes[0] = 0x7F;
+			priv->dac_bq[i].bytes[1] = 0xFF;
+			priv->dac_bq[i].bytes[2] = 0xFF;
+			priv->dac_bq[i].bytes[3] = 0xFF;
+		}
+	}
 
 	/* Derive TDM base slot from I2C address */
 	priv->base_slot = (client->addr - TAC5212_I2C_BASE_ADDR) * 2;

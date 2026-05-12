@@ -298,4 +298,50 @@
 /* Base I2C address for slot calculation */
 #define TAC5212_I2C_BASE_ADDR		0x50
 
+/* ============================================================
+ * V7.0-E7.4 : Programmable biquad coefficient registers
+ * ------------------------------------------------------------
+ * TAC5212 has 12 programmable biquads in the ADC chain (pages
+ * 8+9) and 12 in the DAC chain (pages 15+16). Each biquad =
+ * 5 Q1.31 32-bit coefficients (N0, N1, N2, D1, D2), big-endian
+ * 4-byte sequences, default N0=0x7FFFFFFF (unity all-pass).
+ * Stride 0x14 (20 bytes) per biquad within its page.
+ * Datasheet TAC5212 SLASF23A, sections 8.2.1, 8.2.2, 8.2.4-6.
+ */
+
+/* Page select register (lives on every page at offset 0x00) */
+#define TAC5212_PAGE_SEL		0x00
+
+/* Page numbers for coefficient pages */
+#define TAC5212_PAGE_ADC_BQ_1_6		8
+#define TAC5212_PAGE_ADC_BQ_7_12	9
+#define TAC5212_PAGE_ADC_HPF_IIR	11
+#define TAC5212_PAGE_DAC_BQ_1_6		15
+#define TAC5212_PAGE_DAC_BQ_7_12	16
+
+/* Within a biquad page, biquad idx (0..5) starts at this offset */
+#define TAC5212_BQ_STRIDE		0x14
+#define TAC5212_BQ_PAGE_BASE		0x08
+#define TAC5212_BQ_OFFSET(idx)		(TAC5212_BQ_PAGE_BASE + (idx) * TAC5212_BQ_STRIDE)
+
+/* Per-coefficient byte-0 (high byte) offsets within a biquad */
+#define TAC5212_BQ_N0(idx)		(TAC5212_BQ_OFFSET(idx) + 0x00)
+#define TAC5212_BQ_N1(idx)		(TAC5212_BQ_OFFSET(idx) + 0x04)
+#define TAC5212_BQ_N2(idx)		(TAC5212_BQ_OFFSET(idx) + 0x08)
+#define TAC5212_BQ_D1(idx)		(TAC5212_BQ_OFFSET(idx) + 0x0C)
+#define TAC5212_BQ_D2(idx)		(TAC5212_BQ_OFFSET(idx) + 0x10)
+
+/* Total biquads per direction (6 per page × 2 pages = 12). */
+#define TAC5212_N_BIQUADS		12
+
+/* Raw biquad coefficient blob = 5 × Q1.31 coefs (N0, N1, N2, D1, D2) ×
+ * 4 BE bytes each = 20 bytes. RBJ coefficient computation lives in
+ * userspace (kernel has no FPU) ; the driver only caches the last-written
+ * blob (for read-back + suspend/resume) and writes it via paged I2C.
+ * Default unity all-pass = { N0=0x7FFFFFFF, N1=N2=D1=D2=0 }.
+ */
+struct tac5212_bq_blob {
+	u8 bytes[20];
+};
+
 #endif /* __TAC5212_H__ */
