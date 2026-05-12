@@ -358,6 +358,178 @@ html, body {
   border: 1px solid rgba(45,212,191,0.3);
   text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
 }
+
+/* ========== Strip click target (E7.3a) ========== */
+.strip { cursor: pointer; }
+.strip.selected {
+  border-color: var(--accent);
+  background: linear-gradient(to bottom, rgba(45,212,191,0.08), rgba(45,212,191,0.02));
+  box-shadow: 0 0 0 1px var(--accent) inset, 0 0 10px rgba(45,212,191,0.3);
+}
+
+/* ========== Sidebar detail panel (E7.3a) ========== */
+.detail-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  z-index: 50;
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--transition);
+}
+.detail-backdrop.open { opacity: 1; pointer-events: auto; }
+
+.detail-panel {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: 50%; max-width: 720px; min-width: 480px;
+  background: linear-gradient(180deg, #161820 0%, #0e1015 100%);
+  border-left: 1px solid var(--border-hi);
+  box-shadow: -8px 0 40px rgba(0,0,0,0.6);
+  z-index: 60;
+  transform: translateX(100%);
+  transition: transform 260ms cubic-bezier(.4,0,.2,1);
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+}
+.detail-panel.open { transform: translateX(0); }
+.detail-header {
+  position: sticky; top: 0; z-index: 1;
+  padding: 14px 18px;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.detail-title { font-size: 15px; font-weight: 700; letter-spacing: 0.2px; }
+.detail-title .sub { color: var(--text-sec); font-weight: 500; font-size: 12px; margin-left: 8px; }
+.detail-close, .detail-nav-btn {
+  background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+  color: var(--text-pri);
+  width: 30px; height: 30px;
+  border-radius: 6px;
+  cursor: pointer; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all var(--transition);
+}
+.detail-close:hover, .detail-nav-btn:hover { background: rgba(255,255,255,0.1); border-color: var(--border-hi); }
+.detail-section {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.detail-section-title {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px;
+  color: var(--text-sec); font-weight: 700;
+  display: flex; align-items: center; gap: 8px;
+}
+.detail-section-title .accent-dot {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--accent);
+}
+.detail-section-title .count { color: var(--text-mute); font-weight: 500; letter-spacing: 0.5px; }
+
+/* Stereo link */
+.stereo-link-row {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px;
+}
+.stereo-link-row label { cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.stereo-link-row input[type=checkbox] {
+  appearance: none; -webkit-appearance: none;
+  width: 36px; height: 18px; border-radius: 9px;
+  background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+  position: relative; cursor: pointer;
+  transition: all var(--transition);
+}
+.stereo-link-row input[type=checkbox]::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text-sec);
+  transition: all var(--transition);
+}
+.stereo-link-row input[type=checkbox]:checked { background: rgba(45,212,191,0.2); border-color: var(--accent); }
+.stereo-link-row input[type=checkbox]:checked::after { left: 20px; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+
+/* Routing & sends knob rows */
+.route-groups {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.route-group {
+  background: rgba(255,255,255,0.015);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px;
+}
+.route-group h4 {
+  margin: 0 0 8px 0;
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-sec); font-weight: 600;
+}
+.route-knobs {
+  display: flex; gap: 4px; flex-wrap: wrap;
+}
+.route-knob {
+  width: 36px; flex-shrink: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 4px 2px;
+}
+.route-knob .label {
+  font-size: 9px; font-weight: 600; color: var(--text-pri);
+  font-variant-numeric: tabular-nums;
+}
+.route-knob .mini-fader-track {
+  position: relative;
+  width: 14px; height: 70px;
+  display: flex; justify-content: center;
+}
+.route-knob .mini-fader-track::before {
+  content: ''; position: absolute; top: 2px; bottom: 2px; left: 50%;
+  width: 3px; transform: translateX(-50%);
+  background: rgba(0,0,0,0.55); border-radius: 1.5px;
+  box-shadow: inset 0 1px 1px rgba(0,0,0,0.5);
+}
+.route-knob input[type=range] {
+  position: absolute; inset: 0;
+  -webkit-appearance: slider-vertical; appearance: slider-vertical;
+  writing-mode: vertical-lr; direction: rtl;
+  width: 14px; height: 70px;
+  background: transparent; margin: 0; cursor: ns-resize;
+}
+.route-knob input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px; height: 10px; border-radius: 2px;
+  background: linear-gradient(to bottom, #e4e7ec, #aab0b8);
+  border: 1px solid #2a2c30;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.45);
+  cursor: ns-resize;
+}
+.route-knob input[type=range]::-moz-range-thumb {
+  width: 16px; height: 10px; border-radius: 2px;
+  background: linear-gradient(to bottom, #e4e7ec, #aab0b8); border: 1px solid #2a2c30;
+}
+.route-knob .db-mini {
+  font-size: 8.5px; font-variant-numeric: tabular-nums;
+  color: var(--text-sec); height: 11px;
+}
+
+.sends-row {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+}
+.send-card {
+  background: linear-gradient(135deg, rgba(245,158,11,0.05) 0%, rgba(245,158,11,0.01) 100%);
+  border: 1px solid rgba(245,158,11,0.18);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.send-card .send-label {
+  font-size: 10px; font-weight: 700; color: var(--accent-2);
+  letter-spacing: 0.4px;
+}
+.send-card .send-knobs {
+  display: flex; gap: 6px;
+}
 </style>
 </head>
 <body x-data="mixerApp()" x-init="init()">
@@ -392,9 +564,11 @@ html, body {
     </div>
     <div class="strips-row">
       <template x-for="i in 8" :key="'mic'+i">
-        <div class="strip">
-          <div class="label" x-text="'M' + i"></div>
-          <div class="sublabel">DSP</div>
+        <div class="strip" :class="selectedStrip === i-1 ? 'selected' : ''"
+             @click.self="openStripDetail(i-1, 'M'+i, 'Mic DSP')"
+             @dblclick="openStripDetail(i-1, 'M'+i, 'Mic DSP')">
+          <div class="label" x-text="'M' + i" @click="openStripDetail(i-1, 'M'+i, 'Mic DSP')"></div>
+          <div class="sublabel" @click="openStripDetail(i-1, 'M'+i, 'Mic DSP')">DSP</div>
           <div class="fader-meter-pair">
             <div class="fader-track">
               <input type="range" class="fader" min="-60" max="6" step="0.5"
@@ -428,9 +602,11 @@ html, body {
     </div>
     <div class="strips-row">
       <template x-for="i in 8" :key="'asio'+i">
-        <div class="strip">
-          <div class="label" x-text="'U' + i"></div>
-          <div class="sublabel">UAC2</div>
+        <div class="strip" :class="selectedStrip === i+7 ? 'selected' : ''"
+             @click.self="openStripDetail(i+7, 'U'+i, 'USB ASIO in')"
+             @dblclick="openStripDetail(i+7, 'U'+i, 'USB ASIO in')">
+          <div class="label" x-text="'U' + i" @click="openStripDetail(i+7, 'U'+i, 'USB ASIO in')"></div>
+          <div class="sublabel" @click="openStripDetail(i+7, 'U'+i, 'USB ASIO in')">UAC2</div>
           <div class="fader-meter-pair">
             <div class="fader-track">
               <input type="range" class="fader" min="-60" max="6" step="0.5"
@@ -464,9 +640,11 @@ html, body {
     </div>
     <div class="strips-row">
       <template x-for="i in 2" :key="'ph'+i">
-        <div class="strip">
-          <div class="label" x-text="'P' + i"></div>
-          <div class="sublabel">aloop</div>
+        <div class="strip" :class="selectedStrip === i+15 ? 'selected' : ''"
+             @click.self="openStripDetail(i+15, 'P'+i, 'Phone in')"
+             @dblclick="openStripDetail(i+15, 'P'+i, 'Phone in')">
+          <div class="label" x-text="'P' + i" @click="openStripDetail(i+15, 'P'+i, 'Phone in')"></div>
+          <div class="sublabel" @click="openStripDetail(i+15, 'P'+i, 'Phone in')">aloop</div>
           <div class="fader-meter-pair">
             <div class="fader-track">
               <input type="range" class="fader" min="-60" max="6" step="0.5"
@@ -651,6 +829,140 @@ html, body {
 
 </div>
 
+<!-- ===== DETAIL PANEL SIDEBAR (E7.3a) ===== -->
+<div class="detail-backdrop" :class="selectedStrip !== null ? 'open' : ''" @click="closeStripDetail()"></div>
+
+<aside class="detail-panel" :class="selectedStrip !== null ? 'open' : ''">
+  <header class="detail-header">
+    <button class="detail-close" @click="closeStripDetail()" title="Close">×</button>
+    <div class="detail-title">
+      <span x-text="detailStrip.label"></span>
+      <span class="sub" x-text="detailStrip.kind"></span>
+    </div>
+    <div style="margin-left:auto; display:flex; gap:6px;">
+      <button class="detail-nav-btn" @click="prevStrip()" title="Previous strip">‹</button>
+      <button class="detail-nav-btn" @click="nextStrip()" title="Next strip">›</button>
+    </div>
+  </header>
+
+  <section class="detail-section">
+    <div class="stereo-link-row">
+      <label>
+        <input type="checkbox" :checked="stereoLinkOn(selectedStrip)"
+               @change="toggleStereoLink(selectedStrip)">
+        Stereo link with <span x-text="pairedLabel(selectedStrip)"></span>
+      </label>
+      <span style="margin-left:auto; font-size:11px; color:var(--text-mute);"
+            x-text="'gain ' + ((stripRouting.gain||1).toFixed(2)) + '  ·  mute ' + (stripRouting.mute? 'ON' : 'off')"></span>
+    </div>
+  </section>
+
+  <section class="detail-section">
+    <div class="detail-section-title">
+      <span class="accent-dot"></span>ROUTAGE MASTER
+      <span class="count">×18 destinations · matrix master_target</span>
+    </div>
+    <div class="route-groups">
+      <!-- DSP PLAY S1..S8 (out 0..7) -->
+      <div class="route-group">
+        <h4>DSP PLAY · ×8</h4>
+        <div class="route-knobs">
+          <template x-for="o in 8" :key="'rDSP'+o">
+            <div class="route-knob">
+              <div class="label" x-text="'S'+o"></div>
+              <div class="mini-fader-track">
+                <input type="range" min="-60" max="6" step="0.5"
+                       :value="gainToDb(stripRouting.master[o-1] || 0)"
+                       @input.debounce.30ms="setMasterRoute(o-1, $event.target.value)">
+              </div>
+              <div class="db-mini" x-text="dbLabel(stripRouting.master[o-1] || 0)"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+      <!-- USB ASIO OUT U1..U8 (out 8..15) -->
+      <div class="route-group">
+        <h4>USB ASIO OUT · ×8</h4>
+        <div class="route-knobs">
+          <template x-for="o in 8" :key="'rUSB'+o">
+            <div class="route-knob">
+              <div class="label" x-text="'U'+o"></div>
+              <div class="mini-fader-track">
+                <input type="range" min="-60" max="6" step="0.5"
+                       :value="gainToDb(stripRouting.master[o+7] || 0)"
+                       @input.debounce.30ms="setMasterRoute(o+7, $event.target.value)">
+              </div>
+              <div class="db-mini" x-text="dbLabel(stripRouting.master[o+7] || 0)"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+      <!-- PHONE OUT P1..P2 (out 16..17) -->
+      <div class="route-group">
+        <h4>PHONE OUT · ×2</h4>
+        <div class="route-knobs">
+          <template x-for="o in 2" :key="'rPh'+o">
+            <div class="route-knob">
+              <div class="label" x-text="'P'+o"></div>
+              <div class="mini-fader-track">
+                <input type="range" min="-60" max="6" step="0.5"
+                       :value="gainToDb(stripRouting.master[o+15] || 0)"
+                       @input.debounce.30ms="setMasterRoute(o+15, $event.target.value)">
+              </div>
+              <div class="db-mini" x-text="dbLabel(stripRouting.master[o+15] || 0)"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="detail-section">
+    <div class="detail-section-title">
+      <span class="accent-dot" style="background:var(--accent-2);"></span>SENDS FX
+      <span class="count">×4 bus stéréo · send_target</span>
+    </div>
+    <div class="sends-row">
+      <template x-for="b in 4" :key="'sFX'+b">
+        <div class="send-card">
+          <div class="send-label" x-text="'FX'+b"></div>
+          <div class="send-knobs">
+            <div class="route-knob">
+              <div class="label">L</div>
+              <div class="mini-fader-track">
+                <input type="range" min="-60" max="6" step="0.5"
+                       :value="gainToDb(stripRouting.sends[(b-1)*2] || 0)"
+                       @input.debounce.30ms="setSendRoute((b-1)*2, $event.target.value)">
+              </div>
+              <div class="db-mini" x-text="dbLabel(stripRouting.sends[(b-1)*2] || 0)"></div>
+            </div>
+            <div class="route-knob">
+              <div class="label">R</div>
+              <div class="mini-fader-track">
+                <input type="range" min="-60" max="6" step="0.5"
+                       :value="gainToDb(stripRouting.sends[(b-1)*2+1] || 0)"
+                       @input.debounce.30ms="setSendRoute((b-1)*2+1, $event.target.value)">
+              </div>
+              <div class="db-mini" x-text="dbLabel(stripRouting.sends[(b-1)*2+1] || 0)"></div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <section class="detail-section">
+    <div class="detail-section-title">
+      <span class="accent-dot" style="background:var(--text-mute);"></span>EFFETS DSP / TAC
+      <span class="count">E7.3b + E7.4 (panels effets à venir)</span>
+    </div>
+    <div style="font-size:11px; color:var(--text-mute); padding:8px 0;">
+      Panels TAC ADC (AGC / HPF / biquads / decim) et DSP effects per-strip seront ajoutés
+      dans le prochain sprint. Le routage et les sends sont déjà fonctionnels ci-dessus.
+    </div>
+  </section>
+</aside>
+
 <script>
 function mixerApp() {
   return {
@@ -667,6 +979,17 @@ function mixerApp() {
     peakFx:  Array.from({length:8},  () => 0),
     _prevXrun: 0,
     _es: null,
+
+    /* E7.3a : detail panel sidebar state */
+    selectedStrip: null,         /* int 0..25 = input index, null = closed */
+    detailStrip: { label:'', kind:'' },
+    stripRouting: {              /* loaded via op:get_strip_routing */
+      sends:  Array(8).fill(0),
+      master: Array(18).fill(0),
+      gain: 1.0,
+      mute: 0,
+    },
+    stereoLinks: Array(13).fill(false),   /* 13 paires (M1+M2, M3+M4, ... , R7+R8) */
 
     async init() {
       await this.poll();
@@ -744,6 +1067,114 @@ function mixerApp() {
     },
     resetFx(b) {
       this.sendCmd({op:'reset_fx', bus:b});
+    },
+
+    /* ========== E7.3a : detail panel sidebar logic ========== */
+    gainToDb(g) {
+      if (!g || g <= 0) return -60;
+      return Math.max(-60, Math.min(6, 20 * Math.log10(g)));
+    },
+    dbLabel(g) {
+      const db = this.gainToDb(g);
+      if (db <= -59.9) return '−∞';
+      return db.toFixed(1) + ' dB';
+    },
+    stripLabel(i) {
+      if (i < 8)  return 'M' + (i+1);
+      if (i < 16) return 'U' + (i-7);
+      if (i < 18) return 'P' + (i-15);
+      return 'R' + (i-17);
+    },
+    stripKind(i) {
+      if (i < 8)  return 'Mic DSP';
+      if (i < 16) return 'USB ASIO in';
+      if (i < 18) return 'Phone in';
+      return 'Return FX';
+    },
+    pairedLabel(i) {
+      if (i === null) return '';
+      const pair = i ^ 1;
+      return this.stripLabel(pair);
+    },
+    stereoLinkOn(i) {
+      if (i === null) return false;
+      return this.stereoLinks[i >> 1];
+    },
+    toggleStereoLink(i) {
+      if (i === null) return;
+      const idx = i >> 1;
+      this.stereoLinks[idx] = !this.stereoLinks[idx];
+    },
+
+    async fetchStripRouting(i) {
+      try {
+        const r = await fetch('/api/cmd', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({op:'get_strip_routing', src:i}),
+        });
+        const j = await r.json();
+        if (j && j.ok && Array.isArray(j.master) && Array.isArray(j.sends)) {
+          this.stripRouting = {
+            sends: j.sends.slice(),
+            master: j.master.slice(),
+            gain: j.gain || 1.0,
+            mute: j.mute || 0,
+          };
+        }
+      } catch(e) {
+        console.warn('fetchStripRouting failed', e);
+      }
+    },
+
+    async openStripDetail(i, label, kind) {
+      this.selectedStrip = i;
+      this.detailStrip.label = label || this.stripLabel(i);
+      this.detailStrip.kind  = kind  || this.stripKind(i);
+      await this.fetchStripRouting(i);
+    },
+    closeStripDetail() {
+      this.selectedStrip = null;
+    },
+    async prevStrip() {
+      if (this.selectedStrip === null) return;
+      const next = this.selectedStrip === 0 ? 25 : this.selectedStrip - 1;
+      this.detailStrip.label = this.stripLabel(next);
+      this.detailStrip.kind  = this.stripKind(next);
+      this.selectedStrip = next;
+      await this.fetchStripRouting(next);
+    },
+    async nextStrip() {
+      if (this.selectedStrip === null) return;
+      const next = (this.selectedStrip + 1) % 26;
+      this.detailStrip.label = this.stripLabel(next);
+      this.detailStrip.kind  = this.stripKind(next);
+      this.selectedStrip = next;
+      await this.fetchStripRouting(next);
+    },
+
+    /* Apply set_master via dB→gain. Linked: also write to pair. */
+    setMasterRoute(out, db) {
+      if (this.selectedStrip === null) return;
+      const gain = this.dbToGain(parseFloat(db));
+      const src = this.selectedStrip;
+      this.stripRouting.master[out] = gain;
+      this.sendCmd({op:'set_master', src, out, gain});
+      if (this.stereoLinkOn(src)) {
+        const pair = src ^ 1;
+        this.sendCmd({op:'set_master', src:pair, out, gain});
+      }
+    },
+    setSendRoute(bus, db) {
+      if (this.selectedStrip === null) return;
+      const gain = this.dbToGain(parseFloat(db));
+      const src = this.selectedStrip;
+      this.stripRouting.sends[bus] = gain;
+      this.sendCmd({op:'set_send', in:src, bus, gain});
+      if (this.stereoLinkOn(src)) {
+        const pair = src ^ 1;
+        this.sendCmd({op:'set_send', in:pair, bus, gain});
+      }
     },
   };
 }

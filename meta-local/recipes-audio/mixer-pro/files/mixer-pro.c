@@ -8,10 +8,11 @@
  *
  * Contrôle : socket Unix /run/mixer-pro.sock — protocole JSON ligne par ligne.
  *
- *   { "op":"set_send",       "in":<0..25>, "bus":<0..7>, "gain":<float> }
- *   { "op":"set_master",     "src":<0..25>, "out":<0..17>, "gain":<float> }
- *   { "op":"set_input_gain", "src":<0..25>, "gain":<float> }  (E7.2 strip)
- *   { "op":"set_mute",       "src":<0..25>, "mute":<0|1> }
+ *   { "op":"set_send",          "in":<0..25>, "bus":<0..7>, "gain":<float> }
+ *   { "op":"set_master",        "src":<0..25>, "out":<0..17>, "gain":<float> }
+ *   { "op":"set_input_gain",    "src":<0..25>, "gain":<float> }  (E7.2 strip)
+ *   { "op":"set_mute",          "src":<0..25>, "mute":<0|1> }
+ *   { "op":"get_strip_routing", "src":<0..25> } → JSON {sends[8], master[18], gain, mute}
  *   { "op":"get_state" }     → réponse JSON multilignes
  *   { "op":"reset" }         → matrix à 0, strip gain à 1
  */
@@ -768,6 +769,36 @@ static void handle_cmd(int fd, const char *line)
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"op\":\"set_mute\",\"src\":%d,\"mute\":%d}\n",
 			 src, mute);
+		write(fd, reply, strlen(reply));
+
+	} else if (json_has_op(line, "get_strip_routing")) {
+		/* E7.3a : retourne l'état routing complet pour 1 input strip :
+		 *   - sends[8]    : send_target[src][bus] pour bus 0..7
+		 *   - master[18]  : master_target[src][out] pour out 0..17
+		 *   - gain        : input_target[src] (strip fader)
+		 *   - mute        : (mute_mask >> src) & 1
+		 */
+		int src;
+		if (json_get_int(line, "src", &src) < 0 ||
+		    src < 0 || src >= N_INPUT_TOTAL) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad get_strip_routing src\"}\n");
+			return;
+		}
+		int n = snprintf(reply, sizeof(reply),
+				 "{\"ok\":true,\"src\":%d,\"sends\":[", src);
+		pthread_mutex_lock(&g_st.target_lock);
+		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(reply); b++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%.4f",
+				      b ? "," : "", g_st.send_target[src][b]);
+		n += snprintf(reply + n, sizeof(reply) - n, "],\"master\":[");
+		for (int o = 0; o < N_OUTPUT_TOTAL && n < (int)sizeof(reply); o++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%.4f",
+				      o ? "," : "", g_st.master_target[src][o]);
+		n += snprintf(reply + n, sizeof(reply) - n,
+			      "],\"gain\":%.4f,\"mute\":%d}\n",
+			      g_st.input_target[src],
+			      (g_st.mute_mask >> src) & 1);
+		pthread_mutex_unlock(&g_st.target_lock);
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "get_state")) {
