@@ -742,32 +742,31 @@ html, body {
 }
 .fxbus-panel .fxbus-close:hover { color: var(--text-bright); }
 
-/* ===== E7.5 — FFT analyzer / stereo scope boxes ===== */
-.section.analyzer { width: 270px; }
+/* ===== E7.5 — FFT analyzer / stereo scope boxes (1.5x scale) ===== */
+.section.analyzer { width: 410px; }
 .section.analyzer .section-title .accent-dot { background: var(--accent); }
-.analyzer-body { display: flex; flex-direction: column; gap: 8px; }
+.analyzer-body { display: flex; flex-direction: column; gap: 10px; }
 .analyzer-select {
-  width: 100%; font-size: 11px; padding: 4px 6px;
+  width: 100%; font-size: 12px; padding: 6px 8px;
   background: rgba(0,0,0,0.4); color: var(--text-pri);
   border: 1px solid var(--border-hi); border-radius: 5px;
 }
+/* FFT canvas takes the full inner width of the section, scope sits below
+ * centered so it stays square at a comfortable size. */
+.analyzer-graphs {
+  display: flex; flex-direction: column;
+  gap: 8px; align-items: center;
+}
 .analyzer-canvas {
-  width: 100%; height: 110px; display: block;
+  width: 100%; height: 165px; display: block;
   background: rgba(0,0,0,0.5);
   border: 1px solid rgba(45,212,191,0.18); border-radius: 6px;
 }
 .analyzer-scope-canvas {
-  width: 110px; height: 110px;
+  width: 165px; height: 165px;
   background: rgba(0,0,0,0.5);
   border: 1px solid rgba(245,158,11,0.18); border-radius: 6px;
 }
-.analyzer-graphs { display: flex; gap: 6px; align-items: flex-start; }
-.analyzer-info {
-  display: flex; justify-content: space-between;
-  font-size: 9.5px; color: var(--text-mute);
-  letter-spacing: 0.4px; text-transform: uppercase;
-}
-.analyzer-info .v { color: var(--text-pri); font-variant-numeric: tabular-nums; }
 .drc-inline { display: flex; flex-direction: column; gap: 2px;
               padding: 8px 10px; background: rgba(255,255,255,0.02);
               border-radius: 6px; border: 1px solid var(--border-hi); }
@@ -1138,10 +1137,10 @@ html, body {
           <div class="analyzer-graphs">
             <canvas class="analyzer-canvas"
                     :id="'anfft' + (i-1)"
-                    width="260" height="120"></canvas>
+                    width="400" height="180"></canvas>
             <canvas class="analyzer-scope-canvas"
                     :id="'anscope' + (i-1)"
-                    width="120" height="120"></canvas>
+                    width="180" height="180"></canvas>
           </div>
         </div>
       </section>
