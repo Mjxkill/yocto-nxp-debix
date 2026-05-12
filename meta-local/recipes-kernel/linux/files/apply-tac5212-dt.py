@@ -19,20 +19,21 @@ content = re.sub(
     '\n', content)
 
 # 2. Replace sound-dac-out block with sound-tac5212
+# V7.0-E7.4.b : use fsl,imx-audio-card (imx-card.c) which uses
+# snd_soc_of_get_dai_link_codecs() and properly binds N codecs on a
+# single TDM DAI link. simple-audio-card only binds codec[0].
 content = re.sub(
     r'\n\tsound-dac-out \{.*?\n\t\};',
     """
 \tsof-sound-tac5212 {
-\t\tcompatible = "simple-audio-card";
-\t\tlabel = "tac5212-tdm";
-\t\tsimple-audio-card,dai-link@0 {
+\t\tcompatible = "fsl,imx-audio-card";
+\t\tmodel = "tac5212-tdm";
+\t\tpri-dai-link {
 \t\t\tlink-name = "tac5212-hifi";
 \t\t\tformat = "dsp_a";
 \t\t\tdai-tdm-slot-num = <8>;
 \t\t\tdai-tdm-slot-width = <32>;
-\t\t\tbitclock-master = <&sndcpu>;
-\t\t\tframe-master = <&sndcpu>;
-\t\t\tsndcpu: cpu {
+\t\t\tcpu {
 \t\t\t\tsound-dai = <&dsp 1>;
 \t\t\t};
 \t\t\tcodec {
@@ -197,7 +198,7 @@ content = re.sub(
 \tmemory-region = <&dsp_reserved>;
 \t/delete-property/ firmware-name;
 \ttplg-name = "sof-imx8mp-tac5212.tplg";
-\tmachine-drv-name = "asoc-simple-card";
+\tmachine-drv-name = "imx-card";
 \tsyscon = <&audio_blk_ctrl>;
 \tstatus = "okay";
 };""", content, flags=re.DOTALL)
