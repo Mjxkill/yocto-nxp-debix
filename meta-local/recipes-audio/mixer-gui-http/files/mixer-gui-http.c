@@ -38,7 +38,7 @@
 #include <unistd.h>
 #include <microhttpd.h>
 
-#define GUI_VERSION       "v7.0-e7.3b"
+#define GUI_VERSION       "v7.0-e7.4"
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
@@ -249,7 +249,9 @@ struct post_buf {
 #define ALSA_CARD "softac5212tdm"
 
 /* Validate value string : whitelist [0-9a-zA-Z .,_-]. Avoid shell injection
- * even if we use fork+exec without shell — defense in depth. */
+ * even if we use fork+exec without shell — defense in depth. Limit 256 chars
+ * to accommodate BYTES blobs (e.g. TAC5212 biquad coefs : 20 decimal bytes
+ * comma-separated ≈ 80 chars). */
 static int amixer_value_safe(const char *v)
 {
 	if (!v || !*v) return 0;
@@ -259,7 +261,7 @@ static int amixer_value_safe(const char *v)
 		      c == ',' || c == '-' || c == '_'))
 			return 0;
 	}
-	return strlen(v) < 64;
+	return strlen(v) < 256;
 }
 
 /* Run `amixer -c softac5212tdm contents` and capture stdout into out[cap].
@@ -492,7 +494,7 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			return send_json(conn, 400,
 				"{\"ok\":false,\"err\":\"empty body\"}\n");
 		int numid = 0;
-		char value[64];
+		char value[256];
 		if (json_get_int_field(pb->data, "numid", &numid) < 0 ||
 		    json_get_str_field(pb->data, "value", value, sizeof(value)) < 0)
 			return send_json(conn, 400,
@@ -501,7 +503,7 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		if (r != 0)
 			return send_json(conn, 503,
 				"{\"ok\":false,\"err\":\"amixer cset failed\"}\n");
-		char reply[128];
+		char reply[320];
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"numid\":%d,\"value\":\"%s\"}\n",
 			 numid, value);

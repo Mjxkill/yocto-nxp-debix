@@ -615,6 +615,35 @@ html, body {
   padding: 4px 0; font-style: italic;
   border-bottom: 1px solid rgba(255,255,255,0.03);
 }
+.bq-form { display:flex; flex-direction:column; gap:6px; padding:4px 0; }
+.bq-row { display:flex; gap:6px; }
+.bq-grid {
+  display:grid; grid-template-columns:1fr; gap:4px;
+  padding:6px 8px; background:rgba(255,255,255,0.02);
+  border:1px solid rgba(255,255,255,0.04); border-radius:6px;
+}
+.bq-grid label {
+  display:grid; grid-template-columns:32px 1fr 68px; align-items:center;
+  gap:8px; font-size:11px; color:var(--text-mute);
+}
+.bq-grid label > span:first-child { font-weight:600; color:var(--text-dim); }
+.bq-grid input[type=range] {
+  -webkit-appearance:none; appearance:none;
+  width:100%; height:3px; border-radius:2px;
+  background:linear-gradient(90deg, var(--accent-2) 0%, rgba(255,255,255,0.08) 100%);
+  outline:none;
+}
+.bq-grid input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none; appearance:none;
+  width:12px; height:12px; border-radius:50%;
+  background:var(--accent-2); cursor:pointer;
+  border:2px solid var(--bg-elev-1);
+}
+.bq-grid input[type=range]::-moz-range-thumb {
+  width:12px; height:12px; border-radius:50%;
+  background:var(--accent-2); cursor:pointer; border:2px solid var(--bg-elev-1);
+}
+.bq-val { text-align:right; font-variant-numeric:tabular-nums; color:var(--text-bright); }
 </style>
 </head>
 <body x-data="mixerApp()" x-init="init()">
@@ -1086,8 +1115,50 @@ html, body {
               </select>
             </template>
 
-            <!-- BYTES (read-only placeholder) -->
-            <template x-if="c.type === 'BYTES'">
+            <!-- BYTES : biquad coef blob → high-level RBJ form (E7.4) -->
+            <template x-if="c.type === 'BYTES' && c.fullName && parseBiquadName(c.fullName)">
+              <div class="bq-form">
+                <div class="bq-row">
+                  <select class="alsa-select" :value="bqParams(c.fullName).type"
+                          @change="setBiquad(c.fullName, {type: parseInt($event.target.value,10)})">
+                    <template x-for="(label, ti) in biquadTypes" :key="ti">
+                      <option :value="ti" x-text="label"
+                              :selected="bqParams(c.fullName).type === ti"></option>
+                    </template>
+                  </select>
+                </div>
+                <template x-if="bqParams(c.fullName).type !== 0">
+                  <div class="bq-grid">
+                    <label>
+                      <span>Hz</span>
+                      <input type="range" min="20" max="22000" step="1"
+                             :value="bqParams(c.fullName).fHz"
+                             @input.debounce.50ms="setBiquad(c.fullName, {fHz: parseFloat($event.target.value)})">
+                      <span class="bq-val" x-text="bqParams(c.fullName).fHz + ' Hz'"></span>
+                    </label>
+                    <label>
+                      <span>Q</span>
+                      <input type="range" min="0.1" max="10" step="0.01"
+                             :value="bqParams(c.fullName).q"
+                             @input.debounce.50ms="setBiquad(c.fullName, {q: parseFloat($event.target.value)})">
+                      <span class="bq-val" x-text="bqParams(c.fullName).q.toFixed(2)"></span>
+                    </label>
+                    <template x-if="[5,6,7].includes(bqParams(c.fullName).type)">
+                      <label>
+                        <span>Gain</span>
+                        <input type="range" min="-24" max="24" step="0.1"
+                               :value="bqParams(c.fullName).gainDb"
+                               @input.debounce.50ms="setBiquad(c.fullName, {gainDb: parseFloat($event.target.value)})">
+                        <span class="bq-val" x-text="bqParams(c.fullName).gainDb.toFixed(1) + ' dB'"></span>
+                      </label>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- BYTES (non-biquad) : fallback placeholder -->
+            <template x-if="c.type === 'BYTES' && !(c.fullName && parseBiquadName(c.fullName))">
               <span class="alsa-bytes-tag">blob (×<span x-text="c.count"></span> bytes)</span>
             </template>
           </div>
@@ -1134,11 +1205,21 @@ function mixerApp() {
     /* E7.3b : ALSA kcontrols state */
     alsaControls: {},            /* parsed map name → control object */
 
+    /* E7.4 : programmable biquads — high-level params per kcontrol name.
+     * Key = full kcontrol name e.g. "TAC0 ADC BQ1 Coefs".
+     * Values { type, fHz, q, gainDb } ; chip stores 20 raw coef bytes,
+     * we keep the human-facing parameters here (persisted in localStorage).
+     * Types : 0=Bypass 1=LPF 2=HPF 3=BPF 4=Notch 5=Peak 6=LowShelf 7=HighShelf 8=AllPass
+     */
+    biquadParams: {},
+    biquadTypes: ['Bypass','LPF','HPF','BPF','Notch','Peak','LowShelf','HighShelf','AllPass'],
+
     async init() {
       await this.poll();
       setInterval(() => this.poll(), 500);
       this.initStream();
       await this.fetchAlsaControls();
+      this.initBiquadParams();
     },
 
     initStream() {
@@ -1409,13 +1490,24 @@ function mixerApp() {
           const tac = Math.floor(idx / 2);
           const ch  = (idx % 2) + 1;
           const tacPrefix = `TAC${tac}`;
+          const isBq = (n) => /^TAC\d+ (ADC|DAC) BQ\d+ Coefs$/.test(n);
           const perCh = names.filter(n =>
             (n.startsWith(`${tacPrefix} ADC${ch}`) ||
              n === `${tacPrefix} CH${ch} Input Mux`)
           ).map(n => ({ ...all[n], short: this.alsaShortLabel(n) }));
           const adcShared = names.filter(n =>
-            n.startsWith(`${tacPrefix} ADC `) && !n.match(/ADC\d/)
+            n.startsWith(`${tacPrefix} ADC `) &&
+            !n.match(/ADC\d/) && !isBq(n)
           ).map(n => ({ ...all[n], short: this.alsaShortLabel(n) }));
+          /* 12 programmable ADC biquads (sorted by index, share between CH1+CH2
+           * per the chip's BQ_CFG enum allocation) */
+          const adcBq = names.filter(n =>
+            n.startsWith(`${tacPrefix} ADC BQ`) && isBq(n)
+          ).sort((a, b) => {
+            const ai = parseInt(a.match(/BQ(\d+)/)[1], 10);
+            const bi = parseInt(b.match(/BQ(\d+)/)[1], 10);
+            return ai - bi;
+          }).map(n => ({ ...all[n], short: this.alsaShortLabel(n), fullName: n }));
           const tacMisc = names.filter(n =>
             n.startsWith(`${tacPrefix} MICBIAS`) ||
             n.startsWith(`${tacPrefix} VAD`) ||
@@ -1428,6 +1520,8 @@ function mixerApp() {
             title:'TAC ADC '+ch, subtitle:`channel-specific · ${perCh.length} controls`, controls:perCh });
           if (adcShared.length) groups.push({
             title:'TAC ADC shared', subtitle:`shared CH1+CH2 · ${adcShared.length} controls`, controls:adcShared });
+          if (adcBq.length) groups.push({
+            title:'TAC ADC biquads', subtitle:`12 programmable filters (BQ_CFG enum allocates them across CH1+CH2)`, controls:adcBq });
           if (tacMisc.length) groups.push({
             title:'TAC misc', subtitle:`bias/VAD/VREF · ${tacMisc.length} controls`, controls:tacMisc });
           if (pga.length) groups.push({
@@ -1447,13 +1541,22 @@ function mixerApp() {
           const tac = Math.floor(idx / 2);
           const ch  = (idx % 2) + 1;
           const tacPrefix = `TAC${tac}`;
+          const isBq = (n) => /^TAC\d+ (ADC|DAC) BQ\d+ Coefs$/.test(n);
           const perCh = names.filter(n =>
             n.startsWith(`${tacPrefix} DAC${ch}`) ||
             n.startsWith(`${tacPrefix} OUT${ch}`)
           ).map(n => ({ ...all[n], short: this.alsaShortLabel(n) }));
           const dacShared = names.filter(n =>
-            n.startsWith(`${tacPrefix} DAC `) && !n.match(/DAC\d/)
+            n.startsWith(`${tacPrefix} DAC `) &&
+            !n.match(/DAC\d/) && !isBq(n)
           ).map(n => ({ ...all[n], short: this.alsaShortLabel(n) }));
+          const dacBq = names.filter(n =>
+            n.startsWith(`${tacPrefix} DAC BQ`) && isBq(n)
+          ).sort((a, b) => {
+            const ai = parseInt(a.match(/BQ(\d+)/)[1], 10);
+            const bi = parseInt(b.match(/BQ(\d+)/)[1], 10);
+            return ai - bi;
+          }).map(n => ({ ...all[n], short: this.alsaShortLabel(n), fullName: n }));
           const pgaName = `PGA2.0 2 Out Strip${idx+1} Volume`;
           const pga = all[pgaName] ? [{ ...all[pgaName], short: this.alsaShortLabel(pgaName) }] : [];
 
@@ -1461,6 +1564,8 @@ function mixerApp() {
             title:'TAC DAC '+ch, subtitle:`channel-specific · ${perCh.length} controls`, controls:perCh });
           if (dacShared.length) groups.push({
             title:'TAC DAC shared', subtitle:`shared CH1+CH2 · ${dacShared.length} controls`, controls:dacShared });
+          if (dacBq.length) groups.push({
+            title:'TAC DAC biquads', subtitle:`12 programmable filters (BQ_CFG enum allocates them across CH1+CH2)`, controls:dacBq });
           if (pga.length) groups.push({
             title:'DSP PGA play', subtitle:`SOF strip volume`, controls:pga });
         }
@@ -1510,6 +1615,126 @@ function mixerApp() {
           body: JSON.stringify({numid: c.numid, value: val})
         });
       } catch(e) { console.warn('setAlsa failed', e); }
+    },
+
+    /* === V7.0-E7.4 : programmable biquads ============================== */
+
+    /* "TAC<n> (ADC|DAC) BQ<k> Coefs" → { tac, chain, idx }, else null. */
+    parseBiquadName(name) {
+      const m = name.match(/^(TAC\d+) (ADC|DAC) BQ(\d+) Coefs$/);
+      if (!m) return null;
+      return { tac: m[1], chain: m[2], idx: parseInt(m[3], 10) };
+    },
+
+    /* Compute 5 × Q1.31 BE coefs from high-level RBJ params.
+     * Returns array of 20 decimal byte values [0..255] suitable for
+     * "B0,B1,...,B19" amixer cset syntax. */
+    rbjBiquadBlob(type, fHz, q, gainDb, fs) {
+      fs = fs || 48000;
+      fHz = Math.max(20, Math.min(+fHz || 1000, fs / 2 - 100));
+      q   = Math.max(0.1, Math.min(+q || 0.707, 16));
+      gainDb = Math.max(-24, Math.min(+gainDb || 0, 24));
+      let b0, b1, b2, a0, a1, a2;
+      const w0 = 2 * Math.PI * fHz / fs;
+      const cw = Math.cos(w0);
+      const sw = Math.sin(w0);
+      const alpha = sw / (2 * q);
+      const A = Math.pow(10, gainDb / 40);
+      const beta = Math.sqrt(A) / q;
+      switch (+type | 0) {
+        case 0: /* Bypass = unity all-pass */
+          return [0x7f,0xff,0xff,0xff, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0];
+        case 1: /* LPF */
+          b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = (1 - cw) / 2;
+          a0 = 1 + alpha;    a1 = -2 * cw; a2 = 1 - alpha; break;
+        case 2: /* HPF */
+          b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = (1 + cw) / 2;
+          a0 = 1 + alpha;    a1 = -2 * cw;   a2 = 1 - alpha; break;
+        case 3: /* BPF (constant 0 dB peak) */
+          b0 = alpha;        b1 = 0;         b2 = -alpha;
+          a0 = 1 + alpha;    a1 = -2 * cw;   a2 = 1 - alpha; break;
+        case 4: /* Notch */
+          b0 = 1;            b1 = -2 * cw;   b2 = 1;
+          a0 = 1 + alpha;    a1 = -2 * cw;   a2 = 1 - alpha; break;
+        case 5: /* Peak (parametric EQ) */
+          b0 = 1 + alpha * A;       b1 = -2 * cw;           b2 = 1 - alpha * A;
+          a0 = 1 + alpha / A;       a1 = -2 * cw;           a2 = 1 - alpha / A; break;
+        case 6: /* LowShelf */
+          b0 = A*((A+1) - (A-1)*cw + beta*sw);
+          b1 = 2*A*((A-1) - (A+1)*cw);
+          b2 = A*((A+1) - (A-1)*cw - beta*sw);
+          a0 = (A+1) + (A-1)*cw + beta*sw;
+          a1 = -2*((A-1) + (A+1)*cw);
+          a2 = (A+1) + (A-1)*cw - beta*sw; break;
+        case 7: /* HighShelf */
+          b0 = A*((A+1) + (A-1)*cw + beta*sw);
+          b1 = -2*A*((A-1) + (A+1)*cw);
+          b2 = A*((A+1) + (A-1)*cw - beta*sw);
+          a0 = (A+1) - (A-1)*cw + beta*sw;
+          a1 = 2*((A-1) - (A+1)*cw);
+          a2 = (A+1) - (A-1)*cw - beta*sw; break;
+        case 8: /* AllPass */
+          b0 = 1 - alpha;    b1 = -2 * cw;   b2 = 1 + alpha;
+          a0 = 1 + alpha;    a1 = -2 * cw;   a2 = 1 - alpha; break;
+        default:
+          return [0x7f,0xff,0xff,0xff, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0];
+      }
+      /* Normalise to a0=1 and adopt TI sign convention :
+       *   y = N0·x + N1·x⁻¹ + N2·x⁻² + D1·y⁻¹ + D2·y⁻²
+       * → D1 = -a1/a0,  D2 = -a2/a0
+       */
+      const N0 = b0 / a0, N1 = b1 / a0, N2 = b2 / a0;
+      const D1 = -a1 / a0, D2 = -a2 / a0;
+      const q31be = (x) => {
+        let v = Math.round(Math.max(-1, Math.min(0.9999999995, x)) * 0x80000000);
+        if (v < -0x80000000) v = -0x80000000;
+        if (v >  0x7FFFFFFF) v =  0x7FFFFFFF;
+        if (v < 0) v += 0x100000000;
+        return [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+      };
+      const out = [];
+      for (const c of [N0, N1, N2, D1, D2]) out.push(...q31be(c));
+      return out;
+    },
+
+    /* Default per-biquad params : Bypass (unity). */
+    _bqDefault() { return { type:0, fHz:1000, q:0.707, gainDb:0 }; },
+
+    /* Scan loaded ALSA controls, seed `biquadParams` for every "* BQ* Coefs"
+     * kcontrol found (preserve previously-set values when re-scanning).
+     * Then overlay any values previously persisted in localStorage. */
+    initBiquadParams() {
+      const names = Object.keys(this.alsaControls).filter(n => this.parseBiquadName(n));
+      const fresh = {};
+      for (const n of names) fresh[n] = this.biquadParams[n] || this._bqDefault();
+      try {
+        const stored = JSON.parse(localStorage.getItem('biquadParams') || '{}');
+        for (const n of names) if (stored[n]) Object.assign(fresh[n], stored[n]);
+      } catch(e) {}
+      this.biquadParams = fresh;
+    },
+
+    bqParams(name) {
+      return this.biquadParams[name] || this._bqDefault();
+    },
+
+    /* Update one field of a biquad, recompute the 20-byte blob, send via
+     * /api/alsa/set, and persist the high-level params to localStorage. */
+    async setBiquad(name, partial) {
+      const c = this.alsaControls[name];
+      if (!c) return;
+      const cur = { ...(this.biquadParams[name] || this._bqDefault()), ...partial };
+      this.biquadParams[name] = cur;
+      try { localStorage.setItem('biquadParams', JSON.stringify(this.biquadParams)); } catch(e) {}
+      const blob = this.rbjBiquadBlob(cur.type, cur.fHz, cur.q, cur.gainDb, 48000);
+      const val = blob.join(',');
+      try {
+        await fetch('/api/alsa/set', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ numid: c.numid, value: val })
+        });
+      } catch(e) { console.warn('setBiquad failed', name, e); }
     },
   };
 }
