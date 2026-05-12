@@ -37,6 +37,17 @@ struct tac5212_priv {
 	 */
 	struct tac5212_bq_blob adc_bq[TAC5212_N_BIQUADS];
 	struct tac5212_bq_blob dac_bq[TAC5212_N_BIQUADS];
+
+	/* V7.0-E7.4.b : cached paged-coef blobs for the ADC HPF custom IIR,
+	 * ADC Aux Mixer, AGC, AGC rate, DRC and ADSR engines.
+	 */
+	u8 hpf_iir_d1[TAC5212_HPF_IIR_SIZE];
+	u8 aux_mix[TAC5212_AUX_MIX_SIZE];
+	u8 agc_coefs[TAC5212_AGC_COEFS_SIZE];
+	u8 agc_rate[TAC5212_AGC_RATE_SIZE];
+	u8 drc_coefs[TAC5212_DRC_COEFS_SIZE];
+	u8 adsr_coefs[TAC5212_ADSR_COEFS_SIZE];
+
 	struct mutex paged_lock;	/* serialise page-switched I2C accesses */
 };
 
@@ -409,6 +420,118 @@ static int tac5212_bq_blob_put(struct snd_kcontrol *kcontrol,
 	.private_value = pv_,						\
 }
 
+/* ============================================================
+ * V7.0-E7.4.b : generic paged-coef blob descriptors
+ * ------------------------------------------------------------
+ * Each blob entry describes one programmable coefficient region :
+ * its kcontrol name (DT prefix "TACn" prepended by ALSA), page,
+ * byte offset within the page, byte count, and offset of the
+ * cache mirror within `struct tac5212_priv`. All access through
+ * the same generic info/get/put callbacks, the kcontrol's
+ * `private_value` indexes the descriptor table.
+ *
+ * Datasheet references :
+ *   §8.2.4   — Page 11 : ADC HPF custom IIR + Aux Mixer
+ *   §8.2.12  — Page 27 : AGC level/gain/hysteresis coefs
+ *   §8.2.13  — Page 28 : AGC rate + DRC + ADSR coefs
+ */
+struct tac5212_paged_blob_desc {
+	const char	*name;
+	u8		page;
+	u8		offset;
+	u8		size;
+	size_t		priv_off;
+};
+
+static const struct tac5212_paged_blob_desc tac5212_paged_blobs[] = {
+	{ "ADC HPF IIR D1 Coefs", TAC5212_PAGE_ADC_IIR_AUX,
+	  TAC5212_HPF_IIR_OFFSET, TAC5212_HPF_IIR_SIZE,
+	  offsetof(struct tac5212_priv, hpf_iir_d1) },
+	{ "ADC Aux Mixer Coefs",  TAC5212_PAGE_ADC_IIR_AUX,
+	  TAC5212_AUX_MIX_OFFSET, TAC5212_AUX_MIX_SIZE,
+	  offsetof(struct tac5212_priv, aux_mix) },
+	{ "AGC Coefs",            TAC5212_PAGE_AGC_COEFS,
+	  TAC5212_AGC_COEFS_OFFSET, TAC5212_AGC_COEFS_SIZE,
+	  offsetof(struct tac5212_priv, agc_coefs) },
+	{ "AGC Rate Coefs",       TAC5212_PAGE_AGC_RATE_DRC_ADSR,
+	  TAC5212_AGC_RATE_OFFSET, TAC5212_AGC_RATE_SIZE,
+	  offsetof(struct tac5212_priv, agc_rate) },
+	{ "DRC Coefs",            TAC5212_PAGE_AGC_RATE_DRC_ADSR,
+	  TAC5212_DRC_COEFS_OFFSET, TAC5212_DRC_COEFS_SIZE,
+	  offsetof(struct tac5212_priv, drc_coefs) },
+	{ "ADSR Coefs",           TAC5212_PAGE_AGC_RATE_DRC_ADSR,
+	  TAC5212_ADSR_COEFS_OFFSET, TAC5212_ADSR_COEFS_SIZE,
+	  offsetof(struct tac5212_priv, adsr_coefs) },
+};
+#define TAC5212_N_PAGED_BLOBS ARRAY_SIZE(tac5212_paged_blobs)
+
+static int tac5212_paged_blob_info(struct snd_kcontrol *kcontrol,
+				    struct snd_ctl_elem_info *uinfo)
+{
+	int idx = (int)kcontrol->private_value;
+
+	if (idx < 0 || idx >= (int)TAC5212_N_PAGED_BLOBS)
+		return -EINVAL;
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_BYTES;
+	uinfo->count = tac5212_paged_blobs[idx].size;
+	return 0;
+}
+
+static int tac5212_paged_blob_get(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *cmp = snd_soc_kcontrol_component(kcontrol);
+	struct tac5212_priv *priv = snd_soc_component_get_drvdata(cmp);
+	int idx = (int)kcontrol->private_value;
+	const struct tac5212_paged_blob_desc *d;
+	const u8 *src;
+
+	if (idx < 0 || idx >= (int)TAC5212_N_PAGED_BLOBS)
+		return -EINVAL;
+	d = &tac5212_paged_blobs[idx];
+	src = (const u8 *)priv + d->priv_off;
+	memcpy(ucontrol->value.bytes.data, src, d->size);
+	return 0;
+}
+
+static int tac5212_paged_blob_put(struct snd_kcontrol *kcontrol,
+				   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *cmp = snd_soc_kcontrol_component(kcontrol);
+	struct tac5212_priv *priv = snd_soc_component_get_drvdata(cmp);
+	int idx = (int)kcontrol->private_value;
+	const struct tac5212_paged_blob_desc *d;
+	u8 *dst;
+	int ret;
+
+	if (idx < 0 || idx >= (int)TAC5212_N_PAGED_BLOBS)
+		return -EINVAL;
+	d = &tac5212_paged_blobs[idx];
+	dst = (u8 *)priv + d->priv_off;
+	ret = tac5212_paged_write_buf(priv, d->page, d->offset,
+				      ucontrol->value.bytes.data, d->size);
+	if (ret)
+		return ret;
+	memcpy(dst, ucontrol->value.bytes.data, d->size);
+	return 0;
+}
+
+#define TAC5212_PAGED_BLOB(name_, idx_)					\
+{									\
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = name_,		\
+	.info = tac5212_paged_blob_info,				\
+	.get = tac5212_paged_blob_get,					\
+	.put = tac5212_paged_blob_put,					\
+	.private_value = idx_,						\
+}
+
+/* NOTE : Limiter / AGC enable bits / DRC enable bits / PLIM live on
+ * Book 0 Page 1 (addresses 0x23, 0x24, 0x2B respectively) which
+ * overlap with the PASI TX/RX channel config registers on Page 0.
+ * Exposing them requires a paged single-byte helper not yet
+ * implemented — deferred to E7.4.c.
+ */
+
 static const struct snd_kcontrol_new tac5212_controls[] = {
 	/* === ADC Digital Volume (-80dB to +47dB, 0.5dB step) === */
 	SOC_SINGLE_TLV("ADC1 Digital Volume", TAC5212_ADC_CH1_CFG2,
@@ -523,6 +646,19 @@ static const struct snd_kcontrol_new tac5212_controls[] = {
 	TAC5212_BQ_BLOB("DAC BQ10 Coefs", TAC5212_BQ_BLOB_PV(1,  9)),
 	TAC5212_BQ_BLOB("DAC BQ11 Coefs", TAC5212_BQ_BLOB_PV(1, 10)),
 	TAC5212_BQ_BLOB("DAC BQ12 Coefs", TAC5212_BQ_BLOB_PV(1, 11)),
+
+	/* === V7.0-E7.4.b : programmable paged coefficient blobs === *
+	 * (HPF custom IIR, ADC Aux Mixer, AGC, AGC rates, DRC, ADSR)
+	 * RBJ / time-constant math runs in userspace ; the driver
+	 * stores 4..36 raw bytes per blob and writes them via paged
+	 * I2C (see `tac5212_paged_blobs[]` descriptor table).
+	 */
+	TAC5212_PAGED_BLOB("ADC HPF IIR D1 Coefs", 0),
+	TAC5212_PAGED_BLOB("ADC Aux Mixer Coefs",  1),
+	TAC5212_PAGED_BLOB("AGC Coefs",            2),
+	TAC5212_PAGED_BLOB("AGC Rate Coefs",       3),
+	TAC5212_PAGED_BLOB("DRC Coefs",            4),
+	TAC5212_PAGED_BLOB("ADSR Coefs",           5),
 };
 
 static const struct snd_soc_dapm_widget tac5212_dapm_widgets[] = {

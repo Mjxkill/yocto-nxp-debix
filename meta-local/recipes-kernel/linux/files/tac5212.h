@@ -92,6 +92,11 @@
 #define TAC5212_ADC_CH2_CFG3		0x58
 #define TAC5212_ADC_CH2_CFG4		0x59
 
+/* NOTE : Limiter / AGC_DRC / PLIM config registers live on
+ * Book 0 Page 1 at the same addresses as PASI TX/RX channel regs.
+ * Accessing them needs a paged single-byte helper — deferred to E7.4.c.
+ */
+
 #define TAC5212_ADC_CFG1		0x62
 
 #define TAC5212_OUT1X_CFG0		0x64
@@ -315,9 +320,25 @@
 /* Page numbers for coefficient pages */
 #define TAC5212_PAGE_ADC_BQ_1_6		8
 #define TAC5212_PAGE_ADC_BQ_7_12	9
-#define TAC5212_PAGE_ADC_HPF_IIR	11
+#define TAC5212_PAGE_ADC_IIR_AUX	11	/* HPF custom IIR + Aux Mixer */
 #define TAC5212_PAGE_DAC_BQ_1_6		15
 #define TAC5212_PAGE_DAC_BQ_7_12	16
+#define TAC5212_PAGE_AGC_COEFS		27	/* AGC threshold/gain coefs */
+#define TAC5212_PAGE_AGC_RATE_DRC_ADSR	28	/* AGC rates + DRC + ADSR */
+
+/* Per-blob (page, offset, size in bytes) — see datasheet §8.2.4 / §8.2.12 / §8.2.13 */
+#define TAC5212_HPF_IIR_OFFSET		0x08
+#define TAC5212_HPF_IIR_SIZE		4	/* ADC first-order IIR D1 coef */
+#define TAC5212_AUX_MIX_OFFSET		0x30
+#define TAC5212_AUX_MIX_SIZE		8	/* ADC Aux Mixer CH1 + CH2 */
+#define TAC5212_AGC_COEFS_OFFSET	0x5C
+#define TAC5212_AGC_COEFS_SIZE		36	/* P27 0x5C-0x7F : noise/target/max-min-gain/hys/hold */
+#define TAC5212_AGC_RATE_OFFSET		0x08
+#define TAC5212_AGC_RATE_SIZE		8	/* P28 0x08-0x0F : attack + release rate */
+#define TAC5212_DRC_COEFS_OFFSET	0x1C
+#define TAC5212_DRC_COEFS_SIZE		32	/* P28 0x1C-0x3B : max/min gain + attack/release TC + hold + hys + ratio + inflection */
+#define TAC5212_ADSR_COEFS_OFFSET	0x40
+#define TAC5212_ADSR_COEFS_SIZE		32	/* P28 0x40-0x5F : ADSR envelope (note/restart/sustain/attack/release slopes) */
 
 /* Within a biquad page, biquad idx (0..5) starts at this offset */
 #define TAC5212_BQ_STRIDE		0x14
