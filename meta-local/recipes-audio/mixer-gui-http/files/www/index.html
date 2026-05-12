@@ -530,6 +530,91 @@ html, body {
 .send-card .send-knobs {
   display: flex; gap: 6px;
 }
+
+/* ========== ALSA kcontrols (E7.3b) ========== */
+.alsa-ctrls {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.2fr) 2fr;
+  gap: 6px 12px;
+  font-size: 11px;
+}
+.alsa-ctrl {
+  display: contents;
+}
+.alsa-ctrl-label {
+  color: var(--text-pri); font-weight: 500;
+  align-self: center;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.alsa-ctrl-int {
+  display: flex; gap: 8px; align-items: center;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  padding: 4px 0;
+}
+.alsa-ctrl-int input[type=range] {
+  flex: 1; height: 4px;
+  -webkit-appearance: none; appearance: none;
+  background: rgba(0,0,0,0.5);
+  border-radius: 2px;
+  outline: none;
+  box-shadow: inset 0 1px 1px rgba(0,0,0,0.5);
+}
+.alsa-ctrl-int input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 10px; height: 14px; border-radius: 2px;
+  background: linear-gradient(to bottom, #e4e7ec, #aab0b8);
+  border: 1px solid #2a2c30;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+  cursor: ns-resize;
+}
+.alsa-ctrl-int input[type=range]::-moz-range-thumb {
+  width: 10px; height: 14px; border-radius: 2px;
+  background: linear-gradient(to bottom, #e4e7ec, #aab0b8); border: 1px solid #2a2c30;
+}
+.alsa-ctrl-val {
+  font-size: 10.5px; font-variant-numeric: tabular-nums;
+  color: var(--text-pri); width: 80px; text-align: right;
+}
+.alsa-toggle {
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  padding: 4px 0;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.4px;
+  text-transform: uppercase; color: var(--text-sec);
+  cursor: pointer;
+}
+.alsa-toggle input[type=checkbox] {
+  appearance: none; -webkit-appearance: none;
+  width: 30px; height: 16px; border-radius: 8px;
+  background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+  position: relative; cursor: pointer;
+  transition: all var(--transition);
+}
+.alsa-toggle input[type=checkbox]::after {
+  content: ''; position: absolute; top: 1px; left: 1px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text-sec); transition: all var(--transition);
+}
+.alsa-toggle input[type=checkbox]:checked { background: rgba(245,158,11,0.2); border-color: var(--accent-2); }
+.alsa-toggle input[type=checkbox]:checked::after { left: 16px; background: var(--accent-2); box-shadow: 0 0 4px var(--accent-2); }
+.alsa-select {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-pri);
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.alsa-bytes-tag {
+  font-size: 10px; color: var(--text-mute);
+  padding: 4px 0; font-style: italic;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
 </style>
 </head>
 <body x-data="mixerApp()" x-init="init()">
@@ -564,11 +649,11 @@ html, body {
     </div>
     <div class="strips-row">
       <template x-for="i in 8" :key="'mic'+i">
-        <div class="strip" :class="selectedStrip === i-1 ? 'selected' : ''"
-             @click.self="openStripDetail(i-1, 'M'+i, 'Mic DSP')"
-             @dblclick="openStripDetail(i-1, 'M'+i, 'Mic DSP')">
-          <div class="label" x-text="'M' + i" @click="openStripDetail(i-1, 'M'+i, 'Mic DSP')"></div>
-          <div class="sublabel" @click="openStripDetail(i-1, 'M'+i, 'Mic DSP')">DSP</div>
+        <div class="strip" :class="!selectedIsOutput && selectedStrip === i-1 ? 'selected' : ''"
+             @click.self="openStripDetail(i-1, 'M'+i, 'Mic DSP', false)"
+             @dblclick="openStripDetail(i-1, 'M'+i, 'Mic DSP', false)">
+          <div class="label" x-text="'M' + i" @click="openStripDetail(i-1, 'M'+i, 'Mic DSP', false)"></div>
+          <div class="sublabel" @click="openStripDetail(i-1, 'M'+i, 'Mic DSP', false)">DSP</div>
           <div class="fader-meter-pair">
             <div class="fader-track">
               <input type="range" class="fader" min="-60" max="6" step="0.5"
@@ -602,11 +687,11 @@ html, body {
     </div>
     <div class="strips-row">
       <template x-for="i in 8" :key="'asio'+i">
-        <div class="strip" :class="selectedStrip === i+7 ? 'selected' : ''"
-             @click.self="openStripDetail(i+7, 'U'+i, 'USB ASIO in')"
-             @dblclick="openStripDetail(i+7, 'U'+i, 'USB ASIO in')">
-          <div class="label" x-text="'U' + i" @click="openStripDetail(i+7, 'U'+i, 'USB ASIO in')"></div>
-          <div class="sublabel" @click="openStripDetail(i+7, 'U'+i, 'USB ASIO in')">UAC2</div>
+        <div class="strip" :class="!selectedIsOutput && selectedStrip === i+7 ? 'selected' : ''"
+             @click.self="openStripDetail(i+7, 'U'+i, 'USB ASIO in', false)"
+             @dblclick="openStripDetail(i+7, 'U'+i, 'USB ASIO in', false)">
+          <div class="label" x-text="'U' + i" @click="openStripDetail(i+7, 'U'+i, 'USB ASIO in', false)"></div>
+          <div class="sublabel" @click="openStripDetail(i+7, 'U'+i, 'USB ASIO in', false)">UAC2</div>
           <div class="fader-meter-pair">
             <div class="fader-track">
               <input type="range" class="fader" min="-60" max="6" step="0.5"
@@ -640,11 +725,11 @@ html, body {
     </div>
     <div class="strips-row">
       <template x-for="i in 2" :key="'ph'+i">
-        <div class="strip" :class="selectedStrip === i+15 ? 'selected' : ''"
-             @click.self="openStripDetail(i+15, 'P'+i, 'Phone in')"
-             @dblclick="openStripDetail(i+15, 'P'+i, 'Phone in')">
-          <div class="label" x-text="'P' + i" @click="openStripDetail(i+15, 'P'+i, 'Phone in')"></div>
-          <div class="sublabel" @click="openStripDetail(i+15, 'P'+i, 'Phone in')">aloop</div>
+        <div class="strip" :class="!selectedIsOutput && selectedStrip === i+15 ? 'selected' : ''"
+             @click.self="openStripDetail(i+15, 'P'+i, 'Phone in', false)"
+             @dblclick="openStripDetail(i+15, 'P'+i, 'Phone in', false)">
+          <div class="label" x-text="'P' + i" @click="openStripDetail(i+15, 'P'+i, 'Phone in', false)"></div>
+          <div class="sublabel" @click="openStripDetail(i+15, 'P'+i, 'Phone in', false)">aloop</div>
           <div class="fader-meter-pair">
             <div class="fader-track">
               <input type="range" class="fader" min="-60" max="6" step="0.5"
@@ -777,7 +862,8 @@ html, body {
         <div class="out-group-title">DSP PLAY · ×8</div>
         <div class="strips-row">
           <template x-for="o in 8" :key="'op'+o">
-            <div class="strip">
+            <div class="strip" :class="selectedIsOutput && selectedStrip === o-1 ? 'selected' : ''"
+                 @click="openStripDetail(o-1, 'S'+o, 'DSP play', true)">
               <div class="label" x-text="'S' + o"></div>
               <div class="sublabel">DSP</div>
               <div class="fader-meter-pair" style="justify-content:center;">
@@ -794,7 +880,8 @@ html, body {
         <div class="out-group-title">USB ASIO OUT · ×8</div>
         <div class="strips-row">
           <template x-for="o in 8" :key="'ou'+o">
-            <div class="strip">
+            <div class="strip" :class="selectedIsOutput && selectedStrip === o+7 ? 'selected' : ''"
+                 @click="openStripDetail(o+7, 'U'+o, 'USB ASIO out', true)">
               <div class="label" x-text="'U' + o"></div>
               <div class="sublabel">UAC2</div>
               <div class="fader-meter-pair" style="justify-content:center;">
@@ -811,7 +898,8 @@ html, body {
         <div class="out-group-title">PHONE OUT · ×2</div>
         <div class="strips-row">
           <template x-for="o in 2" :key="'op2'+o">
-            <div class="strip">
+            <div class="strip" :class="selectedIsOutput && selectedStrip === o+15 ? 'selected' : ''"
+                 @click="openStripDetail(o+15, 'P'+o, 'Phone out', true)">
               <div class="label" x-text="'P' + o"></div>
               <div class="sublabel">aloop</div>
               <div class="fader-meter-pair" style="justify-content:center;">
@@ -857,6 +945,7 @@ html, body {
     </div>
   </section>
 
+  <template x-if="!selectedIsOutput">
   <section class="detail-section">
     <div class="detail-section-title">
       <span class="accent-dot"></span>ROUTAGE MASTER
@@ -916,7 +1005,9 @@ html, body {
       </div>
     </div>
   </section>
+  </template>
 
+  <template x-if="!selectedIsOutput">
   <section class="detail-section">
     <div class="detail-section-title">
       <span class="accent-dot" style="background:var(--accent-2);"></span>SENDS FX
@@ -950,17 +1041,65 @@ html, body {
       </template>
     </div>
   </section>
+  </template>
 
-  <section class="detail-section">
-    <div class="detail-section-title">
-      <span class="accent-dot" style="background:var(--text-mute);"></span>EFFETS DSP / TAC
-      <span class="count">E7.3b + E7.4 (panels effets à venir)</span>
-    </div>
-    <div style="font-size:11px; color:var(--text-mute); padding:8px 0;">
-      Panels TAC ADC (AGC / HPF / biquads / decim) et DSP effects per-strip seront ajoutés
-      dans le prochain sprint. Le routage et les sends sont déjà fonctionnels ci-dessus.
-    </div>
-  </section>
+  <!-- ===== EFFETS section : ALSA kcontrols per strip (E7.3b) ===== -->
+  <template x-for="grp in alsaGroupsForStrip()" :key="'g'+grp.title">
+    <section class="detail-section">
+      <div class="detail-section-title">
+        <span class="accent-dot" style="background:var(--accent-2);"></span>
+        <span x-text="grp.title"></span>
+        <span class="count" x-text="grp.subtitle"></span>
+      </div>
+      <div class="alsa-ctrls">
+        <template x-for="c in grp.controls" :key="'c'+c.numid">
+          <div class="alsa-ctrl">
+            <div class="alsa-ctrl-label" x-text="c.short"></div>
+
+            <!-- INTEGER -->
+            <template x-if="c.type === 'INTEGER'">
+              <div class="alsa-ctrl-int">
+                <input type="range" :min="c.min" :max="c.max" step="1"
+                       :value="alsaIntValue(c)"
+                       @input.debounce.40ms="setAlsa(c, $event.target.value)">
+                <span class="alsa-ctrl-val" x-text="alsaDbLabel(c)"></span>
+              </div>
+            </template>
+
+            <!-- BOOLEAN -->
+            <template x-if="c.type === 'BOOLEAN'">
+              <label class="alsa-toggle">
+                <input type="checkbox"
+                       :checked="alsaIsOn(c)"
+                       @change="setAlsa(c, $event.target.checked ? 'on' : 'off')">
+                <span x-text="alsaIsOn(c) ? 'ON' : 'off'"></span>
+              </label>
+            </template>
+
+            <!-- ENUMERATED -->
+            <template x-if="c.type === 'ENUMERATED'">
+              <select class="alsa-select"
+                      @change="setAlsa(c, $event.target.value)">
+                <template x-for="(item, idx) in c.items" :key="idx">
+                  <option :value="item" :selected="c.value === item" x-text="item"></option>
+                </template>
+              </select>
+            </template>
+
+            <!-- BYTES (read-only placeholder) -->
+            <template x-if="c.type === 'BYTES'">
+              <span class="alsa-bytes-tag">blob (×<span x-text="c.count"></span> bytes)</span>
+            </template>
+          </div>
+        </template>
+        <template x-if="grp.controls.length === 0">
+          <div style="font-size:11px; color:var(--text-mute); padding:6px 2px;">
+            no kcontrol matched for this strip
+          </div>
+        </template>
+      </div>
+    </section>
+  </template>
 </aside>
 
 <script>
@@ -981,9 +1120,10 @@ function mixerApp() {
     _es: null,
 
     /* E7.3a : detail panel sidebar state */
-    selectedStrip: null,         /* int 0..25 = input index, null = closed */
+    selectedStrip: null,         /* int = input idx 0..25 OR output idx 0..17 */
+    selectedIsOutput: false,     /* E7.3b : if true, hide routing + show output effects */
     detailStrip: { label:'', kind:'' },
-    stripRouting: {              /* loaded via op:get_strip_routing */
+    stripRouting: {              /* loaded via op:get_strip_routing (inputs only) */
       sends:  Array(8).fill(0),
       master: Array(18).fill(0),
       gain: 1.0,
@@ -991,10 +1131,14 @@ function mixerApp() {
     },
     stereoLinks: Array(13).fill(false),   /* 13 paires (M1+M2, M3+M4, ... , R7+R8) */
 
+    /* E7.3b : ALSA kcontrols state */
+    alsaControls: {},            /* parsed map name → control object */
+
     async init() {
       await this.poll();
       setInterval(() => this.poll(), 500);
       this.initStream();
+      await this.fetchAlsaControls();
     },
 
     initStream() {
@@ -1127,11 +1271,12 @@ function mixerApp() {
       }
     },
 
-    async openStripDetail(i, label, kind) {
+    async openStripDetail(i, label, kind, isOutput) {
       this.selectedStrip = i;
-      this.detailStrip.label = label || this.stripLabel(i);
-      this.detailStrip.kind  = kind  || this.stripKind(i);
-      await this.fetchStripRouting(i);
+      this.selectedIsOutput = !!isOutput;
+      this.detailStrip.label = label || (isOutput ? this.outputStripLabel(i) : this.stripLabel(i));
+      this.detailStrip.kind  = kind  || (isOutput ? this.outputStripKind(i)  : this.stripKind(i));
+      if (!isOutput) await this.fetchStripRouting(i);
     },
     closeStripDetail() {
       this.selectedStrip = null;
@@ -1175,6 +1320,196 @@ function mixerApp() {
         const pair = src ^ 1;
         this.sendCmd({op:'set_send', in:pair, bus, gain});
       }
+    },
+
+    /* ========== E7.3b : ALSA kcontrols ========== */
+    outputStripLabel(i) {
+      if (i < 8)  return 'S' + (i+1);
+      if (i < 16) return 'U' + (i-7);
+      return 'P' + (i-15);
+    },
+    outputStripKind(i) {
+      if (i < 8)  return 'DSP play';
+      if (i < 16) return 'USB ASIO out';
+      return 'Phone out';
+    },
+
+    async fetchAlsaControls() {
+      try {
+        const r = await fetch('/api/alsa/contents');
+        const text = await r.text();
+        this.alsaControls = this.parseAmixerContents(text);
+      } catch(e) {
+        console.warn('fetchAlsaControls failed', e);
+      }
+    },
+
+    parseAmixerContents(text) {
+      const out = {};
+      const blocks = text.split(/^numid=/m).filter(b => b.trim());
+      for (const blk of blocks) {
+        const lines = blk.split('\n');
+        const head = lines[0];
+        const m = head.match(/^(\d+),iface=MIXER,name='([^']+)'/);
+        if (!m) continue;
+        const c = { numid: parseInt(m[1]), name: m[2], items: [], type: '?', value: '' };
+        for (let i = 1; i < lines.length; i++) {
+          const ln = lines[i].trimEnd();
+          const t = ln.trimStart();
+          if (t.startsWith('; type=')) {
+            const tm = t.match(/type=([A-Z]+)/);
+            const mn = t.match(/min=(-?\d+)/);
+            const mx = t.match(/max=(-?\d+)/);
+            const cnt = t.match(/values=(\d+)/);
+            if (tm) c.type = tm[1];
+            if (mn) c.min = parseInt(mn[1]);
+            if (mx) c.max = parseInt(mx[1]);
+            if (cnt) c.count = parseInt(cnt[1]);
+          } else if (t.startsWith('; Item #')) {
+            const im = t.match(/Item #(\d+) '([^']*)'/);
+            if (im) c.items[parseInt(im[1])] = im[2];
+          } else if (t.startsWith(': values=')) {
+            c.value = t.substring(': values='.length);
+          } else if (t.startsWith('| dB')) {
+            const dm = t.match(/min=(-?[\d.]+)\s*dB/);
+            const dx = t.match(/max=(-?[\d.]+)\s*dB/);
+            const ds = t.match(/step=(-?[\d.]+)\s*dB/);
+            if (dm) c.dbMin = parseFloat(dm[1]);
+            if (dx) c.dbMax = parseFloat(dx[1]);
+            if (ds) c.dbStep = parseFloat(ds[1]);
+          }
+        }
+        out[c.name] = c;
+      }
+      return out;
+    },
+
+    /* Strip → short alsa label : strip "TAC0 ADC1 Digital Volume" → "Digital Volume" */
+    alsaShortLabel(name) {
+      return name
+        .replace(/^TAC\d+\s+(?:ADC|DAC|OUT|CH|MICBIAS|VAD|VREF)(?:\d[A-Z]?)?\s+/, '')
+        .replace(/^TAC\d+\s+/, '')
+        .replace(/^PGA\d\.\d \d /, '')
+        .replace(/^(MULTIBAND_DRC|DRC)\d\.\d /, '');
+    },
+
+    /* Return groups of ALSA controls relevant to current selected strip. */
+    alsaGroupsForStrip() {
+      const groups = [];
+      if (this.selectedStrip === null) return groups;
+      const idx = this.selectedStrip;
+      const isOut = this.selectedIsOutput;
+      const all = this.alsaControls;
+      const names = Object.keys(all);
+
+      if (!isOut) {
+        /* === INPUT strip === */
+        if (idx < 8) {
+          /* DSP mic M1..M8 : TAC<floor(i/2)> ADC<(i%2)+1> + global ADC + PGA Strip */
+          const tac = Math.floor(idx / 2);
+          const ch  = (idx % 2) + 1;
+          const tacPrefix = `TAC${tac}`;
+          const perCh = names.filter(n =>
+            (n.startsWith(`${tacPrefix} ADC${ch}`) ||
+             n === `${tacPrefix} CH${ch} Input Mux`)
+          ).map(n => ({ ...all[n], short: this.alsaShortLabel(n) }));
+          const adcShared = names.filter(n =>
+            n.startsWith(`${tacPrefix} ADC `) && !n.match(/ADC\d/)
+          ).map(n => ({ ...all[n], short: this.alsaShortLabel(n) }));
+          const tacMisc = names.filter(n =>
+            n.startsWith(`${tacPrefix} MICBIAS`) ||
+            n.startsWith(`${tacPrefix} VAD`) ||
+            n.startsWith(`${tacPrefix} VREF`)
+          ).map(n => ({ ...all[n], short: this.alsaShortLabel(n) }));
+          const pgaName = `PGA1.0 1 Strip${idx+1} Volume`;
+          const pga = all[pgaName] ? [{ ...all[pgaName], short: this.alsaShortLabel(pgaName) }] : [];
+
+          if (perCh.length) groups.push({
+            title:'TAC ADC '+ch, subtitle:`channel-specific · ${perCh.length} controls`, controls:perCh });
+          if (adcShared.length) groups.push({
+            title:'TAC ADC shared', subtitle:`shared CH1+CH2 · ${adcShared.length} controls`, controls:adcShared });
+          if (tacMisc.length) groups.push({
+            title:'TAC misc', subtitle:`bias/VAD/VREF · ${tacMisc.length} controls`, controls:tacMisc });
+          if (pga.length) groups.push({
+            title:'DSP PGA cap', subtitle:`SOF strip volume`, controls:pga });
+        } else if (idx >= 8 && idx < 18) {
+          /* UAC2 or Phone : no TAC, just PGA strip if applicable */
+          const pgaName = `PGA1.0 1 Strip${idx+1} Volume`;
+          const pga = all[pgaName] ? [{ ...all[pgaName], short: this.alsaShortLabel(pgaName) }] : [];
+          if (pga.length) groups.push({
+            title:'DSP PGA cap', subtitle:'SOF strip volume (no TAC for this source)', controls:pga });
+        }
+        /* Returns R1..R8 (idx 18..25) : no per-strip effects, FX bus level handled separately */
+      } else {
+        /* === OUTPUT strip === */
+        if (idx < 8) {
+          /* DSP play S1..S8 : TAC<floor/2> DAC<(i%2)+1> + global DAC + OUT + PGA Out Strip */
+          const tac = Math.floor(idx / 2);
+          const ch  = (idx % 2) + 1;
+          const tacPrefix = `TAC${tac}`;
+          const perCh = names.filter(n =>
+            n.startsWith(`${tacPrefix} DAC${ch}`) ||
+            n.startsWith(`${tacPrefix} OUT${ch}`)
+          ).map(n => ({ ...all[n], short: this.alsaShortLabel(n) }));
+          const dacShared = names.filter(n =>
+            n.startsWith(`${tacPrefix} DAC `) && !n.match(/DAC\d/)
+          ).map(n => ({ ...all[n], short: this.alsaShortLabel(n) }));
+          const pgaName = `PGA2.0 2 Out Strip${idx+1} Volume`;
+          const pga = all[pgaName] ? [{ ...all[pgaName], short: this.alsaShortLabel(pgaName) }] : [];
+
+          if (perCh.length) groups.push({
+            title:'TAC DAC '+ch, subtitle:`channel-specific · ${perCh.length} controls`, controls:perCh });
+          if (dacShared.length) groups.push({
+            title:'TAC DAC shared', subtitle:`shared CH1+CH2 · ${dacShared.length} controls`, controls:dacShared });
+          if (pga.length) groups.push({
+            title:'DSP PGA play', subtitle:`SOF strip volume`, controls:pga });
+        }
+      }
+      return groups;
+    },
+
+    /* Get integer value (handle stereo count=2 → take first channel) */
+    alsaIntValue(c) {
+      if (!c.value) return c.min || 0;
+      const v = String(c.value).split(',')[0].trim();
+      const n = parseInt(v, 10);
+      return isNaN(n) ? (c.min || 0) : n;
+    },
+    alsaDbLabel(c) {
+      const v = this.alsaIntValue(c);
+      if (c.dbStep !== undefined && c.dbMin !== undefined) {
+        const db = c.dbMin + v * c.dbStep;
+        return db.toFixed(1) + ' dB';
+      }
+      if (c.dbMin !== undefined && c.dbMax !== undefined && c.max) {
+        const db = c.dbMin + (v / c.max) * (c.dbMax - c.dbMin);
+        return db.toFixed(1) + ' dB  (' + v + '/' + c.max + ')';
+      }
+      return v + ' / ' + (c.max ?? '?');
+    },
+    alsaIsOn(c) {
+      const v = String(c.value || '').toLowerCase();
+      return v.includes('on') || v === '1' || v.includes('true');
+    },
+
+    async setAlsa(c, value) {
+      const val = String(value);
+      /* local optimistic update */
+      if (c.type === 'INTEGER') {
+        const n = parseInt(val, 10);
+        c.value = (c.count === 2) ? (n + ',' + n) : String(n);
+      } else if (c.type === 'BOOLEAN') {
+        c.value = val;
+      } else if (c.type === 'ENUMERATED') {
+        c.value = "'" + val + "'";
+      }
+      try {
+        await fetch('/api/alsa/set', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({numid: c.numid, value: val})
+        });
+      } catch(e) { console.warn('setAlsa failed', e); }
     },
   };
 }

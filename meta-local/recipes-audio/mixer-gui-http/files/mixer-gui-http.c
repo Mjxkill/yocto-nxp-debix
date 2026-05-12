@@ -19,6 +19,7 @@
  */
 
 #define _GNU_SOURCE
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -31,11 +32,13 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/types.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <microhttpd.h>
 
-#define GUI_VERSION       "v7.0-e7.1"
+#define GUI_VERSION       "v7.0-e7.3b"
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
@@ -241,6 +244,114 @@ struct post_buf {
 	size_t len;
 };
 
+/* ============================== ALSA amixer helpers (E7.3b) ======= */
+
+#define ALSA_CARD "softac5212tdm"
+
+/* Validate value string : whitelist [0-9a-zA-Z .,_-]. Avoid shell injection
+ * even if we use fork+exec without shell — defense in depth. */
+static int amixer_value_safe(const char *v)
+{
+	if (!v || !*v) return 0;
+	for (const char *p = v; *p; p++) {
+		char c = *p;
+		if (!(isalnum((unsigned char)c) || c == ' ' || c == '.' ||
+		      c == ',' || c == '-' || c == '_'))
+			return 0;
+	}
+	return strlen(v) < 64;
+}
+
+/* Run `amixer -c softac5212tdm contents` and capture stdout into out[cap].
+ * Returns bytes read on success, -1 on error. */
+static int run_amixer_contents(char *out, size_t cap)
+{
+	int fds[2];
+	if (pipe(fds) < 0) return -1;
+	pid_t pid = fork();
+	if (pid < 0) { close(fds[0]); close(fds[1]); return -1; }
+	if (pid == 0) {
+		close(fds[0]);
+		dup2(fds[1], STDOUT_FILENO);
+		close(fds[1]);
+		int devnull = open("/dev/null", O_WRONLY);
+		if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+		execlp("amixer", "amixer", "-c", ALSA_CARD, "contents", (char *)NULL);
+		_exit(127);
+	}
+	close(fds[1]);
+	size_t total = 0;
+	ssize_t n;
+	while (total < cap - 1 &&
+	       (n = read(fds[0], out + total, cap - 1 - total)) > 0)
+		total += (size_t)n;
+	out[total] = 0;
+	close(fds[0]);
+	int status;
+	waitpid(pid, &status, 0);
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return -1;
+	return (int)total;
+}
+
+/* Run `amixer -c softac5212tdm cset numid=<numid> <value>`.
+ * Returns 0 on success, -1 on error. */
+static int run_amixer_cset(int numid, const char *value)
+{
+	if (numid <= 0 || !amixer_value_safe(value))
+		return -1;
+	char numid_arg[32];
+	snprintf(numid_arg, sizeof(numid_arg), "numid=%d", numid);
+	pid_t pid = fork();
+	if (pid < 0) return -1;
+	if (pid == 0) {
+		int devnull = open("/dev/null", O_WRONLY);
+		if (devnull >= 0) {
+			dup2(devnull, STDOUT_FILENO);
+			dup2(devnull, STDERR_FILENO);
+			close(devnull);
+		}
+		execlp("amixer", "amixer", "-c", ALSA_CARD, "cset",
+		       numid_arg, value, (char *)NULL);
+		_exit(127);
+	}
+	int status;
+	waitpid(pid, &status, 0);
+	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
+}
+
+/* Minimal JSON helpers : extract "key":<int> or "key":"<str>" from a JSON line. */
+static int json_get_int_field(const char *s, const char *key, int *out)
+{
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+	const char *p = strstr(s, pattern);
+	if (!p) return -1;
+	p += strlen(pattern);
+	while (*p && (*p == ' ' || *p == ':' || *p == '\t')) p++;
+	if (!*p) return -1;
+	char *end;
+	long v = strtol(p, &end, 10);
+	if (end == p) return -1;
+	*out = (int)v;
+	return 0;
+}
+static int json_get_str_field(const char *s, const char *key, char *out, size_t cap)
+{
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+	const char *p = strstr(s, pattern);
+	if (!p) return -1;
+	p += strlen(pattern);
+	while (*p && (*p == ' ' || *p == ':' || *p == '\t')) p++;
+	if (*p != '"') return -1;
+	p++;
+	size_t i = 0;
+	while (*p && *p != '"' && i < cap - 1) out[i++] = *p++;
+	out[i] = 0;
+	return (*p == '"') ? 0 : -1;
+}
+
 /* ============================== Request handler =================== */
 
 static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
@@ -294,6 +405,20 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			return ret;
 		}
 
+		if (!strcmp(url, "/api/alsa/contents")) {
+			/* E7.3b : dump all ALSA kcontrols of softac5212tdm card.
+			 * Returns raw amixer -c <card> contents output as text/plain.
+			 * Parsed client-side (Alpine.js) into typed controls.
+			 */
+			static char buf[64 * 1024];
+			int n = run_amixer_contents(buf, sizeof(buf));
+			if (n < 0)
+				return send_json(conn, 503,
+					"{\"ok\":false,\"err\":\"amixer contents failed\"}\n");
+			return send_text(conn, 200, "text/plain; charset=utf-8",
+					 buf, (size_t)n);
+		}
+
 		if (!strncmp(url, "/static/", 8)) {
 			const char *rel = url + 1;  /* "static/..." */
 			if (!safe_static_path(rel))
@@ -340,6 +465,47 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		char reply[8192];
 		int rc = mixer_request(req, reply, sizeof(reply));
 		return send_json(conn, rc > 0 ? 200 : 503, reply);
+	}
+
+	/* === Route POST /api/alsa/set === (E7.3b)
+	 * Body : {"numid": <int>, "value": "<value-string>"}
+	 * Calls : amixer -c softac5212tdm cset numid=<N> "<value>"
+	 */
+	if (!strcmp(method, "POST") && !strcmp(url, "/api/alsa/set")) {
+		struct post_buf *pb = *con_cls;
+		if (!pb) {
+			pb = calloc(1, sizeof(*pb));
+			if (!pb) return MHD_NO;
+			*con_cls = pb;
+			return MHD_YES;
+		}
+		if (*upload_data_size > 0) {
+			size_t avail = POST_MAX_BYTES - 1 - pb->len;
+			size_t n = *upload_data_size < avail ? *upload_data_size : avail;
+			memcpy(pb->data + pb->len, upload_data, n);
+			pb->len += n;
+			pb->data[pb->len] = '\0';
+			*upload_data_size = 0;
+			return MHD_YES;
+		}
+		if (pb->len == 0)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"empty body\"}\n");
+		int numid = 0;
+		char value[64];
+		if (json_get_int_field(pb->data, "numid", &numid) < 0 ||
+		    json_get_str_field(pb->data, "value", value, sizeof(value)) < 0)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"need numid + value\"}\n");
+		int r = run_amixer_cset(numid, value);
+		if (r != 0)
+			return send_json(conn, 503,
+				"{\"ok\":false,\"err\":\"amixer cset failed\"}\n");
+		char reply[128];
+		snprintf(reply, sizeof(reply),
+			 "{\"ok\":true,\"numid\":%d,\"value\":\"%s\"}\n",
+			 numid, value);
+		return send_json(conn, 200, reply);
 	}
 
 	return send_json(conn, MHD_HTTP_NOT_FOUND, "{\"ok\":false,\"err\":\"not found\"}\n");
