@@ -40,6 +40,7 @@
 
 #include "mixer-pro.h"
 #include "effects.h"
+#include "analyzer.h"
 
 /* ============================== State ============================== */
 
@@ -130,6 +131,16 @@ _Static_assert(sizeof(float) == 4, "float must be 4 bytes for atomicity assumpti
 _Static_assert(_Alignof(float) <= 4, "float alignment compatible with atomicity");
 
 static struct mixer_state g_st;
+
+/* E7.5 — analyzer taps. Visibility :
+ *   - mixer-pro.c owns the storage (g_taps).
+ *   - analyzer.c reads via the extern'd pointer + run flag.
+ *   - control thread reads/writes the per-tap config and snapshots the
+ *     analyzer output for the JSON wire (op:get_meters embeds analyzer[]).
+ */
+mixer_tap_t g_taps[N_TAPS];
+mixer_tap_t *g_taps_for_analyzer = g_taps;
+atomic_int   g_running_flag_for_analyzer;
 
 /* Options command-line : skip une ou plusieurs paires PCMs (pratique en dev
  * quand le host PC USB est absent ou que l'aloop n'est pas chargée).
@@ -445,6 +456,45 @@ static void *audio_thread(void *arg)
 			float bus_pre[N_BUS_FX_CH];
 			float ret_post[N_RETURN_CH];
 			mix_frame(in, out, bus_pre, ret_post);
+
+			/* E7.5 : push current frame into each active analyzer tap.
+			 * Reads the per-tap kind/a/b atomically so the control_thread
+			 * can re-target a tap without holding a lock. b == -1 means
+			 * mono (R duplicates L). */
+			for (int t = 0; t < N_TAPS; t++) {
+				int kind = atomic_load_explicit(
+					&g_taps[t].kind, memory_order_relaxed);
+				if (kind == TAP_KIND_NONE)
+					continue;
+				int a = atomic_load_explicit(
+					&g_taps[t].a, memory_order_relaxed);
+				int b = atomic_load_explicit(
+					&g_taps[t].b, memory_order_relaxed);
+				float lv = 0.0f, rv = 0.0f;
+				switch (kind) {
+				case TAP_KIND_INPUT:
+					if (a >= 0 && a < N_INPUT_REAL)        lv = in[a];
+					else if (a >= N_INPUT_REAL && a < N_INPUT_TOTAL)
+						lv = ret_post[a - N_INPUT_REAL];
+					if (b >= 0) {
+						if (b < N_INPUT_REAL)               rv = in[b];
+						else if (b < N_INPUT_TOTAL)
+							rv = ret_post[b - N_INPUT_REAL];
+					} else rv = lv;
+					break;
+				case TAP_KIND_BUS_PRE:
+					if (a >= 0 && a < N_BUS_FX_CH)         lv = bus_pre[a];
+					if (b >= 0 && b < N_BUS_FX_CH)         rv = bus_pre[b];
+					else                                    rv = lv;
+					break;
+				case TAP_KIND_OUTPUT:
+					if (a >= 0 && a < N_OUTPUT_TOTAL)      lv = out[a];
+					if (b >= 0 && b < N_OUTPUT_TOTAL)      rv = out[b];
+					else                                    rv = lv;
+					break;
+				}
+				analyzer_tap_write(&g_taps[t], lv, rv);
+			}
 
 			for (int o = 0; o < N_OUTPUT_DSP; o++)
 				play_dsp_buf[f * N_OUTPUT_DSP + o] = f_to_s32(out[o]);
@@ -870,10 +920,11 @@ static void handle_cmd(int fd, const char *line)
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "get_meters")) {
-		/* E7.1 : retourne 3 tableaux peak compact (uint32 raw abs S32).
-		 * Conversion dBFS côté client : 20 * log10(peak / 2147483648.0).
+		/* E7.1 + E7.5 : retourne peaks + analyzer (spectrum + scope) en
+		 * un seul round-trip, consommé par mixer-gui-http /api/stream.
+		 * Conversion dBFS peaks côté client : 20*log10(peak/2147483648).
 		 */
-		char reply[2048];
+		static char reply[16384];
 		int n = 0;
 		n += snprintf(reply + n, sizeof(reply) - n, "{\"ok\":true,\"in\":[");
 		for (int i = 0; i < N_INPUT_TOTAL && n < (int)sizeof(reply); i++)
@@ -887,7 +938,77 @@ static void handle_cmd(int fd, const char *line)
 		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(reply); b++)
 			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", b ? "," : "",
 				      atomic_load_explicit(&g_st.peak_fx[b], memory_order_relaxed));
+		n += snprintf(reply + n, sizeof(reply) - n, "],\"analyzer\":[");
+		for (int t = 0; t < N_TAPS && n < (int)sizeof(reply); t++) {
+			int k = atomic_load_explicit(&g_taps[t].kind, memory_order_relaxed);
+			int aa = atomic_load_explicit(&g_taps[t].a, memory_order_relaxed);
+			int bb = atomic_load_explicit(&g_taps[t].b, memory_order_relaxed);
+			int8_t  spec[TAP_BINS_OUT];
+			int16_t scope[TAP_SCOPE_N * 2];
+			float   rms_dB;
+			pthread_mutex_lock(&g_taps[t].out_lock);
+			memcpy(spec,  g_taps[t].out_spec,  sizeof(spec));
+			memcpy(scope, g_taps[t].out_scope, sizeof(scope));
+			rms_dB = g_taps[t].out_rms_dB;
+			pthread_mutex_unlock(&g_taps[t].out_lock);
+			n += snprintf(reply + n, sizeof(reply) - n,
+				      "%s{\"k\":%d,\"a\":%d,\"b\":%d,\"rms\":%.1f,\"s\":[",
+				      t ? "," : "", k, aa, bb, rms_dB);
+			for (int i = 0; i < TAP_BINS_OUT && n < (int)sizeof(reply); i++)
+				n += snprintf(reply + n, sizeof(reply) - n, "%s%d",
+					      i ? "," : "", (int)spec[i]);
+			n += snprintf(reply + n, sizeof(reply) - n, "],\"x\":[");
+			for (int i = 0; i < TAP_SCOPE_N * 2 && n < (int)sizeof(reply); i++)
+				n += snprintf(reply + n, sizeof(reply) - n, "%s%d",
+					      i ? "," : "", (int)scope[i]);
+			n += snprintf(reply + n, sizeof(reply) - n, "]}");
+		}
 		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
+		write(fd, reply, strlen(reply));
+
+	} else if (json_has_op(line, "set_tap")) {
+		int t, k, a, b;
+		if (json_get_int(line, "tap",  &t) < 0 ||
+		    json_get_int(line, "kind", &k) < 0 ||
+		    t < 0 || t >= N_TAPS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_tap args\"}\n");
+			return;
+		}
+		if (json_get_int(line, "a", &a) < 0) a = 0;
+		if (json_get_int(line, "b", &b) < 0) b = -1;
+		int amax = 0;
+		switch (k) {
+		case TAP_KIND_NONE:    amax = 0;             break;
+		case TAP_KIND_INPUT:   amax = N_INPUT_TOTAL; break;
+		case TAP_KIND_BUS_PRE: amax = N_BUS_FX_CH;   break;
+		case TAP_KIND_OUTPUT:  amax = N_OUTPUT_TOTAL;break;
+		default:
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad kind\"}\n");
+			return;
+		}
+		if (k != TAP_KIND_NONE &&
+		    (a < 0 || a >= amax || (b >= 0 && b >= amax))) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad a/b for kind\"}\n");
+			return;
+		}
+		atomic_store_explicit(&g_taps[t].a, a, memory_order_relaxed);
+		atomic_store_explicit(&g_taps[t].b, b, memory_order_relaxed);
+		atomic_store_explicit(&g_taps[t].kind, k, memory_order_release);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_tap\",\"tap\":%d,\"kind\":%d,"
+			    "\"a\":%d,\"b\":%d}\n", t, k, a, b);
+
+	} else if (json_has_op(line, "get_taps")) {
+		char reply[256];
+		int n = snprintf(reply, sizeof(reply), "{\"ok\":true,\"taps\":[");
+		for (int t = 0; t < N_TAPS; t++) {
+			n += snprintf(reply + n, sizeof(reply) - n,
+				      "%s{\"k\":%d,\"a\":%d,\"b\":%d}",
+				      t ? "," : "",
+				      atomic_load_explicit(&g_taps[t].kind, memory_order_relaxed),
+				      atomic_load_explicit(&g_taps[t].a,    memory_order_relaxed),
+				      atomic_load_explicit(&g_taps[t].b,    memory_order_relaxed));
+		}
+		snprintf(reply + n, sizeof(reply) - n, "]}\n");
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "reset_fx")) {
@@ -1041,6 +1162,11 @@ int main(int argc, char **argv)
 	}
 	mlog("FX engines : 0=compressor 1=reverb 2=delay 3=eq");
 
+	/* E7.5 : init analyzer taps storage + raise the run flag before
+	 * starting the analyzer thread (which polls it). */
+	analyzer_taps_init(g_taps);
+	atomic_store(&g_running_flag_for_analyzer, 1);
+
 	/* Open ALSA streams (skip selon flags command-line) */
 	if (pcm_open(&g_st.cap_dsp,   PCM_DSP_CAP,   N_INPUT_MICS,   SND_PCM_STREAM_CAPTURE)  < 0) goto err;
 	if (!g_skip_uac2)  { if (pcm_open(&g_st.cap_uac2,  PCM_UAC2_CAP,  N_INPUT_STEMS,  SND_PCM_STREAM_CAPTURE)  < 0) goto err; }
@@ -1055,14 +1181,18 @@ int main(int argc, char **argv)
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
 
-	pthread_t th_audio, th_ctrl, th_play;
+	pthread_t th_audio, th_ctrl, th_play, th_analyzer;
 	pthread_create(&th_ctrl, NULL, control_thread, NULL);
 	pthread_create(&th_play, NULL, play_thread, NULL);   /* E6.g Phase 2 */
 	pthread_create(&th_audio, NULL, audio_thread, NULL);
+	pthread_create(&th_analyzer, NULL, analyzer_thread, NULL);  /* E7.5 */
 
 	pthread_join(th_audio, NULL);
 	pthread_join(th_play, NULL);
 	pthread_join(th_ctrl, NULL);
+	atomic_store(&g_running_flag_for_analyzer, 0);
+	pthread_join(th_analyzer, NULL);
+	analyzer_taps_destroy(g_taps);
 
 	snd_pcm_close(g_st.cap_dsp.pcm);
 	if (!g_skip_uac2)  snd_pcm_close(g_st.cap_uac2.pcm);

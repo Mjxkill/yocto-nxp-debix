@@ -26,7 +26,7 @@
 
 #include <stdint.h>
 
-#define MIXER_VERSION  "v7.0-e7.3a"
+#define MIXER_VERSION  "v7.0-e7.5a"
 
 /* E6.g Phase 2 + E6.h tuning : ring buffer SPSC entre thread audio (cap+mix)
  * et thread play DSP. Taille = N_RING_PERIODS périodes × 18 ch × 4 B.
@@ -83,5 +83,27 @@
  *   out_id : 0..N_OUTPUT_TOTAL-1
  *   bus_id : 0..N_BUS_FX_CH-1  (4 stéréo = ch 0L 0R 1L 1R 2L 2R 3L 3R)
  */
+
+/* E7.5 — analyzer taps.
+ *   N_TAPS     : 4 GUI analyzer slots, user-configurable at runtime
+ *   FFT_N      : 1024 samples = ~21 ms @ 48 kHz, gives 23 Hz/bin resolution
+ *   BINS_OUT   : 128 half-spectrum bins delivered to the GUI (downsampled
+ *                from FFT_N/2 = 512 via 4:1 magnitude peak hold)
+ *   SCOPE_N    : 64 stereo sample pairs (~1.3 ms) for the X-Y phase scope.
+ *   ANALYZER_PERIOD_US : 33 ms = ~30 Hz refresh.
+ */
+#define N_TAPS                4
+#define TAP_FFT_N          1024
+#define TAP_BINS_OUT        128
+#define TAP_SCOPE_N          64
+#define ANALYZER_PERIOD_US 33000
+#define RT_PRIO_ANALYZER     60
+
+typedef enum {
+	TAP_KIND_NONE     = 0,
+	TAP_KIND_INPUT    = 1,   /* a/b : 0..17 in[], 18..25 returns FX */
+	TAP_KIND_BUS_PRE  = 2,   /* a/b : 0..7 bus pre-FX                */
+	TAP_KIND_OUTPUT   = 3,   /* a/b : 0..17 out[]                    */
+} tap_kind_t;
 
 #endif /* __MIXER_PRO_H__ */

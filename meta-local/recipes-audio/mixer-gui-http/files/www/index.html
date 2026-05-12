@@ -741,6 +741,33 @@ html, body {
   font-size: 22px; cursor: pointer; line-height: 1;
 }
 .fxbus-panel .fxbus-close:hover { color: var(--text-bright); }
+
+/* ===== E7.5 — FFT analyzer / stereo scope boxes ===== */
+.section.analyzer { width: 270px; }
+.section.analyzer .section-title .accent-dot { background: var(--accent); }
+.analyzer-body { display: flex; flex-direction: column; gap: 8px; }
+.analyzer-select {
+  width: 100%; font-size: 11px; padding: 4px 6px;
+  background: rgba(0,0,0,0.4); color: var(--text-pri);
+  border: 1px solid var(--border-hi); border-radius: 5px;
+}
+.analyzer-canvas {
+  width: 100%; height: 110px; display: block;
+  background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(45,212,191,0.18); border-radius: 6px;
+}
+.analyzer-scope-canvas {
+  width: 110px; height: 110px;
+  background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(245,158,11,0.18); border-radius: 6px;
+}
+.analyzer-graphs { display: flex; gap: 6px; align-items: flex-start; }
+.analyzer-info {
+  display: flex; justify-content: space-between;
+  font-size: 9.5px; color: var(--text-mute);
+  letter-spacing: 0.4px; text-transform: uppercase;
+}
+.analyzer-info .v { color: var(--text-pri); font-variant-numeric: tabular-nums; }
 .drc-inline { display: flex; flex-direction: column; gap: 2px;
               padding: 8px 10px; background: rgba(255,255,255,0.02);
               border-radius: 6px; border: 1px solid var(--border-hi); }
@@ -1087,6 +1114,40 @@ html, body {
   </section>
 
   </div><!-- /.strips-row-output -->
+
+  <!-- ===== E7.5 — 4 FFT + stereo scope boxes ===== -->
+  <div class="strips-row-output">
+    <template x-for="i in 4" :key="'an'+i">
+      <section class="section analyzer">
+        <div class="section-title">
+          <span class="accent-dot"></span>ANALYZER <span x-text="i"></span>
+          <span class="count" x-text="'RMS ' + (analyzerTaps[i-1].rms|0) + ' dB'"></span>
+        </div>
+        <div class="analyzer-body">
+          <select class="analyzer-select"
+                  :value="analyzerSourceKeyOf(i-1)"
+                  @change="setAnalyzerTap(i-1, $event.target.value)">
+            <template x-for="g in analyzerSourceList()" :key="g.label">
+              <optgroup :label="g.label">
+                <template x-for="o in g.items" :key="g.label + '/' + o.key">
+                  <option :value="o.key" x-text="o.label"></option>
+                </template>
+              </optgroup>
+            </template>
+          </select>
+          <div class="analyzer-graphs">
+            <canvas class="analyzer-canvas"
+                    :id="'anfft' + (i-1)"
+                    width="260" height="120"></canvas>
+            <canvas class="analyzer-scope-canvas"
+                    :id="'anscope' + (i-1)"
+                    width="120" height="120"></canvas>
+          </div>
+        </div>
+      </section>
+    </template>
+  </div>
+
 </div><!-- /.strips-area -->
 
 <!-- ---------- BUS FX SEND (4 stereo, sidebar on the right of strips-area) ---------- -->
@@ -1605,6 +1666,16 @@ function mixerApp() {
     /* Per-strip sidebar : tab system over alsaGroupsForStrip() groups so
      * the user sees one group at a time instead of stacking all of them. */
     activeEffectTab: '',
+
+    /* E7.5 — 4 analyzer taps. Mirror of daemon's g_taps[] :
+     *   kind : 0 none, 1 input, 2 bus_pre, 3 output
+     *   a/b  : channel indices, b=-1 = mono. */
+    analyzerTaps: [
+      { kind: 0, a: 0, b: -1, spec: null, scope: null, rms: -120 },
+      { kind: 0, a: 0, b: -1, spec: null, scope: null, rms: -120 },
+      { kind: 0, a: 0, b: -1, spec: null, scope: null, rms: -120 },
+      { kind: 0, a: 0, b: -1, spec: null, scope: null, rms: -120 },
+    ],
     drcSliderSpecs: [
       { key:'threshold_dB',     label:'Threshold',  unit:'dB', min:-60, max:0,    step:0.5 },
       { key:'knee_dB',          label:'Knee',       unit:'dB', min:0,   max:40,   step:0.5 },
@@ -1633,10 +1704,173 @@ function mixerApp() {
           if (Array.isArray(m.in))  this.peakIn  = m.in;
           if (Array.isArray(m.out)) this.peakOut = m.out;
           if (Array.isArray(m.fx))  this.peakFx  = m.fx;
+          if (Array.isArray(m.analyzer)) this._onAnalyzerFrame(m.analyzer);
           this.streaming = true;
         } catch(err) {}
       };
       this._es.onerror = () => { this.streaming = false; };
+    },
+
+    /* === E7.5 — analyzer source list + tap commands + canvas draw ===== */
+
+    /* Build the dropdown grouped options. Mono channels first, then stereo
+     * pairs (DSP mics paired only if stereoLinkOn is true). The returned
+     * shape is [{ label:"Inputs", items:[{key,label,kind,a,b}, …] }, …]. */
+    analyzerSourceList() {
+      const groups = [];
+      const off = { label: 'Off', items: [{ key: 'off', label: '— off —',
+                                              kind: 0, a: 0, b: -1 }] };
+      groups.push(off);
+      /* DSP mics M1..M8 (in[0..7]) */
+      const mics = { label: 'DSP mics', items: [] };
+      for (let i = 0; i < 8; i++)
+        mics.items.push({ key:'in:'+i, label:'M'+(i+1), kind:1, a:i, b:-1 });
+      for (let i = 0; i < 7; i += 1)
+        if (this.stereoLinkOn(i) && (i % 2 === 0))
+          mics.items.push({ key:'in:'+i+','+(i+1),
+                            label:'M'+(i+1)+'+M'+(i+2), kind:1, a:i, b:i+1 });
+      groups.push(mics);
+      /* USB ASIO U1..U8 (in[8..15]) */
+      const asio = { label: 'USB ASIO in', items: [] };
+      for (let i = 0; i < 8; i++)
+        asio.items.push({ key:'in:'+(i+8), label:'U'+(i+1), kind:1, a:i+8, b:-1 });
+      for (let i = 0; i < 7; i += 2)
+        if (this.stereoLinkOn(i+8))
+          asio.items.push({ key:'in:'+(i+8)+','+(i+9),
+                            label:'U'+(i+1)+'+U'+(i+2), kind:1, a:i+8, b:i+9 });
+      groups.push(asio);
+      /* Phone P1, P2 (in[16..17]) */
+      groups.push({ label: 'Phone in', items: [
+        { key:'in:16', label:'P1', kind:1, a:16, b:-1 },
+        { key:'in:17', label:'P2', kind:1, a:17, b:-1 },
+        { key:'in:16,17', label:'P1+P2', kind:1, a:16, b:17 },
+      ]});
+      /* Returns FX R1..R8 (in[18..25]) — stéréo paires R1+R2, R3+R4, … */
+      const ret = { label: 'Returns FX', items: [] };
+      for (let i = 0; i < 8; i++)
+        ret.items.push({ key:'in:'+(i+18), label:'R'+(i+1), kind:1, a:i+18, b:-1 });
+      for (let i = 0; i < 7; i += 2)
+        ret.items.push({ key:'in:'+(i+18)+','+(i+19),
+                         label:'R'+(i+1)+'+R'+(i+2), kind:1, a:i+18, b:i+19 });
+      groups.push(ret);
+      /* Bus FX pre-effet (bus_pre[0..7]) */
+      const bus = { label: 'Bus FX pre', items: [] };
+      for (let i = 0; i < 8; i++)
+        bus.items.push({ key:'bus:'+i, label:'FX'+(Math.floor(i/2)+1)+(i%2?'R':'L'),
+                          kind:2, a:i, b:-1 });
+      for (let i = 0; i < 8; i += 2)
+        bus.items.push({ key:'bus:'+i+','+(i+1),
+                          label:'FX'+(i/2+1)+' L+R', kind:2, a:i, b:i+1 });
+      groups.push(bus);
+      /* Outputs S1..S8 (out[0..7]), U1..U8 (out[8..15]), P1..P2 (out[16..17]) */
+      const sp = { label: 'DSP play', items: [] };
+      for (let i = 0; i < 8; i++)
+        sp.items.push({ key:'out:'+i, label:'S'+(i+1), kind:3, a:i, b:-1 });
+      for (let i = 0; i < 7; i += 2)
+        sp.items.push({ key:'out:'+i+','+(i+1),
+                         label:'S'+(i+1)+'+S'+(i+2), kind:3, a:i, b:i+1 });
+      groups.push(sp);
+      const uo = { label: 'USB ASIO out', items: [] };
+      for (let i = 0; i < 8; i++)
+        uo.items.push({ key:'out:'+(i+8), label:'U'+(i+1), kind:3, a:i+8, b:-1 });
+      for (let i = 0; i < 7; i += 2)
+        uo.items.push({ key:'out:'+(i+8)+','+(i+9),
+                         label:'U'+(i+1)+'+U'+(i+2), kind:3, a:i+8, b:i+9 });
+      groups.push(uo);
+      groups.push({ label:'Phone out', items: [
+        { key:'out:16', label:'P1 out', kind:3, a:16, b:-1 },
+        { key:'out:17', label:'P2 out', kind:3, a:17, b:-1 },
+        { key:'out:16,17', label:'P1+P2 out', kind:3, a:16, b:17 },
+      ]});
+      return groups;
+    },
+
+    analyzerSourceKeyOf(i) {
+      const t = this.analyzerTaps[i];
+      if (t.kind === 0) return 'off';
+      const map = { 1:'in', 2:'bus', 3:'out' };
+      return map[t.kind] + ':' + t.a + (t.b >= 0 ? ','+t.b : '');
+    },
+
+    async setAnalyzerTap(i, key) {
+      let kind = 0, a = 0, b = -1;
+      if (key !== 'off' && key) {
+        const parts = key.split(':');
+        const km = { in:1, bus:2, out:3 };
+        kind = km[parts[0]] || 0;
+        const idx = (parts[1] || '0').split(',');
+        a = parseInt(idx[0], 10) | 0;
+        b = idx.length > 1 ? (parseInt(idx[1], 10) | 0) : -1;
+      }
+      this.analyzerTaps[i].kind = kind;
+      this.analyzerTaps[i].a    = a;
+      this.analyzerTaps[i].b    = b;
+      await this.sendCmd({ op:'set_tap', tap:i, kind, a, b });
+    },
+
+    /* Called for every SSE tick with the daemon's analyzer[] payload.
+     * Each entry already contains the user's selected kind/a/b plus the
+     * spec int8 array and scope S16 array. We store last frame + redraw. */
+    _onAnalyzerFrame(arr) {
+      for (let i = 0; i < arr.length && i < 4; i++) {
+        const t = arr[i];
+        this.analyzerTaps[i].kind  = t.k;
+        this.analyzerTaps[i].a     = t.a;
+        this.analyzerTaps[i].b     = t.b;
+        this.analyzerTaps[i].rms   = t.rms;
+        this.analyzerTaps[i].spec  = t.s;
+        this.analyzerTaps[i].scope = t.x;
+        this._drawAnalyzer(i);
+      }
+    },
+
+    _drawAnalyzer(i) {
+      const t = this.analyzerTaps[i];
+      const fft = document.getElementById('anfft' + i);
+      if (fft && t.spec) {
+        const ctx = fft.getContext('2d');
+        const W = fft.width, H = fft.height;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.lineWidth = 1;
+        for (let g = 0; g <= 4; g++) {
+          const y = (g / 4) * H;
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(45,212,191,0.75)';
+        const N = t.spec.length;
+        const bw = W / N;
+        for (let k = 0; k < N; k++) {
+          const db = t.spec[k];           /* -120..0 int8 */
+          const h = Math.max(0, (db + 120) / 120) * H;
+          ctx.fillRect(k * bw, H - h, bw - 0.5, h);
+        }
+      }
+      const sc = document.getElementById('anscope' + i);
+      if (sc && t.scope) {
+        const ctx = sc.getContext('2d');
+        const W = sc.width, H = sc.height;
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+        ctx.beginPath();
+        ctx.moveTo(W/2, 0); ctx.lineTo(W/2, H);
+        ctx.moveTo(0, H/2); ctx.lineTo(W, H/2);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(245,158,11,0.85)';
+        ctx.beginPath();
+        const N = t.scope.length / 2;
+        for (let s = 0; s < N; s++) {
+          const L = t.scope[s * 2]     / 32768.0;
+          const R = t.scope[s * 2 + 1] / 32768.0;
+          /* Rotated 45° goniometer : X = (L-R)/√2, Y = -(L+R)/√2 */
+          const x = W/2 + (L - R) * 0.5 * W * 0.6;
+          const y = H/2 - (L + R) * 0.5 * H * 0.6;
+          if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
     },
 
     peakDb(p) {

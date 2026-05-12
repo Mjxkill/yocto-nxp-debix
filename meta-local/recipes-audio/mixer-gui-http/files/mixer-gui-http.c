@@ -39,7 +39,7 @@
 #include <microhttpd.h>
 #include <alsa/asoundlib.h>
 
-#define GUI_VERSION       "v7.0-e7.4n"
+#define GUI_VERSION       "v7.0-e7.5a"
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
@@ -130,7 +130,10 @@ static ssize_t sse_stream_callback(void *cls, uint64_t pos, char *buf, size_t ma
 	(void)cls; (void)pos;
 	usleep(STREAM_PERIOD_US);
 
-	char meters_json[2048];
+	/* E7.5 : meters reply now embeds the analyzer payload (4 taps × 128
+	 * dB bins + 64 stereo scope pairs) so the buffer needs to grow past
+	 * the previous 2 KB ceiling. */
+	static char meters_json[20480];
 	int n = mixer_request("{\"op\":\"get_meters\"}\n", meters_json, sizeof(meters_json));
 	if (n <= 0) {
 		/* mixer-pro down : keep-alive comment frame pour que EventSource
@@ -604,9 +607,12 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		}
 
 		if (!strcmp(url, "/api/stream")) {
-			/* E7.1 : SSE meters stream 30 Hz (chunked callback) */
+			/* E7.1 + E7.5 : SSE meters+analyzer stream 30 Hz.
+			 * Block size bumped to 32 KB so the analyzer payload (~6 KB
+			 * JSON for 4 taps with 128 spec + 128 scope ints) plus the
+			 * SSE framing fits in a single callback invocation. */
 			struct MHD_Response *r = MHD_create_response_from_callback(
-				MHD_SIZE_UNKNOWN, 4096, &sse_stream_callback, NULL, NULL);
+				MHD_SIZE_UNKNOWN, 32768, &sse_stream_callback, NULL, NULL);
 			if (!r) return MHD_NO;
 			MHD_add_response_header(r, "Content-Type", "text/event-stream");
 			MHD_add_response_header(r, "Cache-Control", "no-cache");
