@@ -5,7 +5,9 @@ Documentation=man:mixer-pro(8) file:///etc/alsa-route-bridge.conf
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/mixer-pro
+ExecStartPre=/usr/bin/tac-reset analog
+ExecStart=/usr/bin/mixer-pro --no-uac2 --no-phone
+TimeoutStartSec=30
 Restart=on-failure
 RestartSec=2
 

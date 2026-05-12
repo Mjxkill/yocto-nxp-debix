@@ -86,13 +86,36 @@ html, body {
 .status-pill.ok .dot { background: var(--good); box-shadow: 0 0 6px var(--good); }
 .status-pill.bad { color: var(--bad); border-color: rgba(239,68,68,0.3); }
 .status-pill.bad .dot { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
+.btn-header {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+  padding: 5px 12px; border-radius: 6px;
+  border: 1px solid var(--border-hi); background: rgba(255,255,255,0.04);
+  color: var(--text-pri); cursor: pointer;
+  transition: all var(--transition);
+}
+.btn-header:hover { background: rgba(255,255,255,0.1); border-color: var(--accent); }
+.btn-header:disabled { opacity: 0.4; cursor: wait; }
+.btn-header.busy { background: rgba(251,191,36,0.15); border-color: rgba(251,191,36,0.5); color: #fbbf24; }
 
-/* ========== CONSOLE ========== */
+/* ========== CONSOLE ==========
+ * Two-column grid : strips on the left (inputs row stacked above outputs
+ * row), BUS FX sidebar on the right spanning both rows so outputs don't
+ * float far below inputs when the FX column is tall. */
 .console {
   padding: 16px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
+  align-items: start;
+}
+.strips-area {
+  display: flex; flex-direction: column;
+  gap: 14px; min-width: 0;
+}
+.strips-row-input, .strips-row-output {
+  display: flex; flex-wrap: wrap;
+  gap: 14px;
+  align-items: stretch;     /* uniformise box height inside the row */
 }
 .section {
   background: var(--bg-panel);
@@ -104,8 +127,16 @@ html, body {
   padding: 14px;
   display: flex; flex-direction: column; gap: 10px;
   position: relative;
+  flex: 0 0 auto;
 }
-.section.full { grid-column: 1 / -1; }
+/* Sized sections : width is set per-content so 8-voie blocks fit 8 strips
+ * exactly and 2-voie blocks fit 2 strips exactly. Outputs blocks reuse the
+ * same widths so the page looks symmetric. */
+.section.size-8 { width: 580px; }
+.section.size-2 { width: 200px; }
+.section.full { width: 100%; }
+/* BUS FX SEND : vertical sidebar in the second grid column. */
+.section.fx-vertical { width: 240px; align-self: stretch; }
 .section-title {
   display: flex; align-items: baseline; gap: 10px;
   font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px;
@@ -246,6 +277,10 @@ html, body {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 10px;
 }
+/* Vertical compact layout when the BUS FX section sits beside Inputs row. */
+.section.fx-vertical .fx-grid { display: flex; flex-direction: column; gap: 8px; }
+.section.fx-vertical .fx-card { padding: 10px; }
+.section.fx-vertical .fx-card .fx-meters { height: 32px; margin: 6px 0 8px 0; }
 .fx-card {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.06) 0%, rgba(245, 158, 11, 0.01) 100%);
   border: 1px solid rgba(245, 158, 11, 0.18);
@@ -340,16 +375,6 @@ html, body {
   background: linear-gradient(135deg, rgba(52, 211, 153, 0.04) 0%, var(--bg-panel) 60%);
   border-color: rgba(52,211,153,0.15);
 }
-.outputs-groups {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 14px;
-}
-.out-group .out-group-title {
-  font-size: 9.5px; text-transform: uppercase; letter-spacing: 1px;
-  color: var(--text-sec); font-weight: 600;
-  margin-bottom: 6px;
-}
-
 /* utility */
 .tag {
   display: inline-block;
@@ -427,6 +452,27 @@ html, body {
   background: var(--accent);
 }
 .detail-section-title .count { color: var(--text-mute); font-weight: 500; letter-spacing: 0.5px; }
+
+/* Effect tabs in the per-strip detail panel : one tab per group from
+ * alsaGroupsForStrip(). Single-row scroll if names overflow. */
+.effect-tabs {
+  display: flex; gap: 4px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border-hi);
+  overflow-x: auto; scrollbar-width: thin;
+  background: rgba(0,0,0,0.15);
+}
+.effect-tabs::-webkit-scrollbar { height: 5px; }
+.effect-tabs::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+.effect-tab {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 5px 11px; border-radius: 5px;
+  cursor: pointer; white-space: nowrap;
+  background: rgba(255,255,255,0.04); color: var(--text-sec);
+  border: 1px solid transparent; transition: all 120ms;
+}
+.effect-tab:hover { background: rgba(255,255,255,0.08); color: var(--text-pri); }
+.effect-tab.active { background: var(--accent-2); color: #000; border-color: var(--accent-2); }
 
 /* Stereo link */
 .stereo-link-row {
@@ -695,6 +741,48 @@ html, body {
   font-size: 22px; cursor: pointer; line-height: 1;
 }
 .fxbus-panel .fxbus-close:hover { color: var(--text-bright); }
+.drc-inline { display: flex; flex-direction: column; gap: 2px;
+              padding: 8px 10px; background: rgba(255,255,255,0.02);
+              border-radius: 6px; border: 1px solid var(--border-hi); }
+.drc-loading { font-size: 11px; color: var(--text-mute); padding: 6px 2px; font-style: italic; }
+.drc-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px;
+            border-bottom: 1px solid var(--border-hi); padding-bottom: 6px; }
+.drc-tab { font-size: 10px; font-weight: 600; letter-spacing: 0.5px;
+           padding: 4px 10px; border-radius: 5px; cursor: pointer;
+           background: rgba(255,255,255,0.04); border: 1px solid transparent;
+           color: var(--text-sec); transition: all 120ms; }
+.drc-tab:hover { background: rgba(255,255,255,0.08); }
+.drc-tab.active { background: var(--accent); color: #000; border-color: var(--accent); }
+.drc-row { display: grid; grid-template-columns: 130px 1fr 96px;
+           gap: 10px; align-items: center; padding: 4px 0; }
+.drc-row .lbl { font-size: 11px; color: var(--text-sec); }
+.drc-row .val { font-size: 11px; color: var(--text-pri);
+                font-variant-numeric: tabular-nums; text-align: right; }
+.drc-row input[type=range] { width: 100%; }
+.drc-toolbar { display: flex; gap: 8px; align-items: center;
+               margin-top: 14px; padding-top: 12px;
+               border-top: 1px solid var(--border-hi); }
+.drc-toolbar .spacer { flex: 1; }
+.drc-toolbar button { font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+                      text-transform: uppercase; padding: 6px 14px;
+                      border-radius: 6px; cursor: pointer;
+                      border: 1px solid var(--border-hi); }
+.drc-apply { background: var(--accent); color: #000; border-color: var(--accent) !important; }
+.drc-apply:disabled { opacity: 0.5; cursor: wait; }
+.drc-reset { background: rgba(255,255,255,0.04); color: var(--text-pri); }
+.drc-globals { display: flex; gap: 14px; flex-wrap: wrap;
+               margin: 0 0 10px; padding: 8px 12px;
+               background: rgba(255,255,255,0.03); border-radius: 6px;
+               font-size: 11px; color: var(--text-sec); }
+.drc-globals label { display: flex; align-items: center; gap: 6px; }
+.drc-toggle-onoff { display: flex; align-items: center; gap: 8px; }
+.drc-edit-btn {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  text-transform: uppercase; padding: 4px 10px;
+  border-radius: 5px; cursor: pointer;
+  background: var(--accent); color: #000; border: 1px solid var(--accent);
+}
+.drc-edit-btn:hover { filter: brightness(1.1); }
 .fx-card.clickable { cursor: pointer; transition: border-color 150ms; }
 .fx-card.clickable:hover { border-color: rgba(var(--accent-2-rgb, 255,180,80), 0.4); }
 .fx-edit-btn {
@@ -725,6 +813,12 @@ html, body {
   <div class="app-stat">lat <span class="v" x-text="state.latency_us_one_way"></span> µs</div>
   <div class="app-stat">iter <span class="v" x-text="state.prof_iter_us"></span> µs</div>
   <div class="spacer"></div>
+  <button class="btn-header"
+          :class="tacResetBusy ? 'busy' : ''"
+          :disabled="tacResetBusy"
+          @click="tacReset()"
+          :title="tacResetBusy ? 'Reset in progress...' : 'Reinit 4× TAC5212 codecs (i2c)'"
+          x-text="tacResetBusy ? 'Resetting...' : 'Reset TACs'">Reset TACs</button>
   <span class="status-pill" :class="connected ? 'ok' : 'bad'">
     <span class="dot"></span><span x-text="connected ? 'Connected' : 'Offline'"></span>
   </span>
@@ -735,9 +829,11 @@ html, body {
 
 <!-- ===== CONSOLE ===== -->
 <div class="console">
+<div class="strips-area">
+  <div class="strips-row-input">
 
   <!-- ---------- DSP MICS ---------- -->
-  <section class="section">
+  <section class="section size-8">
     <div class="section-title">
       <span class="accent-dot"></span>DSP MICS
       <span class="count">×8 · post-TAC ADC chain</span>
@@ -775,7 +871,7 @@ html, body {
   </section>
 
   <!-- ---------- ASIO IN ---------- -->
-  <section class="section">
+  <section class="section size-8">
     <div class="section-title">
       <span class="accent-dot"></span>USB ASIO IN
       <span class="count">×8 · stems DAW</span>
@@ -813,7 +909,7 @@ html, body {
   </section>
 
   <!-- ---------- PHONE ---------- -->
-  <section class="section">
+  <section class="section size-2">
     <div class="section-title">
       <span class="accent-dot"></span>PHONE
       <span class="count">×2 · VoIP loopback</span>
@@ -844,7 +940,7 @@ html, body {
   </section>
 
   <!-- ---------- RETURNS FX ---------- -->
-  <section class="section">
+  <section class="section size-8">
     <div class="section-title">
       <span class="accent-dot"></span>RETURNS FX
       <span class="count">×8 · post-effets 4 bus stéréo</span>
@@ -870,11 +966,16 @@ html, body {
     </div>
   </section>
 
-  <!-- ---------- BUS FX SEND (4 stereo) ---------- -->
-  <section class="section fx full">
+  </div><!-- /.strips-row-input -->
+
+  <div class="strips-row-output">
+  <!-- BUS FX is hoisted out of .strips-area into the right grid column,
+       see the bottom of <div class="console"> below. -->
+  <template x-if="false">
+  <section class="section fx fx-vertical">
     <div class="section-title">
       <span class="accent-dot"></span>BUS FX SEND
-      <span class="count">×4 stéréo · compressor / reverb / delay / EQ</span>
+      <span class="count">×4 stéréo</span>
     </div>
     <div class="fx-grid">
       <template x-for="b in 4" :key="'fx'+b">
@@ -914,72 +1015,123 @@ html, body {
       </template>
     </div>
   </section>
+  </template><!-- /placeholder x-if false (hides original BUS FX position) -->
 
-  <!-- ---------- OUTPUTS (master section) ---------- -->
-  <section class="section outputs full">
+  <!-- ---------- DSP PLAY (outputs, mirror of DSP MICS) ---------- -->
+  <section class="section size-8 outputs">
     <div class="section-title">
-      <span class="accent-dot"></span>OUTPUTS
-      <span class="count">×18 · DSP play / USB ASIO out / Phone out</span>
+      <span class="accent-dot"></span>DSP PLAY
+      <span class="count">×8 · post-mixer</span>
     </div>
-    <div class="outputs-groups">
-      <div class="out-group">
-        <div class="out-group-title">DSP PLAY · ×8</div>
-        <div class="strips-row">
-          <template x-for="o in 8" :key="'op'+o">
-            <div class="strip" :class="selectedIsOutput && selectedStrip === o-1 ? 'selected' : ''"
-                 @click="openStripDetail(o-1, 'S'+o, 'DSP play', true)">
-              <div class="label" x-text="'S' + o"></div>
-              <div class="sublabel">DSP</div>
-              <div class="fader-meter-pair" style="justify-content:center;">
-                <div class="meter" style="width:8px">
-                  <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o-1]) + '%'"></div>
-                </div>
-              </div>
-              <div class="db-readout" x-text="peakDb(peakOut[o-1]).toFixed(0) + ' dB'"></div>
+    <div class="strips-row">
+      <template x-for="o in 8" :key="'op'+o">
+        <div class="strip" :class="selectedIsOutput && selectedStrip === o-1 ? 'selected' : ''"
+             @click="openStripDetail(o-1, 'S'+o, 'DSP play', true)">
+          <div class="label" x-text="'S' + o"></div>
+          <div class="sublabel">DSP</div>
+          <div class="fader-meter-pair" style="justify-content:center;">
+            <div class="meter" style="width:8px">
+              <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o-1]) + '%'"></div>
             </div>
-          </template>
+          </div>
+          <div class="db-readout" x-text="peakDb(peakOut[o-1]).toFixed(0) + ' dB'"></div>
         </div>
-      </div>
-      <div class="out-group">
-        <div class="out-group-title">USB ASIO OUT · ×8</div>
-        <div class="strips-row">
-          <template x-for="o in 8" :key="'ou'+o">
-            <div class="strip" :class="selectedIsOutput && selectedStrip === o+7 ? 'selected' : ''"
-                 @click="openStripDetail(o+7, 'U'+o, 'USB ASIO out', true)">
-              <div class="label" x-text="'U' + o"></div>
-              <div class="sublabel">UAC2</div>
-              <div class="fader-meter-pair" style="justify-content:center;">
-                <div class="meter" style="width:8px">
-                  <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o+7]) + '%'"></div>
-                </div>
-              </div>
-              <div class="db-readout" x-text="peakDb(peakOut[o+7]).toFixed(0) + ' dB'"></div>
-            </div>
-          </template>
-        </div>
-      </div>
-      <div class="out-group">
-        <div class="out-group-title">PHONE OUT · ×2</div>
-        <div class="strips-row">
-          <template x-for="o in 2" :key="'op2'+o">
-            <div class="strip" :class="selectedIsOutput && selectedStrip === o+15 ? 'selected' : ''"
-                 @click="openStripDetail(o+15, 'P'+o, 'Phone out', true)">
-              <div class="label" x-text="'P' + o"></div>
-              <div class="sublabel">aloop</div>
-              <div class="fader-meter-pair" style="justify-content:center;">
-                <div class="meter" style="width:8px">
-                  <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o+15]) + '%'"></div>
-                </div>
-              </div>
-              <div class="db-readout" x-text="peakDb(peakOut[o+15]).toFixed(0) + ' dB'"></div>
-            </div>
-          </template>
-        </div>
-      </div>
+      </template>
     </div>
   </section>
 
-</div>
+  <!-- ---------- USB ASIO OUT (outputs, mirror of USB ASIO IN) ---------- -->
+  <section class="section size-8 outputs">
+    <div class="section-title">
+      <span class="accent-dot"></span>USB ASIO OUT
+      <span class="count">×8 · stems DAW</span>
+    </div>
+    <div class="strips-row">
+      <template x-for="o in 8" :key="'ou'+o">
+        <div class="strip" :class="selectedIsOutput && selectedStrip === o+7 ? 'selected' : ''"
+             @click="openStripDetail(o+7, 'U'+o, 'USB ASIO out', true)">
+          <div class="label" x-text="'U' + o"></div>
+          <div class="sublabel">UAC2</div>
+          <div class="fader-meter-pair" style="justify-content:center;">
+            <div class="meter" style="width:8px">
+              <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o+7]) + '%'"></div>
+            </div>
+          </div>
+          <div class="db-readout" x-text="peakDb(peakOut[o+7]).toFixed(0) + ' dB'"></div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <!-- ---------- PHONE OUT (outputs, mirror of PHONE) ---------- -->
+  <section class="section size-2 outputs">
+    <div class="section-title">
+      <span class="accent-dot"></span>PHONE OUT
+      <span class="count">×2 · VoIP loopback</span>
+    </div>
+    <div class="strips-row">
+      <template x-for="o in 2" :key="'op2'+o">
+        <div class="strip" :class="selectedIsOutput && selectedStrip === o+15 ? 'selected' : ''"
+             @click="openStripDetail(o+15, 'P'+o, 'Phone out', true)">
+          <div class="label" x-text="'P' + o"></div>
+          <div class="sublabel">aloop</div>
+          <div class="fader-meter-pair" style="justify-content:center;">
+            <div class="meter" style="width:8px">
+              <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o+15]) + '%'"></div>
+            </div>
+          </div>
+          <div class="db-readout" x-text="peakDb(peakOut[o+15]).toFixed(0) + ' dB'"></div>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  </div><!-- /.strips-row-output -->
+</div><!-- /.strips-area -->
+
+<!-- ---------- BUS FX SEND (4 stereo, sidebar on the right of strips-area) ---------- -->
+<section class="section fx fx-vertical">
+  <div class="section-title">
+    <span class="accent-dot"></span>BUS FX SEND
+    <span class="count">×4 stéréo</span>
+  </div>
+  <div class="fx-grid">
+    <template x-for="b in 4" :key="'fxr'+b">
+      <div class="fx-card">
+        <div class="fx-head">
+          <span class="fx-name" x-text="'BUS FX ' + b"></span>
+          <span class="fx-type" x-text="fxType[b-1]"></span>
+        </div>
+        <div class="fx-meters">
+          <div class="fx-mini-meter">
+            <div class="fill" :style="'height:' + peakDbPercent(peakFx[(b-1)*2]) + '%'"></div>
+          </div>
+          <div class="fx-mini-meter">
+            <div class="fill" :style="'height:' + peakDbPercent(peakFx[(b-1)*2+1]) + '%'"></div>
+          </div>
+        </div>
+        <div class="fx-row">
+          <span class="fx-row-label">L gain</span>
+          <input type="range" class="fx-slider" min="0" max="2" step="0.01"
+                 x-model.number="fxBusGain[(b-1)*2]"
+                 @input.debounce.50ms="setFxBus((b-1)*2, $event.target.value)">
+          <span class="fx-val" x-text="fxBusGain[(b-1)*2].toFixed(2)"></span>
+        </div>
+        <div class="fx-row">
+          <span class="fx-row-label">R gain</span>
+          <input type="range" class="fx-slider" min="0" max="2" step="0.01"
+                 x-model.number="fxBusGain[(b-1)*2+1]"
+                 @input.debounce.50ms="setFxBus((b-1)*2+1, $event.target.value)">
+          <span class="fx-val" x-text="fxBusGain[(b-1)*2+1].toFixed(2)"></span>
+        </div>
+        <button class="fx-edit-btn" @click="openFxBus(b-1)">Edit effect ▸</button>
+        <button class="fx-reset" @click="resetFx(b-1)">Reset bus</button>
+      </div>
+    </template>
+  </div>
+</section>
+
+</div><!-- /.console -->
 
 <!-- ===== DETAIL PANEL SIDEBAR (E7.3a) ===== -->
 <div class="detail-backdrop" :class="selectedStrip !== null ? 'open' : ''" @click="closeStripDetail()"></div>
@@ -1107,9 +1259,25 @@ html, body {
   </section>
   </template>
 
-  <!-- ===== EFFETS section : ALSA kcontrols per strip (E7.3b) ===== -->
+  <!-- ===== Effect tabs : one per alsaGroupsForStrip() group =====
+       Tabs are rendered eagerly so DRC blob x-inits can prefetch every blob
+       (no spinner when switching tabs). Non-active sections use x-show to
+       stay in DOM. -->
+  <template x-if="alsaGroupsForStrip().length > 0">
+    <div class="effect-tabs">
+      <template x-for="g in alsaGroupsForStrip()" :key="'tab'+g.title">
+        <span class="effect-tab"
+              :class="(activeAlsaGroup() && activeAlsaGroup().title === g.title) ? 'active' : ''"
+              @click="activeEffectTab = g.title"
+              x-text="g.title"></span>
+      </template>
+    </div>
+  </template>
+
+  <!-- ===== EFFETS section : one section per group, only the active one visible ===== -->
   <template x-for="grp in alsaGroupsForStrip()" :key="'g'+grp.title">
-    <section class="detail-section">
+    <section class="detail-section"
+             x-show="activeAlsaGroup() && activeAlsaGroup().title === grp.title">
       <div class="detail-section-title">
         <span class="accent-dot" style="background:var(--accent-2);"></span>
         <span x-text="grp.title"></span>
@@ -1192,8 +1360,134 @@ html, body {
               </div>
             </template>
 
-            <!-- BYTES (non-biquad) : fallback placeholder with optional note -->
-            <template x-if="c.type === 'BYTES' && !(c.fullName && parseBiquadName(c.fullName))">
+            <!-- BYTES DRC blob → inline editor scoped to current strip channel
+                 (Phase B refactor : per-strip view, not global tabs) -->
+            <template x-if="c.type === 'BYTES' && isDrcBlob(c.fullName)">
+              <div class="drc-inline" x-init="loadDspBlob(c.numid, c.fullName)">
+                <template x-if="!dspBlobs[c.numid] || dspBlobs[c.numid].loading">
+                  <div class="drc-loading">Loading DRC params…</div>
+                </template>
+                <template x-if="dspBlobs[c.numid] && !dspBlobs[c.numid].loading && dspBlobs[c.numid].error">
+                  <div class="drc-loading" x-text="'Error: ' + dspBlobs[c.numid].error"></div>
+                </template>
+
+                <!-- DRC : 1 set of params per channel -->
+                <template x-if="dspBlobs[c.numid] && !dspBlobs[c.numid].loading && dspBlobs[c.numid].kind === 'drc' && dspBlobParams(c.numid)">
+                  <div>
+                    <div class="drc-row">
+                      <div class="lbl">Enabled</div>
+                      <label class="alsa-toggle">
+                        <input type="checkbox"
+                               :checked="dspBlobParams(c.numid).enabled === 1"
+                               @change="dspBlobParams(c.numid).enabled = $event.target.checked ? 1 : 0; dspBlobs[c.numid].dirty = true">
+                        <span x-text="dspBlobParams(c.numid).enabled ? 'ON' : 'off'"></span>
+                      </label>
+                      <span class="val"></span>
+                    </div>
+                    <template x-for="s in drcSliderSpecs" :key="s.key">
+                      <div class="drc-row">
+                        <div class="lbl" x-text="s.label"></div>
+                        <input type="range" :min="s.min" :max="s.max" :step="s.step"
+                               :value="dspBlobParams(c.numid)[s.key]"
+                               @input.debounce.30ms="dspBlobParams(c.numid)[s.key] = parseFloat($event.target.value); dspBlobs[c.numid].dirty = true">
+                        <span class="val" x-text="dspBlobParams(c.numid)[s.key].toFixed(s.step < 0.01 ? 4 : (s.step < 1 ? 2 : 1)) + ' ' + s.unit"></span>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+
+                <!-- MULTIBAND_DRC : N bands × params for current strip channel -->
+                <template x-if="dspBlobs[c.numid] && !dspBlobs[c.numid].loading && dspBlobs[c.numid].kind === 'multiband' && dspBlobs[c.numid].parsed">
+                  <div>
+                    <div class="drc-globals">
+                      <label class="drc-toggle-onoff">
+                        <input type="checkbox"
+                               :checked="dspBlobs[c.numid].parsed.enable_emp_deemp === 1"
+                               @change="dspBlobs[c.numid].parsed.enable_emp_deemp = $event.target.checked ? 1 : 0; dspBlobs[c.numid].dirty = true">
+                        <span>Emp/Deemp EQ</span>
+                      </label>
+                    </div>
+
+                    <!-- Crossover cutoffs : N-1 sliders depending on num_bands -->
+                    <template x-if="dspBlobs[c.numid].parsed.num_bands >= 2 && dspBlobs[c.numid].parsed.crossover_fcs">
+                      <div>
+                        <div class="drc-row">
+                          <div class="lbl" x-text="dspBlobs[c.numid].parsed.num_bands === 2 ? 'Crossover Fc' : 'Fc low'"></div>
+                          <input type="range" min="20" max="20000" step="10"
+                                 :value="dspBlobs[c.numid].parsed.crossover_fcs.low"
+                                 @input.debounce.30ms="setCrossoverFc(c.numid, 'low', $event.target.value)">
+                          <span class="val" x-text="Math.round(dspBlobs[c.numid].parsed.crossover_fcs.low) + ' Hz'"></span>
+                        </div>
+                        <template x-if="dspBlobs[c.numid].parsed.num_bands >= 4">
+                          <div class="drc-row">
+                            <div class="lbl">Fc mid</div>
+                            <input type="range" min="20" max="20000" step="10"
+                                   :value="dspBlobs[c.numid].parsed.crossover_fcs.mid"
+                                   @input.debounce.30ms="setCrossoverFc(c.numid, 'mid', $event.target.value)">
+                            <span class="val" x-text="Math.round(dspBlobs[c.numid].parsed.crossover_fcs.mid) + ' Hz'"></span>
+                          </div>
+                        </template>
+                        <template x-if="dspBlobs[c.numid].parsed.num_bands >= 3">
+                          <div class="drc-row">
+                            <div class="lbl">Fc high</div>
+                            <input type="range" min="20" max="20000" step="10"
+                                   :value="dspBlobs[c.numid].parsed.crossover_fcs.high"
+                                   @input.debounce.30ms="setCrossoverFc(c.numid, 'high', $event.target.value)">
+                            <span class="val" x-text="Math.round(dspBlobs[c.numid].parsed.crossover_fcs.high) + ' Hz'"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </template>
+
+                    <div class="drc-tabs">
+                      <template x-for="b in dspBlobs[c.numid].parsed.num_bands" :key="'b'+b">
+                        <span class="drc-tab"
+                              :class="(dspBlobs[c.numid].bandTab|0) === (b-1) ? 'active' : ''"
+                              @click="dspBlobs[c.numid].bandTab = b-1"
+                              x-text="'Band ' + b"></span>
+                      </template>
+                    </div>
+                    <template x-if="dspBlobParams(c.numid)">
+                      <div>
+                        <div class="drc-row">
+                          <div class="lbl">Enabled</div>
+                          <label class="alsa-toggle">
+                            <input type="checkbox"
+                                   :checked="dspBlobParams(c.numid).enabled === 1"
+                                   @change="dspBlobParams(c.numid).enabled = $event.target.checked ? 1 : 0; dspBlobs[c.numid].dirty = true">
+                            <span x-text="dspBlobParams(c.numid).enabled ? 'ON' : 'off'"></span>
+                          </label>
+                          <span class="val"></span>
+                        </div>
+                        <template x-for="s in drcSliderSpecs" :key="s.key">
+                          <div class="drc-row">
+                            <div class="lbl" x-text="s.label"></div>
+                            <input type="range" :min="s.min" :max="s.max" :step="s.step"
+                                   :value="dspBlobParams(c.numid)[s.key]"
+                                   @input.debounce.30ms="dspBlobParams(c.numid)[s.key] = parseFloat($event.target.value); dspBlobs[c.numid].dirty = true">
+                            <span class="val" x-text="dspBlobParams(c.numid)[s.key].toFixed(s.step < 0.01 ? 4 : (s.step < 1 ? 2 : 1)) + ' ' + s.unit"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+
+                <template x-if="dspBlobs[c.numid] && !dspBlobs[c.numid].loading && !dspBlobs[c.numid].error">
+                  <div class="drc-toolbar">
+                    <button class="drc-reset" @click="resetDspBlobChannel(c.numid)">Reset this channel</button>
+                    <div class="spacer"></div>
+                    <button class="drc-apply"
+                            :disabled="dspBlobs[c.numid].applying || !dspBlobs[c.numid].dirty"
+                            @click="applyDspBlob(c.numid)"
+                            x-text="dspBlobs[c.numid].applying ? 'Applying…' : (dspBlobs[c.numid].dirty ? 'Apply' : 'Saved')"></button>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- BYTES (non-biquad, non-DRC) : fallback placeholder with optional note -->
+            <template x-if="c.type === 'BYTES' && !(c.fullName && parseBiquadName(c.fullName)) && !isDrcBlob(c.fullName)">
               <div class="alsa-bytes-wrap">
                 <span class="alsa-bytes-tag">blob (×<span x-text="c.count"></span> bytes)</span>
                 <template x-if="c.note">
@@ -1257,6 +1551,7 @@ function mixerApp() {
     state: { version:'?', frames:0, xrun:0, xrun_delta:0, latency_us_one_way:0, prof_iter_us:0 },
     connected: false,
     streaming: false,
+    tacResetBusy: false,
     masterIn: Array.from({length:26}, () => 0),
     mute:     Array.from({length:26}, () => false),
     sends:    Array.from({length:26}, () => Array(4).fill(false)),
@@ -1299,6 +1594,26 @@ function mixerApp() {
      */
     biquadParams: {},
     biquadTypes: ['Bypass','LPF','HPF','BPF','Notch','Peak','LowShelf','HighShelf','AllPass'],
+
+    /* Phase B E7.4.c : DRC / MULTIBAND_DRC blob editor state, keyed by numid.
+     * Each entry :
+     *   { loading, kind:'drc'|'multiband', parsed, abiHdr,
+     *     fullName, bandTab, applying, dirty, error }
+     * Filled lazily by loadDspBlob() the first time a strip sidebar shows it. */
+    dspBlobs: {},
+
+    /* Per-strip sidebar : tab system over alsaGroupsForStrip() groups so
+     * the user sees one group at a time instead of stacking all of them. */
+    activeEffectTab: '',
+    drcSliderSpecs: [
+      { key:'threshold_dB',     label:'Threshold',  unit:'dB', min:-60, max:0,    step:0.5 },
+      { key:'knee_dB',          label:'Knee',       unit:'dB', min:0,   max:40,   step:0.5 },
+      { key:'ratio',            label:'Ratio',      unit:':1', min:1,   max:30,   step:0.1 },
+      { key:'pre_delay_ms',     label:'Pre-delay',  unit:'ms', min:0,   max:50,   step:0.1 },
+      { key:'attack_ms',        label:'Attack',     unit:'ms', min:1,   max:500,  step:0.5 },
+      { key:'master_gain_dB',   label:'Make-up',    unit:'dB', min:-24, max:24,   step:0.1 },
+      { key:'release_spacing_dB', label:'Rel. spacing', unit:'dB', min:0, max:20, step:0.5 },
+    ],
 
     async init() {
       await this.poll();
@@ -1354,6 +1669,25 @@ function mixerApp() {
           body: JSON.stringify(obj)
         });
       } catch(e) {}
+    },
+
+    async tacReset(mode='analog') {
+      if (this.tacResetBusy) return;
+      if (!confirm('Re-init 4× TAC5212 codecs (i2c reset, ~2 s)?\nAudio may glitch briefly.')) return;
+      this.tacResetBusy = true;
+      try {
+        const r = await fetch('/api/tac/reset', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({mode})
+        });
+        const j = await r.json();
+        if (!j.ok) alert('TAC reset failed: ' + (j.err || 'unknown') + ' (exit ' + j.exit + ')');
+      } catch(e) {
+        alert('TAC reset request error: ' + e.message);
+      } finally {
+        this.tacResetBusy = false;
+      }
     },
 
     dbToGain(db) { return Math.pow(10, db/20); },
@@ -1444,6 +1778,10 @@ function mixerApp() {
       this.selectedIsOutput = !!isOutput;
       this.detailStrip.label = label || (isOutput ? this.outputStripLabel(i) : this.stripLabel(i));
       this.detailStrip.kind  = kind  || (isOutput ? this.outputStripKind(i)  : this.stripKind(i));
+      /* Reset the effects tab so the new strip's sidebar starts on the
+       * first available effect group (rather than carrying over a stale
+       * tab title that may not exist for this strip). */
+      this.activeEffectTab = '';
       if (!isOutput) await this.fetchStripRouting(i);
     },
     closeStripDetail() {
@@ -1561,6 +1899,16 @@ function mixerApp() {
         .replace(/^(MULTIBAND_DRC|DRC)\d\.\d /, '');
     },
 
+    /* Returns the alsaGroupsForStrip() entry currently selected in the
+     * sidebar tab bar. Falls back to the first group if activeEffectTab is
+     * unset or no longer present (different strip, different layout). */
+    activeAlsaGroup() {
+      const groups = this.alsaGroupsForStrip();
+      if (!groups.length) return null;
+      const match = groups.find(g => g.title === this.activeEffectTab);
+      return match || groups[0];
+    },
+
     /* Return groups of ALSA controls relevant to current selected strip. */
     alsaGroupsForStrip() {
       const groups = [];
@@ -1584,17 +1932,15 @@ function mixerApp() {
       if (idx < 8) {
         const dspGlobalInputs = names.filter(n =>
           n.startsWith('MULTIBAND_DRC1.0 ') || n.startsWith('DRC1.0 ')
-        ).map(n => ({ ...all[n], short: this.alsaShortLabel(n),
-                      note: 'global 8ch · presets via topology m4 at build' }));
+        ).map(n => ({ ...all[n], short: this.alsaShortLabel(n), fullName: n }));
         const dspGlobalOutputs = names.filter(n =>
           n.startsWith('MULTIBAND_DRC2.0 ')
-        ).map(n => ({ ...all[n], short: this.alsaShortLabel(n),
-                      note: 'global 8ch · presets via topology m4 at build' }));
+        ).map(n => ({ ...all[n], short: this.alsaShortLabel(n), fullName: n }));
         const dspGlobal = isOut ? dspGlobalOutputs : dspGlobalInputs;
         if (dspGlobal.length) {
           groups.push({
-            title: isOut ? 'DSP global 8ch (output chain)' : 'DSP global 8ch (input chain)',
-            subtitle: `applies to all ${isOut ? 'S1..S8' : 'M1..M8'} simultaneously`,
+            title: isOut ? 'DSP chain (output)' : 'DSP chain (input)',
+            subtitle: `per-channel · settings for ${isOut ? 'S' : 'M'}${(idx % 8) + 1}`,
             controls: dspGlobal,
           });
         }
@@ -1749,6 +2095,500 @@ function mixerApp() {
           body: JSON.stringify({numid: c.numid, value: val})
         });
       } catch(e) { console.warn('setAlsa failed', e); }
+    },
+
+    /* === V7.0-E7.4.c Phase B : SOF DRC / MULTIBAND_DRC blob editor ====
+     * Reads the TLV byte payload (ABI hdr + sof_*_config) over
+     * GET /api/dsp/blob/<numid>/raw, decodes the binary into user-facing
+     * compressor knobs, lets the user edit them, recomputes the derived
+     * fields with the same formulas as sof/tools/tune/drc/drc_gen_coefs.m,
+     * and writes back via POST /api/dsp/blob/set.
+     *
+     * Binary layout (little-endian) :
+     *   ABI header  : 32 B (preserved verbatim across round-trip)
+     *   sof_drc_config : size u32, reserved[4] u32 (16 B), N×sof_drc_params
+     *   sof_multiband_drc_config : size u32, num_bands u32, enable_emp_deemp u32,
+     *                              reserved[8] u32 (32 B),
+     *                              emp_coef[2]  (2×28 B),
+     *                              deemp_coef[2](2×28 B),
+     *                              crossover_coef[6] (6×28 B),
+     *                              drc_coef[num_bands × params_per_band]
+     *   sof_drc_params : 22 × int32 = 88 B packed.
+     *
+     * Phase B does NOT edit emp/deemp/crossover/release_zone — those bytes
+     * stay verbatim. Only the 7 "primary compressor knobs" + enabled flag
+     * are exposed.
+     */
+    _DRC_PARAMS_SIZE: 88,
+    _DRC_CONFIG_HDR_SIZE: 20,            /* size + reserved[4] */
+    _MBDRC_FIXED_HDR_SIZE: 324,          /* up to crossover_coef included */
+    _ABI_HDR_SIZE: 32,
+
+    _q24ToFloat(v)  { return v / (1 << 24); },
+    _q30ToFloat(v)  { return v / (1 << 30); },
+    _floatToQ24(v)  { return Math.max(-2147483648, Math.min(2147483647, Math.round(v * (1 << 24)))); },
+    _floatToQ30(v)  { return Math.max(-2147483648, Math.min(2147483647, Math.round(v * (1 << 30)))); },
+    _db2mag(db)     { return Math.pow(10, db / 20); },
+    _mag2db(m)      { return 20 * Math.log10(Math.max(m, 1e-30)); },
+
+    _hexToBytes(hex) {
+      const n = hex.length >>> 1;
+      const out = new Uint8Array(n);
+      for (let i = 0; i < n; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+      return out;
+    },
+    _bytesToHex(arr) {
+      let s = '';
+      for (let i = 0; i < arr.length; i++) s += arr[i].toString(16).padStart(2, '0');
+      return s;
+    },
+
+    isDrcBlob(name) {
+      if (!name) return false;
+      return /^(MULTIBAND_DRC|DRC)\d+\.\d+ /.test(name);
+    },
+    _isMultibandName(name) { return /^MULTIBAND_DRC/.test(name || ''); },
+
+    /* Decode primary params from a sof_drc_params byte offset.
+     * Returns {enabled, threshold_dB, knee_dB, ratio, pre_delay_ms,
+     *          attack_ms, master_gain_dB, release_spacing_dB, _raw:Uint8Array(88)}. */
+    _parseDrcParams(view, off) {
+      const r = (i) => view.getInt32(off + i * 4, true);
+      const one_over_attack_q30 = r(13);
+      const attack_frames = one_over_attack_q30
+        ? 1.0 / this._q30ToFloat(one_over_attack_q30)
+        : 0;
+      const attack_s = attack_frames / 48000;
+      const master_lin = this._q24ToFloat(r(12));
+      return {
+        enabled:            r(0),
+        threshold_dB:       this._q24ToFloat(r(1)),
+        knee_dB:            this._q24ToFloat(r(2)),
+        ratio:              this._q24ToFloat(r(3)),
+        pre_delay_ms:       this._q30ToFloat(r(4)) * 1000,
+        attack_ms:          attack_s * 1000,
+        master_gain_dB:     this._mag2db(master_lin),
+        release_spacing_dB: r(16),                  /* Q32.0 */
+        _raw: new Uint8Array(view.buffer.slice(view.byteOffset + off,
+                                               view.byteOffset + off + 88)),
+      };
+    },
+
+    /* Recompute the derived 88-byte sof_drc_params from edited primaries.
+     * Preserves the original release-zone-related fields (kA..kE,
+     * sat_release_*) by copying them from p._raw, since Phase B does NOT
+     * expose release/release_zone to the user.
+     * Returns a Uint8Array(88). */
+    _packDrcParams(p, Fs) {
+      Fs = Fs || 48000;
+      const buf = new Uint8Array(88);
+      buf.set(p._raw);                                /* preserve unchanged fields */
+      const dv = new DataView(buf.buffer);
+      const w = (i, v) => dv.setInt32(i * 4, v | 0, true);
+
+      const enabled    = p.enabled ? 1 : 0;
+      const thr_dB     = +p.threshold_dB || 0;
+      const knee_dB    = +p.knee_dB || 0;
+      const ratio      = Math.max(1.0001, +p.ratio || 1);
+      const pre_delay  = (+p.pre_delay_ms || 0) / 1000;
+      const attack_s   = Math.max(0.001, (+p.attack_ms || 0) / 1000);
+      const master_lin = this._db2mag(+p.master_gain_dB || 0);
+      const rel_spacing = Math.round(+p.release_spacing_dB || 0);
+
+      const linear_threshold = this._db2mag(thr_dB);
+      const slope = 1 / ratio;
+      const knee_threshold = this._db2mag(thr_dB + knee_dB);
+
+      /* Dichotomic solver for K, identical to drc_gen_coefs.m::k_at_slope */
+      const slopeAt = (x, k) => {
+        if (x < linear_threshold) return 1;
+        const kneeCurve = (xv) =>
+          linear_threshold + (1 - Math.exp(-k * (xv - linear_threshold))) / k;
+        const x2 = x * 1.001;
+        const xdb  = this._mag2db(x);
+        const x2db = this._mag2db(x2);
+        const y_db  = this._mag2db(kneeCurve(x));
+        const y2_db = this._mag2db(kneeCurve(x2));
+        return (y2_db - y_db) / (x2db - xdb);
+      };
+      let minK = 0.1, maxK = 10000, K = 5;
+      for (let it = 0; it < 15; it++) {
+        const sl = slopeAt(knee_threshold, K);
+        if (sl < slope) maxK = K; else minK = K;
+        K = Math.sqrt(minK * maxK);
+      }
+      const knee_alpha = linear_threshold + 1 / K;
+      const knee_beta  = -Math.exp(K * linear_threshold) / K;
+      const kneeCurveAt = (x) =>
+        x < linear_threshold
+          ? x
+          : linear_threshold + (1 - Math.exp(-K * (x - linear_threshold))) / K;
+      const y0 = kneeCurveAt(knee_threshold);
+      const ratio_base = y0 * Math.pow(knee_threshold, -slope);
+
+      w(0,  enabled);
+      w(1,  this._floatToQ24(thr_dB));
+      w(2,  this._floatToQ24(knee_dB));
+      w(3,  this._floatToQ24(ratio));
+      w(4,  this._floatToQ30(pre_delay));
+      w(5,  this._floatToQ30(linear_threshold));
+      w(6,  this._floatToQ30(slope));
+      /* K is Q12.20 */
+      w(7,  Math.round(K * (1 << 20)) | 0);
+      w(8,  this._floatToQ24(knee_alpha));
+      w(9,  this._floatToQ24(knee_beta));
+      w(10, this._floatToQ24(knee_threshold));
+      w(11, this._floatToQ30(ratio_base));
+      w(12, this._floatToQ24(master_lin));
+      w(13, this._floatToQ30(1 / (attack_s * Fs)));
+      /* offset 14, 15, 17..21 (sat_release_*, kA..kE) : kept from _raw */
+      w(16, rel_spacing);
+      return buf;
+    },
+
+    /* sof_drc_config blob → { size, reservedBytes:Uint8Array(16),
+     *                          params:[N × primary obj], params_per_band:N } */
+    _parseDrcConfigBlob(payload) {
+      const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+      const size = view.getUint32(0, true);
+      const reservedBytes = payload.slice(4, 20);
+      const trailing = size - this._DRC_CONFIG_HDR_SIZE;
+      const N = Math.max(1, Math.floor(trailing / this._DRC_PARAMS_SIZE));
+      const params = [];
+      for (let i = 0; i < N; i++) {
+        const off = this._DRC_CONFIG_HDR_SIZE + i * this._DRC_PARAMS_SIZE;
+        params.push(this._parseDrcParams(view, off));
+      }
+      return { size, reservedBytes, params, params_per_band: N };
+    },
+
+    /* sof_multiband_drc_config blob → fully parsed structure. */
+    _parseMbDrcConfigBlob(payload) {
+      const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+      const size = view.getUint32(0, true);
+      const num_bands = view.getUint32(4, true);
+      const enable_emp_deemp = view.getUint32(8, true);
+      const reservedBytes = payload.slice(12, 44);          /* 8 × u32 */
+      const empBytes = payload.slice(44, 100);              /* 2 × 28 */
+      const deempBytes = payload.slice(100, 156);
+      const crossBytes = payload.slice(156, 324);           /* 6 × 28 */
+      const trailing = size - this._MBDRC_FIXED_HDR_SIZE;
+      const total_drc = Math.max(1, Math.floor(trailing / this._DRC_PARAMS_SIZE));
+      const params_per_band = Math.max(1, Math.floor(total_drc / Math.max(1, num_bands)));
+      const drc = [];                                       /* [band][ch] */
+      for (let b = 0; b < num_bands; b++) {
+        const row = [];
+        for (let c = 0; c < params_per_band; c++) {
+          const off = this._MBDRC_FIXED_HDR_SIZE
+                    + (b * params_per_band + c) * this._DRC_PARAMS_SIZE;
+          row.push(this._parseDrcParams(view, off));
+        }
+        drc.push(row);
+      }
+      const crossover_fcs =
+        this._extractCrossoverFcs(crossBytes, num_bands, 48000);
+      return { size, num_bands, enable_emp_deemp,
+               reservedBytes, empBytes, deempBytes, crossBytes,
+               crossover_fcs,
+               drc, params_per_band };
+    },
+
+    /* === Crossover biquad design (port of sof/tools/tune/crossover/
+     *     crossover_gen_coefs.m + crossover_coef_quant.m) =================
+     * 2nd-order Butterworth LP/HP at cutoff fc, resonance=0. The Octave
+     * code quantizes a2/a1 with a negation step, so the stored fields are
+     * (-a2_math, -a1_math, b2, b1, b0, 0, 16384). */
+    _crossoverBq(fs, fc, isHp) {
+      let cutoff = fc / (fs / 2);
+      if (cutoff < 0) cutoff = 0;
+      if (cutoff > 1) cutoff = 1;
+      if (cutoff === 0 || cutoff === 1) {
+        const b0 = isHp ? (1 - cutoff) : cutoff;
+        return { a1:0, a2:0, b0, b1:0, b2:0 };
+      }
+      /* resonance = 0 → g=1, d = sqrt(2). */
+      const d = Math.SQRT2;
+      const theta = Math.PI * cutoff;
+      const sn = 0.5 * d * Math.sin(theta);
+      const beta = 0.5 * (1 - sn) / (1 + sn);
+      const gamma = (0.5 + beta) * Math.cos(theta);
+      const alpha = 0.25 * (0.5 + beta + (isHp ? gamma : -gamma));
+      return {
+        b0: 2 * alpha,
+        b1: isHp ? -4 * alpha : 4 * alpha,
+        b2: 2 * alpha,
+        a1: -2 * gamma,
+        a2: 2 * beta,
+      };
+    },
+
+    _bqBytes(bq) {
+      /* Pack one sof_eq_iir_biquad : 7 × int32, packed.
+       * Stored fields = NEGATED a2/a1 (Octave eq_coef_quant convention). */
+      const buf = new Uint8Array(28);
+      const dv = new DataView(buf.buffer);
+      dv.setInt32(0,  this._floatToQ30(-bq.a2), true);
+      dv.setInt32(4,  this._floatToQ30(-bq.a1), true);
+      dv.setInt32(8,  this._floatToQ30(bq.b2), true);
+      dv.setInt32(12, this._floatToQ30(bq.b1), true);
+      dv.setInt32(16, this._floatToQ30(bq.b0), true);
+      dv.setInt32(20, 0, true);          /* output_shift */
+      dv.setInt32(24, 16384, true);      /* output_gain Q2.14 = 1.0 */
+      return buf;
+    },
+
+    _flatBqBytes(isHp) {
+      /* flat_filter() : b=[1,0,0] a=[0,0,0]. After Octave quant :
+       *   lp_a = -a(3:-1:2) = [0,0]    → a2_field=0, a1_field=0
+       *   lp_b = b(3:-1:1) = [0,0,1.0] → b2=0, b1=0, b0=1.0
+       * That's the canonical pass-through SOF biquad. Same for HP. */
+      const buf = new Uint8Array(28);
+      const dv = new DataView(buf.buffer);
+      dv.setInt32(0,  0, true);
+      dv.setInt32(4,  0, true);
+      dv.setInt32(8,  0, true);
+      dv.setInt32(12, 0, true);
+      dv.setInt32(16, 1 << 30, true);    /* b0 = 1.0 Q2.30 */
+      dv.setInt32(20, 0, true);
+      dv.setInt32(24, 16384, true);
+      return buf;
+    },
+
+    /* Pack the 168-byte crossover_coef[6] block.
+     * Layout in Octave is [lp0, hp0, lp1, hp1, lp2, hp2] — each 28 B. */
+    _packCrossoverBytes(num_bands, fs, fcs) {
+      const out = new Uint8Array(168);
+      let lps, hps;
+      if (num_bands <= 1) {
+        for (let i = 0; i < 3; i++) {
+          out.set(this._flatBqBytes(false), i * 56);
+          out.set(this._flatBqBytes(true),  i * 56 + 28);
+        }
+        return out;
+      }
+      if (num_bands === 2) {
+        lps = [this._crossoverBq(fs, fcs.low, false), null, null];
+        hps = [this._crossoverBq(fs, fcs.low, true),  null, null];
+      } else if (num_bands === 3) {
+        lps = [this._crossoverBq(fs, fcs.low,  false),
+               this._crossoverBq(fs, fcs.high, false),
+               this._crossoverBq(fs, fcs.high, false)];
+        hps = [this._crossoverBq(fs, fcs.low,  true),
+               this._crossoverBq(fs, fcs.high, true),
+               this._crossoverBq(fs, fcs.high, true)];
+      } else {                                 /* 4-band */
+        lps = [this._crossoverBq(fs, fcs.low, false),
+               this._crossoverBq(fs, fcs.mid, false),
+               this._crossoverBq(fs, fcs.high, false)];
+        hps = [this._crossoverBq(fs, fcs.low, true),
+               this._crossoverBq(fs, fcs.mid, true),
+               this._crossoverBq(fs, fcs.high, true)];
+      }
+      for (let i = 0; i < 3; i++) {
+        out.set(lps[i] ? this._bqBytes(lps[i]) : this._flatBqBytes(false),
+                i * 56);
+        out.set(hps[i] ? this._bqBytes(hps[i]) : this._flatBqBytes(true),
+                i * 56 + 28);
+      }
+      return out;
+    },
+
+    /* Inverse of _crossoverBq : recover fc Hz from a stored biquad's
+     * a2/a1 fields. Returns NaN for the pass-through flat case. */
+    _fcFromBq(bytes, off, fs) {
+      const dv = new DataView(bytes.buffer, bytes.byteOffset + off, 28);
+      const a2_field = this._q30ToFloat(dv.getInt32(0, true));
+      const a1_field = this._q30ToFloat(dv.getInt32(4, true));
+      const beta = -a2_field / 2;
+      const gamma = a1_field / 2;
+      if (Math.abs(beta) < 1e-9 && Math.abs(gamma) < 1e-9) return NaN;
+      const sn = (1 - 2 * beta) / (1 + 2 * beta);
+      let sinTheta = sn * Math.SQRT2;
+      if (sinTheta < -1) sinTheta = -1;
+      if (sinTheta >  1) sinTheta =  1;
+      const cosTheta = (0.5 + beta) === 0 ? 0 : gamma / (0.5 + beta);
+      let theta = Math.asin(sinTheta);
+      if (cosTheta < 0) theta = Math.PI - theta;
+      return theta * fs / (2 * Math.PI);
+    },
+
+    /* Extract fc_low / fc_mid / fc_high from the crossBytes block, based
+     * on num_bands. For 3-band the mid is folded onto high (biquad 1+2
+     * share fc_high in Octave's 3-way design). Falls back to safe
+     * defaults if extraction returns NaN. */
+    _extractCrossoverFcs(crossBytes, num_bands, fs) {
+      fs = fs || 48000;
+      const def = { low: 200, mid: 2000, high: 5000 };
+      const fcs = { low: def.low, mid: def.mid, high: def.high };
+      if (num_bands < 2) return fcs;
+      const f0 = this._fcFromBq(crossBytes, 0, fs);
+      if (!isNaN(f0)) fcs.low = Math.round(f0);
+      if (num_bands === 3) {
+        const f1 = this._fcFromBq(crossBytes, 56, fs);
+        if (!isNaN(f1)) fcs.high = Math.round(f1);
+      } else if (num_bands === 4) {
+        const f1 = this._fcFromBq(crossBytes, 56, fs);
+        const f2 = this._fcFromBq(crossBytes, 112, fs);
+        if (!isNaN(f1)) fcs.mid  = Math.round(f1);
+        if (!isNaN(f2)) fcs.high = Math.round(f2);
+      }
+      return fcs;
+    },
+
+    /* Called whenever the user moves a crossover slider : regenerate the
+     * 168 B crossBytes from current fcs and mark the blob dirty. */
+    setCrossoverFc(numid, key, val) {
+      const b = this.dspBlobs[numid];
+      if (!b || !b.parsed) return;
+      const v = Math.max(20, Math.min(parseFloat(val) || 0, 20000));
+      b.parsed.crossover_fcs[key] = v;
+      b.parsed.crossBytes = this._packCrossoverBytes(
+        b.parsed.num_bands, 48000, b.parsed.crossover_fcs);
+      b.dirty = true;
+    },
+
+    _packDrcConfigBlob(parsed) {
+      const N = parsed.params.length;
+      const totalSize = this._DRC_CONFIG_HDR_SIZE + N * this._DRC_PARAMS_SIZE;
+      const buf = new Uint8Array(totalSize);
+      const dv = new DataView(buf.buffer);
+      dv.setUint32(0, totalSize, true);
+      buf.set(parsed.reservedBytes, 4);
+      for (let i = 0; i < N; i++) {
+        const packed = this._packDrcParams(parsed.params[i]);
+        buf.set(packed, this._DRC_CONFIG_HDR_SIZE + i * this._DRC_PARAMS_SIZE);
+      }
+      return buf;
+    },
+
+    _packMbDrcConfigBlob(parsed) {
+      const total_drc = parsed.num_bands * parsed.params_per_band;
+      const totalSize = this._MBDRC_FIXED_HDR_SIZE + total_drc * this._DRC_PARAMS_SIZE;
+      const buf = new Uint8Array(totalSize);
+      const dv = new DataView(buf.buffer);
+      dv.setUint32(0,  totalSize, true);
+      dv.setUint32(4,  parsed.num_bands, true);
+      dv.setUint32(8,  parsed.enable_emp_deemp, true);
+      buf.set(parsed.reservedBytes, 12);
+      buf.set(parsed.empBytes,      44);
+      buf.set(parsed.deempBytes,   100);
+      buf.set(parsed.crossBytes,   156);
+      for (let b = 0; b < parsed.num_bands; b++) {
+        for (let c = 0; c < parsed.params_per_band; c++) {
+          const packed = this._packDrcParams(parsed.drc[b][c]);
+          const off = this._MBDRC_FIXED_HDR_SIZE
+                    + (b * parsed.params_per_band + c) * this._DRC_PARAMS_SIZE;
+          buf.set(packed, off);
+        }
+      }
+      return buf;
+    },
+
+    _drcDefaultParams() {
+      /* Defaults from sof/tools/tune/drc/example_drc.m (speaker_default). */
+      return {
+        enabled: 1,
+        threshold_dB: -30,
+        knee_dB: 20,
+        ratio: 10,
+        pre_delay_ms: 6,
+        attack_ms: 3,
+        master_gain_dB: 3,
+        release_spacing_dB: 5,
+        /* Synthetic _raw : zeroed kA..kE will be overwritten by Octave at next
+         * topology rebuild ; for runtime edits we just keep current bytes. */
+        _raw: new Uint8Array(88),
+      };
+    },
+
+    /* Lazy-load a DSP blob keyed by numid. The same blob is shared across
+     * all strips that show it (e.g. MULTIBAND_DRC1.0 is the SAME object for
+     * M1..M8 — only the channel slice viewed differs). Each strip's sidebar
+     * triggers loadDspBlob via x-init the first time it appears. */
+    async loadDspBlob(numid, fullName) {
+      const existing = this.dspBlobs[numid];
+      if (existing && (existing.loading || (existing.parsed && !existing.error)))
+        return;                                          /* already loaded or in-flight */
+      /* Create the entry once. Subsequent state changes MUTATE the same
+       * object so Alpine's deep reactivity keeps the template subscriptions. */
+      if (!existing) {
+        this.dspBlobs[numid] = { loading: true, kind: null, parsed: null,
+                                  abiHdr: null, fullName, bandTab: 0,
+                                  applying: false, dirty: false, error: null };
+      } else {
+        Object.assign(existing, { loading: true, error: null });
+      }
+      const entry = this.dspBlobs[numid];
+      try {
+        const r = await fetch('/api/dsp/blob/' + numid + '/raw');
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.err || 'blob read failed');
+        const raw = this._hexToBytes(j.hex);
+        if (raw.length < this._ABI_HDR_SIZE + 4) throw new Error('blob too small');
+        const abiHdr = raw.slice(0, this._ABI_HDR_SIZE);
+        const payload = raw.slice(this._ABI_HDR_SIZE);
+        const kind = this._isMultibandName(fullName) ? 'multiband' : 'drc';
+        const parsed = (kind === 'multiband')
+          ? this._parseMbDrcConfigBlob(payload)
+          : this._parseDrcConfigBlob(payload);
+        Object.assign(entry, { loading: false, kind, parsed, abiHdr,
+                                error: null });
+      } catch(e) {
+        Object.assign(entry, { loading: false, error: e.message });
+      }
+    },
+
+    /* Returns the sof_drc_params object for the strip currently displayed
+     * in the detail sidebar (= this.selectedStrip), inside the given blob.
+     * For MULTIBAND_DRC also dispatched on the active band tab. */
+    dspBlobParams(numid) {
+      const b = this.dspBlobs[numid];
+      if (!b || !b.parsed) return null;
+      const ch = (this.selectedStrip != null && this.selectedStrip >= 0)
+        ? (this.selectedStrip % 8) : 0;
+      if (b.kind === 'multiband') {
+        const band = (b.bandTab | 0);
+        if (band >= b.parsed.drc.length) return null;
+        const row = b.parsed.drc[band];
+        return row[Math.min(ch, row.length - 1)] || null;
+      }
+      const arr = b.parsed.params;
+      return arr[Math.min(ch, arr.length - 1)] || null;
+    },
+
+    resetDspBlobChannel(numid) {
+      const cur = this.dspBlobParams(numid);
+      if (!cur) return;
+      const d = this._drcDefaultParams();
+      d._raw = cur._raw;                                /* preserve unchanged fields */
+      Object.assign(cur, d);
+      this.dspBlobs[numid].dirty = true;
+    },
+
+    async applyDspBlob(numid) {
+      const b = this.dspBlobs[numid];
+      if (!b || !b.parsed || b.applying) return;
+      b.applying = true;
+      try {
+        const cfgBytes = (b.kind === 'multiband')
+          ? this._packMbDrcConfigBlob(b.parsed)
+          : this._packDrcConfigBlob(b.parsed);
+        const full = new Uint8Array(b.abiHdr.length + cfgBytes.length);
+        full.set(b.abiHdr, 0);
+        full.set(cfgBytes, b.abiHdr.length);
+        const r = await fetch('/api/dsp/blob/set', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ numid, hex: this._bytesToHex(full) }),
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.err || 'write failed');
+        b.dirty = false;
+      } catch(e) {
+        alert('Apply failed: ' + e.message);
+      } finally {
+        b.applying = false;
+      }
     },
 
     /* === V7.0-E7.4 : programmable biquads ============================== */

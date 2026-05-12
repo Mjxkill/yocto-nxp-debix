@@ -39,7 +39,7 @@
 #include <microhttpd.h>
 #include <alsa/asoundlib.h>
 
-#define GUI_VERSION       "v7.0-e7.4e"
+#define GUI_VERSION       "v7.0-e7.4n"
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
@@ -60,6 +60,7 @@ static void mlog(const char *fmt, ...)
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
 	fputc('\n', stderr);
+	fflush(stderr);
 	va_end(ap);
 }
 
@@ -323,6 +324,80 @@ static int run_amixer_cset(int numid, const char *value)
 	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
+/* Run /usr/bin/tac-reset <mode> serialized two ways :
+ *   - pthread_mutex : guards concurrent GUI clicks within this process
+ *   - fcntl F_SETLK on /run/tac-reset.lock : guards against systemd
+ *     ExecStartPre racing the GUI in another process
+ * Mode is whitelisted to avoid arg injection.
+ * Returns 0 on success, -1 if locked/timeout/exec failure, exit code in *exitp. */
+static pthread_mutex_t g_tac_reset_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static int run_tac_reset(const char *mode, int *exitp)
+{
+	if (!mode || (strcmp(mode, "analog") != 0 && strcmp(mode, "pdm") != 0))
+		return -1;
+
+	if (pthread_mutex_trylock(&g_tac_reset_mu) != 0) {
+		errno = EBUSY;
+		return -1;
+	}
+
+	int lockfd = open("/run/tac-reset.lock",
+			  O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+	if (lockfd < 0) {
+		mlog("tac-reset: lock open err=%d (%s)", errno, strerror(errno));
+		pthread_mutex_unlock(&g_tac_reset_mu);
+		return -1;
+	}
+	struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
+	if (fcntl(lockfd, F_SETLK, &fl) < 0) {
+		mlog("tac-reset: cross-process lock held");
+		close(lockfd);
+		pthread_mutex_unlock(&g_tac_reset_mu);
+		errno = EBUSY;
+		return -1;
+	}
+
+	pid_t pid = fork();
+	if (pid < 0) {
+		close(lockfd);
+		pthread_mutex_unlock(&g_tac_reset_mu);
+		return -1;
+	}
+	if (pid == 0) {
+		int devnull = open("/dev/null", O_WRONLY);
+		if (devnull >= 0) {
+			dup2(devnull, STDOUT_FILENO);
+			dup2(devnull, STDERR_FILENO);
+			close(devnull);
+		}
+		execl("/usr/bin/tac-reset", "tac-reset", mode, (char *)NULL);
+		_exit(127);
+	}
+
+	int status = 0;
+	int done = 0;
+	for (int i = 0; i < 80; i++) { /* 8 s, 100 ms tick */
+		pid_t r = waitpid(pid, &status, WNOHANG);
+		if (r == pid) { done = 1; break; }
+		if (r < 0)    { break; }
+		usleep(100000);
+	}
+	if (!done) {
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+		close(lockfd);
+		pthread_mutex_unlock(&g_tac_reset_mu);
+		mlog("tac-reset: timeout, killed pid=%d", pid);
+		errno = ETIMEDOUT;
+		return -1;
+	}
+	close(lockfd);
+	pthread_mutex_unlock(&g_tac_reset_mu);
+	if (exitp) *exitp = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
+}
+
 /* ============================== SOF TLV-byte helpers (E7.4.c) =====
  * Read/write SOF "bytes_ext" controls (used for MULTIBAND_DRC / DRC
  * config blobs). amixer cget/cset don't handle TLV byte controls
@@ -350,8 +425,12 @@ static int sof_blob_read(int numid, unsigned char *out, size_t cap)
 	size_t tlv_size;
 	int ret;
 
-	if (snd_ctl_open(&ctl, "hw:" ALSA_CARD, 0) < 0)
+	int oc = snd_ctl_open(&ctl, "hw:" ALSA_CARD, 0);
+	if (oc < 0) {
+		mlog("sof_blob_read: snd_ctl_open(hw:%s) err=%d (%s)",
+		     ALSA_CARD, oc, snd_strerror(oc));
 		return -1;
+	}
 
 	snd_ctl_elem_id_alloca(&eid);
 	snd_ctl_elem_id_set_numid(eid, numid);
@@ -363,11 +442,16 @@ static int sof_blob_read(int numid, unsigned char *out, size_t cap)
 	tlv = calloc(1, tlv_size);
 	if (!tlv) { snd_ctl_close(ctl); return -1; }
 
-	if (snd_ctl_elem_tlv_read(ctl, eid, tlv, tlv_size) < 0) {
+	int rc = snd_ctl_elem_tlv_read(ctl, eid, tlv, tlv_size);
+	if (rc < 0) {
+		mlog("sof_blob_read: numid=%d tlv_read err=%d (%s)",
+		     numid, rc, snd_strerror(rc));
 		free(tlv);
 		snd_ctl_close(ctl);
 		return -1;
 	}
+	mlog("sof_blob_read: numid=%d tlv ok, tag=0x%x size=%u",
+	     numid, tlv[0], tlv[1]);
 
 	unsigned int payload = tlv[1];
 	if (payload > cap) payload = cap;
@@ -400,7 +484,11 @@ static int sof_blob_write(int numid, const unsigned char *data, size_t size)
 	tlv = calloc(1, tlv_size);
 	if (!tlv) { snd_ctl_close(ctl); return -1; }
 
-	tlv[0] = 0x1004;       /* SOF_CTRL_TLV_DATA — bytes blob */
+	/* SOF kernel side (ipc3-control.c::snd_sof_bytes_ext_put) verifies
+	 * that header.numid == scontrol->cmd. For bytes_ext blob kcontrols
+	 * scontrol->cmd == SOF_CTRL_CMD_BINARY == 3. Reusing 0x1004 makes
+	 * the kernel reject the write with -EINVAL. */
+	tlv[0] = 3;            /* SOF_CTRL_CMD_BINARY */
 	tlv[1] = (unsigned int)size;
 	memcpy(&tlv[2], data, size);
 
@@ -553,6 +641,30 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			return send_file(conn, full, guess_mime(full));
 		}
 
+		/* === Route GET /api/dsp/blob/<numid>/raw === (E7.4.c)
+		 * Returns the raw SOF blob (incl ABI header) as hex.
+		 * Reply : {"ok",numid,size,hex} */
+		if (!strncmp(url, "/api/dsp/blob/", 14)) {
+			const char *p = url + 14;
+			char *endp = NULL;
+			long numid = strtol(p, &endp, 10);
+			if (numid <= 0 || !endp || strcmp(endp, "/raw") != 0)
+				return send_json(conn, 400,
+					"{\"ok\":false,\"err\":\"bad numid path\"}\n");
+			static unsigned char buf[6000];
+			int sz = sof_blob_read((int)numid, buf, sizeof(buf));
+			if (sz < 0)
+				return send_json(conn, 503,
+					"{\"ok\":false,\"err\":\"tlv read failed\"}\n");
+			static char hex[12100];
+			hex_encode(buf, (size_t)sz, hex);
+			static char body[12300];
+			snprintf(body, sizeof(body),
+				"{\"ok\":true,\"numid\":%ld,\"size\":%d,\"hex\":\"%s\"}\n",
+				numid, sz, hex);
+			return send_json(conn, 200, body);
+		}
+
 		return send_json(conn, MHD_HTTP_NOT_FOUND, "{\"ok\":false,\"err\":\"not found\"}\n");
 	}
 
@@ -633,33 +745,6 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		return send_json(conn, 200, reply);
 	}
 
-	/* === Route GET /api/dsp/blob/<numid>/raw === (E7.4.c)
-	 * Returns the raw SOF blob (including ABI header) as hex.
-	 * Reply : {"ok":true,"numid":N,"size":S,"hex":"<2S hex chars>"}
-	 */
-	if (!strcmp(method, "GET") && !strncmp(url, "/api/dsp/blob/", 14)) {
-		const char *p = url + 14;
-		char *endp = NULL;
-		long numid = strtol(p, &endp, 10);
-		if (numid <= 0 || !endp || strcmp(endp, "/raw") != 0)
-			return send_json(conn, 400,
-				"{\"ok\":false,\"err\":\"bad numid path\"}\n");
-		static unsigned char buf[6000];
-		int sz = sof_blob_read((int)numid, buf, sizeof(buf));
-		if (sz < 0)
-			return send_json(conn, 503,
-				"{\"ok\":false,\"err\":\"tlv read failed\"}\n");
-		/* hex string + JSON envelope */
-		static char hex[12100];
-		hex_encode(buf, (size_t)sz, hex);
-		static char body[12300];
-		int n = snprintf(body, sizeof(body),
-			"{\"ok\":true,\"numid\":%ld,\"size\":%d,\"hex\":\"%s\"}\n",
-			numid, sz, hex);
-		(void)n;
-		return send_json(conn, 200, body);
-	}
-
 	/* === Route POST /api/dsp/blob/set === (E7.4.c)
 	 * Body : {"numid":N, "hex":"<bytes>"} where hex = full SOF payload
 	 *        (ABI header + blob bytes).
@@ -689,7 +774,11 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		if (json_get_int_field(pb->data, "numid", &numid) < 0 || !p)
 			return send_json(conn, 400,
 				"{\"ok\":false,\"err\":\"need numid + hex\"}\n");
-		p = strchr(p, '"'); if (p) p = strchr(p + 1, '"'); if (!p) p = NULL;
+		/* Walk past 3 quotes : open"hex" close"hex" open"<value>" — landing
+		 * on the first char of the hex string. */
+		p = strchr(p, '"');
+		if (p) p = strchr(p + 1, '"');
+		if (p) p = strchr(p + 1, '"');
 		const char *hex_start = p ? p + 1 : NULL;
 		const char *hex_end = hex_start ? strchr(hex_start, '"') : NULL;
 		if (!hex_start || !hex_end || hex_end <= hex_start)
@@ -712,6 +801,55 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		char reply[128];
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"numid\":%d,\"size\":%d}\n", numid, sz);
+		return send_json(conn, 200, reply);
+	}
+
+	/* === Route POST /api/tac/reset === (E7.4.f)
+	 * Body : {"mode":"analog|pdm"} (optional, default "analog")
+	 * Runs /usr/bin/tac-reset, guarded by flock so it can't race
+	 * with systemd ExecStartPre on the mixer-pro service.
+	 */
+	if (!strcmp(method, "POST") && !strcmp(url, "/api/tac/reset")) {
+		struct post_buf *pb = *con_cls;
+		if (!pb) {
+			pb = calloc(1, sizeof(*pb));
+			if (!pb) return MHD_NO;
+			*con_cls = pb;
+			return MHD_YES;
+		}
+		if (*upload_data_size > 0) {
+			size_t avail = POST_MAX_BYTES - 1 - pb->len;
+			size_t n = *upload_data_size < avail ? *upload_data_size : avail;
+			memcpy(pb->data + pb->len, upload_data, n);
+			pb->len += n;
+			pb->data[pb->len] = '\0';
+			*upload_data_size = 0;
+			return MHD_YES;
+		}
+		char mode[16] = "analog";
+		if (pb->len > 0)
+			(void)json_get_str_field(pb->data, "mode", mode, sizeof(mode));
+		if (strcmp(mode, "analog") != 0 && strcmp(mode, "pdm") != 0)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"mode must be analog or pdm\"}\n");
+
+		int exit_code = -1;
+		int r = run_tac_reset(mode, &exit_code);
+		if (r != 0) {
+			const char *why = "tac-reset failed";
+			int http = 503;
+			if (errno == EBUSY)    { why = "tac-reset already running"; http = 409; }
+			if (errno == ETIMEDOUT) { why = "tac-reset timeout";        http = 504; }
+			char reply[160];
+			snprintf(reply, sizeof(reply),
+				 "{\"ok\":false,\"err\":\"%s\",\"exit\":%d}\n",
+				 why, exit_code);
+			return send_json(conn, http, reply);
+		}
+		char reply[128];
+		snprintf(reply, sizeof(reply),
+			 "{\"ok\":true,\"mode\":\"%s\",\"exit\":%d}\n",
+			 mode, exit_code);
 		return send_json(conn, 200, reply);
 	}
 
