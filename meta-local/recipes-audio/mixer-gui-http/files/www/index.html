@@ -653,6 +653,63 @@ html, body {
   background:var(--accent-2); cursor:pointer; border:2px solid var(--bg-elev-1);
 }
 .bq-val { text-align:right; font-variant-numeric:tabular-nums; color:var(--text-bright); }
+
+/* Native <option> rendering is OS-driven and shows up as white-on-white
+ * on dark themes. Force readable colors. (Browsers honour bg/color on
+ * <option> for non-Mac systems; on Mac OS uses native menu colors but
+ * usually adapts to dark theme automatically.) */
+.alsa-select option {
+  background: var(--bg-elev-1, #1c1f25);
+  color: var(--text-bright, #f0f0f0);
+}
+
+/* ===== FX bus detail overlay (E7.4.b — clickable bus card) ===== */
+.fxbus-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(3px); z-index: 90;
+  opacity: 0; pointer-events: none; transition: opacity 200ms ease;
+}
+.fxbus-backdrop.open { opacity: 1; pointer-events: auto; }
+.fxbus-panel {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(560px, 92vw); max-height: 86vh; overflow-y: auto;
+  background: rgba(28,31,38, 0.96); backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px; padding: 20px 22px;
+  z-index: 100; box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+  opacity: 0; pointer-events: none;
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.fxbus-panel.open { opacity: 1; pointer-events: auto; }
+.fxbus-panel h3 {
+  margin: 0 0 4px 0; font-size: 16px; font-weight: 600;
+  color: var(--text-bright);
+}
+.fxbus-panel .fxbus-sub {
+  font-size: 11px; color: var(--text-mute);
+  margin-bottom: 14px; letter-spacing: 0.04em; text-transform: uppercase;
+}
+.fxbus-panel .fxbus-close {
+  position: absolute; top: 12px; right: 14px;
+  background: none; border: none; color: var(--text-mute);
+  font-size: 22px; cursor: pointer; line-height: 1;
+}
+.fxbus-panel .fxbus-close:hover { color: var(--text-bright); }
+.fx-card.clickable { cursor: pointer; transition: border-color 150ms; }
+.fx-card.clickable:hover { border-color: rgba(var(--accent-2-rgb, 255,180,80), 0.4); }
+.fx-edit-btn {
+  margin-top: 10px; width: 100%;
+  background: linear-gradient(180deg, rgba(245,158,11,0.18), rgba(245,158,11,0.06));
+  color: var(--text-bright, #f0f0f0);
+  border: 1px solid rgba(245,158,11,0.35);
+  padding: 8px 12px; border-radius: 7px;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.03em;
+  cursor: pointer; transition: background 150ms, border-color 150ms;
+}
+.fx-edit-btn:hover {
+  background: linear-gradient(180deg, rgba(245,158,11,0.32), rgba(245,158,11,0.12));
+  border-color: rgba(245,158,11,0.6);
+}
 </style>
 </head>
 <body x-data="mixerApp()" x-init="init()">
@@ -848,41 +905,10 @@ html, body {
                    @input.debounce.50ms="setFxBus((b-1)*2+1, $event.target.value)">
             <span class="fx-val" x-text="fxBusGain[(b-1)*2+1].toFixed(2)"></span>
           </div>
-          <!-- placeholder knobs (E7.3 will wire actual params) -->
-          <div class="fx-placeholder-knobs">
-            <div class="knob-placeholder" title="E7.3 — to wire">
-              <svg class="knob-svg" viewBox="0 0 40 40">
-                <circle cx="20" cy="20" r="16" fill="#1c1e24" stroke="#3a3d44" stroke-width="1"/>
-                <circle cx="20" cy="20" r="13" fill="none" stroke="#f59e0b" stroke-width="2"
-                        stroke-dasharray="40 100" stroke-linecap="round"
-                        transform="rotate(-220 20 20)" opacity="0.55"/>
-                <line x1="20" y1="9" x2="20" y2="14" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
-              </svg>
-              <span class="knob-label">P1</span>
-            </div>
-            <div class="knob-placeholder">
-              <svg class="knob-svg" viewBox="0 0 40 40">
-                <circle cx="20" cy="20" r="16" fill="#1c1e24" stroke="#3a3d44" stroke-width="1"/>
-                <circle cx="20" cy="20" r="13" fill="none" stroke="#f59e0b" stroke-width="2"
-                        stroke-dasharray="55 100" stroke-linecap="round"
-                        transform="rotate(-200 20 20)" opacity="0.55"/>
-                <line x1="20" y1="9" x2="20" y2="14" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"
-                      transform="rotate(20 20 20)"/>
-              </svg>
-              <span class="knob-label">P2</span>
-            </div>
-            <div class="knob-placeholder">
-              <svg class="knob-svg" viewBox="0 0 40 40">
-                <circle cx="20" cy="20" r="16" fill="#1c1e24" stroke="#3a3d44" stroke-width="1"/>
-                <circle cx="20" cy="20" r="13" fill="none" stroke="#f59e0b" stroke-width="2"
-                        stroke-dasharray="70 100" stroke-linecap="round"
-                        transform="rotate(-180 20 20)" opacity="0.55"/>
-                <line x1="20" y1="9" x2="20" y2="14" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"
-                      transform="rotate(40 20 20)"/>
-              </svg>
-              <span class="knob-label">P3</span>
-            </div>
-          </div>
+          <!-- E7.4.b : click → open dedicated FX params overlay -->
+          <button class="fx-edit-btn" @click="openFxBus(b-1)">
+            Edit effect ▸
+          </button>
           <button class="fx-reset" @click="resetFx(b-1)">Reset bus</button>
         </div>
       </template>
@@ -1089,25 +1115,7 @@ html, body {
         <span x-text="grp.title"></span>
         <span class="count" x-text="grp.subtitle"></span>
       </div>
-      <!-- V7.0-E7.4.b : DSP bus FX sliders -->
-      <template x-if="grp.fxSpec">
-        <div class="alsa-ctrls">
-          <template x-for="p in grp.fxSpec" :key="grp.fxBus+'-'+p.key">
-            <div class="alsa-ctrl">
-              <div class="alsa-ctrl-label" x-text="p.label"></div>
-              <div class="alsa-ctrl-int">
-                <input type="range"
-                       :min="p.min" :max="p.max" :step="p.step"
-                       :value="fxState[grp.fxBus][p.key] ?? p.min"
-                       @input.debounce.40ms="setFxParam(grp.fxBus, p.key, $event.target.value)">
-                <span class="alsa-ctrl-val"
-                      x-text="(fxState[grp.fxBus][p.key] ?? p.min).toFixed(p.step < 1 ? 2 : 0) + ' ' + p.unit"></span>
-              </div>
-            </div>
-          </template>
-        </div>
-      </template>
-      <div class="alsa-ctrls" x-show="!grp.fxSpec">
+      <div class="alsa-ctrls">
         <template x-for="c in grp.controls" :key="'c'+c.numid">
           <div class="alsa-ctrl">
             <div class="alsa-ctrl-label" x-text="c.short"></div>
@@ -1208,6 +1216,41 @@ html, body {
   </template>
 </aside>
 
+<!-- ===== FX bus detail overlay (E7.4.b) =====================
+     Click on `Edit effect` in a BUS FX card opens this modal with
+     the full live param sliders for the corresponding effect engine
+     (Compressor / Reverb / Delay / EQ). -->
+<div class="fxbus-backdrop" :class="selectedFxBus !== null ? 'open' : ''"
+     @click="closeFxBus()"></div>
+<div class="fxbus-panel" :class="selectedFxBus !== null ? 'open' : ''">
+  <button class="fxbus-close" @click="closeFxBus()">×</button>
+  <template x-if="selectedFxBus !== null">
+    <div>
+      <h3 x-text="'Bus FX ' + (selectedFxBus + 1) + ' — '
+                  + (fxState[selectedFxBus].type
+                      ? fxState[selectedFxBus].type.charAt(0).toUpperCase()
+                        + fxState[selectedFxBus].type.slice(1)
+                      : '…')"></h3>
+      <div class="fxbus-sub">live params · changes apply immediately</div>
+      <div class="alsa-ctrls">
+        <template x-for="p in fxParamSpec(fxState[selectedFxBus].type)" :key="p.key">
+          <div class="alsa-ctrl">
+            <div class="alsa-ctrl-label" x-text="p.label"></div>
+            <div class="alsa-ctrl-int">
+              <input type="range"
+                     :min="p.min" :max="p.max" :step="p.step"
+                     :value="fxState[selectedFxBus][p.key] ?? p.min"
+                     @input.debounce.40ms="setFxParam(selectedFxBus, p.key, $event.target.value)">
+              <span class="alsa-ctrl-val"
+                    x-text="(fxState[selectedFxBus][p.key] ?? p.min).toFixed(p.step < 1 ? 2 : 0) + ' ' + p.unit"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+</div>
+
 <script>
 function mixerApp() {
   return {
@@ -1243,6 +1286,10 @@ function mixerApp() {
     /* E7.4.b : DSP bus FX state — params returned by mixer-pro `get_fx`.
      * fxState[b] = { type, threshold, ratio, attack, release, ... } for b=0..3 */
     fxState: [{}, {}, {}, {}],
+
+    /* E7.4.b post-feedback : FX bus detail overlay state.
+     * null = closed ; 0..3 = bus index whose detail panel is open. */
+    selectedFxBus: null,
 
     /* E7.4 : programmable biquads — high-level params per kcontrol name.
      * Key = full kcontrol name e.g. "TAC0 ADC BQ1 Coefs".
@@ -1523,47 +1570,34 @@ function mixerApp() {
       const all = this.alsaControls;
       const names = Object.keys(all);
 
-      /* === V7.0-E7.4.b : DSP bus FX (compressor / reverb / delay / eq)
-       * 4 stereo bus effects in mixer-pro — global, shared across all
-       * strips that send into the corresponding FX bus. Always rendered
-       * regardless of which strip is selected.
+      /* V7.0-E7.4.b post-feedback : DSP-side effects (MULTIBAND_DRC / DRC
+       * blobs + FX bus internals) are NOT exposed in the per-strip
+       * sidebar. The strip sidebar shows only per-strip parameters
+       * (TAC controls, PGA strip volume, FX send levels). Bus FX
+       * internals are reached by clicking the FX bus card directly.
+       *
+       * DSP global blobs (8-channel MULTIBAND_DRC/DRC) only apply to
+       * the M1..M8 / S1..S8 PCM channels routed through the DSP,
+       * NOT to USB ASIO / Phone / Returns strips — those bypass these
+       * SOF components. Display only on idx < 8.
        */
-      const fxBusGroups = [];
-      for (let b = 0; b < 4; b++) {
-        const fx = this.fxState[b];
-        if (!fx || !fx.type) continue;
-        const spec = this.fxParamSpec(fx.type);
-        if (!spec.length) continue;
-        fxBusGroups.push({
-          title: `FX Bus ${b + 1} — ${fx.type.charAt(0).toUpperCase() + fx.type.slice(1)}`,
-          subtitle: `global · live params`,
-          fxBus: b,
-          fxSpec: spec,
-        });
-      }
-      for (const g of fxBusGroups) groups.push(g);
-
-      /* === V7.0-E7.4.b : Global DSP 8-channel effects ===========
-       * MULTIBAND_DRC + DRC blobs that the SOF firmware applies to
-       * all 8 channels of the chain. Same for every strip. Read-only
-       * tag for now (4096-byte TLV byte controls need sof-ctl or a
-       * dedicated preset loader, not amixer cset).
-       */
-      const dspGlobalInputs = names.filter(n =>
-        n.startsWith('MULTIBAND_DRC1.0 ') || n.startsWith('DRC1.0 ')
-      ).map(n => ({ ...all[n], short: this.alsaShortLabel(n),
-                    note: 'global 8ch · presets via topology m4 at build' }));
-      const dspGlobalOutputs = names.filter(n =>
-        n.startsWith('MULTIBAND_DRC2.0 ')
-      ).map(n => ({ ...all[n], short: this.alsaShortLabel(n),
-                    note: 'global 8ch · presets via topology m4 at build' }));
-      const dspGlobal = isOut ? dspGlobalOutputs : dspGlobalInputs;
-      if (dspGlobal.length) {
-        groups.push({
-          title: isOut ? 'DSP global 8ch (output chain)' : 'DSP global 8ch (input chain)',
-          subtitle: `applies to all ${isOut ? 'S1..S8' : 'M1..M8'} simultaneously`,
-          controls: dspGlobal,
-        });
+      if (idx < 8) {
+        const dspGlobalInputs = names.filter(n =>
+          n.startsWith('MULTIBAND_DRC1.0 ') || n.startsWith('DRC1.0 ')
+        ).map(n => ({ ...all[n], short: this.alsaShortLabel(n),
+                      note: 'global 8ch · presets via topology m4 at build' }));
+        const dspGlobalOutputs = names.filter(n =>
+          n.startsWith('MULTIBAND_DRC2.0 ')
+        ).map(n => ({ ...all[n], short: this.alsaShortLabel(n),
+                      note: 'global 8ch · presets via topology m4 at build' }));
+        const dspGlobal = isOut ? dspGlobalOutputs : dspGlobalInputs;
+        if (dspGlobal.length) {
+          groups.push({
+            title: isOut ? 'DSP global 8ch (output chain)' : 'DSP global 8ch (input chain)',
+            subtitle: `applies to all ${isOut ? 'S1..S8' : 'M1..M8'} simultaneously`,
+            controls: dspGlobal,
+          });
+        }
       }
 
       if (!isOut) {
@@ -1845,6 +1879,9 @@ function mixerApp() {
       this.fxState[bus] = { ...this.fxState[bus], [name]: v };
       this.sendCmd({op:'set_fx_param', bus, param:name, value:v});
     },
+
+    openFxBus(b)  { this.selectedFxBus = b; },
+    closeFxBus()  { this.selectedFxBus = null; },
 
     /* Per-effect parameter descriptor : ranges/units for the sliders.
      * Read-only fields (env meters) are skipped. */
