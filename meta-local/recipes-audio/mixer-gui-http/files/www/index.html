@@ -1089,7 +1089,25 @@ html, body {
         <span x-text="grp.title"></span>
         <span class="count" x-text="grp.subtitle"></span>
       </div>
-      <div class="alsa-ctrls">
+      <!-- V7.0-E7.4.b : DSP bus FX sliders -->
+      <template x-if="grp.fxSpec">
+        <div class="alsa-ctrls">
+          <template x-for="p in grp.fxSpec" :key="grp.fxBus+'-'+p.key">
+            <div class="alsa-ctrl">
+              <div class="alsa-ctrl-label" x-text="p.label"></div>
+              <div class="alsa-ctrl-int">
+                <input type="range"
+                       :min="p.min" :max="p.max" :step="p.step"
+                       :value="fxState[grp.fxBus][p.key] ?? p.min"
+                       @input.debounce.40ms="setFxParam(grp.fxBus, p.key, $event.target.value)">
+                <span class="alsa-ctrl-val"
+                      x-text="(fxState[grp.fxBus][p.key] ?? p.min).toFixed(p.step < 1 ? 2 : 0) + ' ' + p.unit"></span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+      <div class="alsa-ctrls" x-show="!grp.fxSpec">
         <template x-for="c in grp.controls" :key="'c'+c.numid">
           <div class="alsa-ctrl">
             <div class="alsa-ctrl-label" x-text="c.short"></div>
@@ -1222,6 +1240,10 @@ function mixerApp() {
     /* E7.3b : ALSA kcontrols state */
     alsaControls: {},            /* parsed map name → control object */
 
+    /* E7.4.b : DSP bus FX state — params returned by mixer-pro `get_fx`.
+     * fxState[b] = { type, threshold, ratio, attack, release, ... } for b=0..3 */
+    fxState: [{}, {}, {}, {}],
+
     /* E7.4 : programmable biquads — high-level params per kcontrol name.
      * Key = full kcontrol name e.g. "TAC0 ADC BQ1 Coefs".
      * Values { type, fHz, q, gainDb } ; chip stores 20 raw coef bytes,
@@ -1237,6 +1259,7 @@ function mixerApp() {
       this.initStream();
       await this.fetchAlsaControls();
       this.initBiquadParams();
+      await this.fetchFxStates();
     },
 
     initStream() {
@@ -1499,6 +1522,26 @@ function mixerApp() {
       const isOut = this.selectedIsOutput;
       const all = this.alsaControls;
       const names = Object.keys(all);
+
+      /* === V7.0-E7.4.b : DSP bus FX (compressor / reverb / delay / eq)
+       * 4 stereo bus effects in mixer-pro — global, shared across all
+       * strips that send into the corresponding FX bus. Always rendered
+       * regardless of which strip is selected.
+       */
+      const fxBusGroups = [];
+      for (let b = 0; b < 4; b++) {
+        const fx = this.fxState[b];
+        if (!fx || !fx.type) continue;
+        const spec = this.fxParamSpec(fx.type);
+        if (!spec.length) continue;
+        fxBusGroups.push({
+          title: `FX Bus ${b + 1} — ${fx.type.charAt(0).toUpperCase() + fx.type.slice(1)}`,
+          subtitle: `global · live params`,
+          fxBus: b,
+          fxSpec: spec,
+        });
+      }
+      for (const g of fxBusGroups) groups.push(g);
 
       /* === V7.0-E7.4.b : Global DSP 8-channel effects ===========
        * MULTIBAND_DRC + DRC blobs that the SOF firmware applies to
@@ -1773,6 +1816,70 @@ function mixerApp() {
 
     bqParams(name) {
       return this.biquadParams[name] || this._bqDefault();
+    },
+
+    /* === V7.0-E7.4.b : DSP bus FX (compressor / reverb / delay / eq) ====
+     * Mixer-pro exposes 4 stereo FX engines, addressed by bus index 0..3.
+     * Each `get_fx {bus: b}` op returns the current high-level params
+     * (type + per-effect parameters). `set_fx_param {bus, param, value}`
+     * commits a new value (engines smooth internally).
+     * UI : sliders rendered in a dedicated sidebar group on every strip.
+     */
+    async fetchFxStates() {
+      for (let b = 0; b < 4; b++) {
+        try {
+          const r = await fetch('/api/cmd', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({op:'get_fx', bus:b}),
+          });
+          const j = await r.json();
+          if (j && j.ok && j.type) this.fxState[b] = j;
+        } catch(e) { console.warn('get_fx failed', b, e); }
+      }
+    },
+
+    async setFxParam(bus, name, value) {
+      const v = parseFloat(value);
+      /* local optimistic update */
+      this.fxState[bus] = { ...this.fxState[bus], [name]: v };
+      this.sendCmd({op:'set_fx_param', bus, param:name, value:v});
+    },
+
+    /* Per-effect parameter descriptor : ranges/units for the sliders.
+     * Read-only fields (env meters) are skipped. */
+    fxParamSpec(type) {
+      switch (type) {
+        case 'compressor':
+          return [
+            { key:'threshold', label:'Threshold', min:-60, max:0,    step:0.5, unit:'dB' },
+            { key:'ratio',     label:'Ratio',     min:1,   max:20,   step:0.1, unit:':1' },
+            { key:'attack',    label:'Attack',    min:0.1, max:500,  step:0.1, unit:'ms' },
+            { key:'release',   label:'Release',   min:1,   max:2000, step:1,   unit:'ms' },
+            { key:'makeup',    label:'Makeup',    min:0,   max:24,   step:0.5, unit:'dB' },
+          ];
+        case 'reverb':
+          return [
+            { key:'room_size', label:'Room size', min:0, max:1, step:0.01, unit:'' },
+            { key:'damping',   label:'Damping',   min:0, max:1, step:0.01, unit:'' },
+            { key:'wet',       label:'Wet',       min:0, max:1, step:0.01, unit:'' },
+          ];
+        case 'delay':
+          return [
+            { key:'delay_ms', label:'Time',     min:0, max:2000, step:1,    unit:'ms' },
+            { key:'feedback', label:'Feedback', min:0, max:0.95, step:0.01, unit:'' },
+            { key:'wet',      label:'Wet',      min:0, max:1,    step:0.01, unit:'' },
+          ];
+        case 'eq':
+          return [
+            { key:'low_gain',  label:'Low gain',  min:-18,  max:18,   step:0.5, unit:'dB' },
+            { key:'mid_gain',  label:'Mid gain',  min:-18,  max:18,   step:0.5, unit:'dB' },
+            { key:'mid_freq',  label:'Mid freq',  min:100,  max:8000, step:10,  unit:'Hz' },
+            { key:'mid_q',     label:'Mid Q',     min:0.1,  max:10,   step:0.01,unit:''   },
+            { key:'high_gain', label:'High gain', min:-18,  max:18,   step:0.5, unit:'dB' },
+          ];
+        default: return [];
+      }
     },
 
     /* Update one field of a biquad, recompute the 20-byte blob, send via

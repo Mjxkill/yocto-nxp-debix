@@ -26,6 +26,9 @@ SRC_URI += "file://apply-sdram2-dt.py"
 # V7.0-E7.4.b — patch simple-card.c to support N codec phandles per DAI link
 # (upstream hardcodes num_codecs=1, blocking multi-TAC TDM binding)
 SRC_URI += "file://apply-simple-card-multicodec.py"
+# V7.0-E7.4.b — patch imx-card.c to leave link->id at sequential default
+# (upstream forces link->id from cpu DT args, breaks SOF topology matching)
+SRC_URI += "file://apply-imx-card-linkid.py"
 
 # Install TAC5212 driver into kernel tree, patch Kconfig/Makefile and DTS
 do_patch:prepend() {
@@ -65,6 +68,8 @@ do_patch:append() {
     python3 ${WORKDIR}/apply-sdram2-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
     # V7.0-E7.4.b simple-card multi-codec support (idempotent, backward-compat)
     python3 ${WORKDIR}/apply-simple-card-multicodec.py ${S}
+    # V7.0-E7.4.b imx-card link_id : keep sequential default for SOF tplg match
+    python3 ${WORKDIR}/apply-imx-card-linkid.py ${S}
 }
 
 # Force TAC5212 + SOF imx-probes config into .config after kernel configure

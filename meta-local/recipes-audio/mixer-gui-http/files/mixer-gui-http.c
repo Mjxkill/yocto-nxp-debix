@@ -38,7 +38,7 @@
 #include <unistd.h>
 #include <microhttpd.h>
 
-#define GUI_VERSION       "v7.0-e7.4b"
+#define GUI_VERSION       "v7.0-e7.4c"
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
