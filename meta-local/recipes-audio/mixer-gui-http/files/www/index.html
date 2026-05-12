@@ -615,6 +615,15 @@ html, body {
   padding: 4px 0; font-style: italic;
   border-bottom: 1px solid rgba(255,255,255,0.03);
 }
+.alsa-bytes-wrap { display:flex; flex-direction:column; gap:2px; padding:2px 0; }
+.alsa-bytes-note { font-size: 10px; color: var(--text-dim); font-style: italic; }
+.alsa-empty-note {
+  font-size: 11px; color: var(--text-mute);
+  padding: 10px 12px; border-radius: 6px;
+  background: rgba(255, 180, 80, 0.04);
+  border: 1px dashed rgba(255, 180, 80, 0.15);
+  line-height: 1.45;
+}
 .bq-form { display:flex; flex-direction:column; gap:6px; padding:4px 0; }
 .bq-row { display:flex; gap:6px; }
 .bq-grid {
@@ -1157,13 +1166,21 @@ html, body {
               </div>
             </template>
 
-            <!-- BYTES (non-biquad) : fallback placeholder -->
+            <!-- BYTES (non-biquad) : fallback placeholder with optional note -->
             <template x-if="c.type === 'BYTES' && !(c.fullName && parseBiquadName(c.fullName))">
-              <span class="alsa-bytes-tag">blob (×<span x-text="c.count"></span> bytes)</span>
+              <div class="alsa-bytes-wrap">
+                <span class="alsa-bytes-tag">blob (×<span x-text="c.count"></span> bytes)</span>
+                <template x-if="c.note">
+                  <span class="alsa-bytes-note" x-text="c.note"></span>
+                </template>
+              </div>
             </template>
           </div>
         </template>
-        <template x-if="grp.controls.length === 0">
+        <template x-if="grp.controls.length === 0 && grp.placeholder">
+          <div class="alsa-empty-note" x-text="grp.placeholder"></div>
+        </template>
+        <template x-if="grp.controls.length === 0 && !grp.placeholder">
           <div style="font-size:11px; color:var(--text-mute); padding:6px 2px;">
             no kcontrol matched for this strip
           </div>
@@ -1483,6 +1500,29 @@ function mixerApp() {
       const all = this.alsaControls;
       const names = Object.keys(all);
 
+      /* === V7.0-E7.4.b : Global DSP 8-channel effects ===========
+       * MULTIBAND_DRC + DRC blobs that the SOF firmware applies to
+       * all 8 channels of the chain. Same for every strip. Read-only
+       * tag for now (4096-byte TLV byte controls need sof-ctl or a
+       * dedicated preset loader, not amixer cset).
+       */
+      const dspGlobalInputs = names.filter(n =>
+        n.startsWith('MULTIBAND_DRC1.0 ') || n.startsWith('DRC1.0 ')
+      ).map(n => ({ ...all[n], short: this.alsaShortLabel(n),
+                    note: 'global 8ch · presets via topology m4 at build' }));
+      const dspGlobalOutputs = names.filter(n =>
+        n.startsWith('MULTIBAND_DRC2.0 ')
+      ).map(n => ({ ...all[n], short: this.alsaShortLabel(n),
+                    note: 'global 8ch · presets via topology m4 at build' }));
+      const dspGlobal = isOut ? dspGlobalOutputs : dspGlobalInputs;
+      if (dspGlobal.length) {
+        groups.push({
+          title: isOut ? 'DSP global 8ch (output chain)' : 'DSP global 8ch (input chain)',
+          subtitle: `applies to all ${isOut ? 'S1..S8' : 'M1..M8'} simultaneously`,
+          controls: dspGlobal,
+        });
+      }
+
       if (!isOut) {
         /* === INPUT strip === */
         if (idx < 8) {
@@ -1526,6 +1566,15 @@ function mixerApp() {
             title:'TAC misc', subtitle:`bias/VAD/VREF · ${tacMisc.length} controls`, controls:tacMisc });
           if (pga.length) groups.push({
             title:'DSP PGA cap', subtitle:`SOF strip volume`, controls:pga });
+          /* No TAC controls found for this strip → TAC<n> not wired */
+          if (!perCh.length && !adcShared.length && !adcBq.length && !tacMisc.length) {
+            groups.push({
+              title: `${tacPrefix} hardware`,
+              subtitle: `not wired on this board — TAC kcontrols unavailable`,
+              controls: [],
+              placeholder: `${tacPrefix} is declared in DT but does not respond on I²C. Connect the codec physically (addr 0x${(0x50+tac).toString(16)}) to enable ADC ${ch}, fine gain, biquads and other effects on this strip.`,
+            });
+          }
         } else if (idx >= 8 && idx < 18) {
           /* UAC2 or Phone : no TAC, just PGA strip if applicable */
           const pgaName = `PGA1.0 1 Strip${idx+1} Volume`;
@@ -1568,6 +1617,14 @@ function mixerApp() {
             title:'TAC DAC biquads', subtitle:`12 programmable filters (BQ_CFG enum allocates them across CH1+CH2)`, controls:dacBq });
           if (pga.length) groups.push({
             title:'DSP PGA play', subtitle:`SOF strip volume`, controls:pga });
+          if (!perCh.length && !dacShared.length && !dacBq.length) {
+            groups.push({
+              title: `${tacPrefix} hardware`,
+              subtitle: `not wired on this board — TAC kcontrols unavailable`,
+              controls: [],
+              placeholder: `${tacPrefix} is declared in DT but does not respond on I²C. Connect the codec physically (addr 0x${(0x50+tac).toString(16)}) to enable DAC ${ch}, output drive/level, biquads and other effects on this strip.`,
+            });
+          }
         }
       }
       return groups;
