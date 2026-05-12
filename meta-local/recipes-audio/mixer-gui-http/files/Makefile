@@ -1,7 +1,7 @@
 CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11
 LDFLAGS ?=
-LIBS     = -lmicrohttpd -lpthread
+LIBS     = -lmicrohttpd -lpthread -lasound
 
 PREFIX  ?= /usr
 BINDIR  ?= $(PREFIX)/bin

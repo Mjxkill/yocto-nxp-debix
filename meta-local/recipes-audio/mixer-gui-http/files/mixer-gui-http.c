@@ -37,8 +37,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <microhttpd.h>
+#include <alsa/asoundlib.h>
 
-#define GUI_VERSION       "v7.0-e7.4d"
+#define GUI_VERSION       "v7.0-e7.4e"
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
@@ -322,6 +323,128 @@ static int run_amixer_cset(int numid, const char *value)
 	return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
+/* ============================== SOF TLV-byte helpers (E7.4.c) =====
+ * Read/write SOF "bytes_ext" controls (used for MULTIBAND_DRC / DRC
+ * config blobs). amixer cget/cset don't handle TLV byte controls
+ * ("skipping bytes dump"), so we go through alsa-lib snd_ctl APIs +
+ * the TLV ioctl underneath.
+ *
+ * SOF wraps its blobs in a 32-byte ABI header (struct sof_abi_hdr)
+ * followed by the actual payload, and the TLV wrapper itself prefixes
+ * everything with (tag, size). The full buffer layout retrieved by
+ * snd_ctl_elem_tlv_read() is :
+ *
+ *   tlv[0]   = ASoC TLV tag (SOF defines SOF_CTRL_TLV_DATA = 0x1004)
+ *   tlv[1]   = total payload size in bytes (NOT including these 8 hdr bytes)
+ *   tlv[2..] = payload = struct sof_abi_hdr (32 B) + blob bytes
+ */
+
+/* Read TLV-byte control by numid into `out` (up to cap bytes). Returns the
+ * payload size on success, -1 on error. The returned bytes include the SOF
+ * ABI header so the caller / userspace can identify the version + blob type. */
+static int sof_blob_read(int numid, unsigned char *out, size_t cap)
+{
+	snd_ctl_t *ctl = NULL;
+	snd_ctl_elem_id_t *eid;
+	unsigned int *tlv = NULL;
+	size_t tlv_size;
+	int ret;
+
+	if (snd_ctl_open(&ctl, "hw:" ALSA_CARD, 0) < 0)
+		return -1;
+
+	snd_ctl_elem_id_alloca(&eid);
+	snd_ctl_elem_id_set_numid(eid, numid);
+
+	/* Allocate room for 8B header + max payload (clamp to 8 KB) */
+	tlv_size = (cap + 16 + 3) & ~3;
+	if (tlv_size > 8192)
+		tlv_size = 8192;
+	tlv = calloc(1, tlv_size);
+	if (!tlv) { snd_ctl_close(ctl); return -1; }
+
+	if (snd_ctl_elem_tlv_read(ctl, eid, tlv, tlv_size) < 0) {
+		free(tlv);
+		snd_ctl_close(ctl);
+		return -1;
+	}
+
+	unsigned int payload = tlv[1];
+	if (payload > cap) payload = cap;
+	memcpy(out, &tlv[2], payload);
+	ret = (int)payload;
+
+	free(tlv);
+	snd_ctl_close(ctl);
+	return ret;
+}
+
+/* Write a payload to a TLV-byte control. `data` is the full payload
+ * including SOF ABI header. Returns 0 on success, -1 on error. */
+static int sof_blob_write(int numid, const unsigned char *data, size_t size)
+{
+	snd_ctl_t *ctl = NULL;
+	snd_ctl_elem_id_t *eid;
+	unsigned int *tlv = NULL;
+	size_t tlv_size;
+	int ret;
+
+	if (!data || size == 0 || size > 8000) return -1;
+	if (snd_ctl_open(&ctl, "hw:" ALSA_CARD, 0) < 0)
+		return -1;
+
+	snd_ctl_elem_id_alloca(&eid);
+	snd_ctl_elem_id_set_numid(eid, numid);
+
+	tlv_size = ((size + 8 + 3) & ~3);
+	tlv = calloc(1, tlv_size);
+	if (!tlv) { snd_ctl_close(ctl); return -1; }
+
+	tlv[0] = 0x1004;       /* SOF_CTRL_TLV_DATA — bytes blob */
+	tlv[1] = (unsigned int)size;
+	memcpy(&tlv[2], data, size);
+
+	ret = snd_ctl_elem_tlv_write(ctl, eid, tlv);
+
+	free(tlv);
+	snd_ctl_close(ctl);
+	return ret < 0 ? -1 : 0;
+}
+
+/* Hex-encode `size` bytes from `src` into a NUL-terminated string in `dst`,
+ * which must hold at least `2*size + 1` chars. */
+static void hex_encode(const unsigned char *src, size_t size, char *dst)
+{
+	static const char H[] = "0123456789abcdef";
+	for (size_t i = 0; i < size; i++) {
+		dst[2*i]     = H[(src[i] >> 4) & 0xf];
+		dst[2*i + 1] = H[ src[i]       & 0xf];
+	}
+	dst[2*size] = 0;
+}
+
+/* Decode hex string `src` into bytes in `dst`. Returns nb bytes decoded,
+ * or -1 on malformed input. */
+static int hex_decode(const char *src, unsigned char *dst, size_t cap)
+{
+	size_t n = strlen(src);
+	if (n & 1) return -1;
+	n /= 2;
+	if (n > cap) return -1;
+	for (size_t i = 0; i < n; i++) {
+		int hi = src[2*i], lo = src[2*i + 1];
+		hi = (hi >= '0' && hi <= '9') ? hi - '0'
+		    : (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10
+		    : (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10 : -1;
+		lo = (lo >= '0' && lo <= '9') ? lo - '0'
+		    : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10
+		    : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10 : -1;
+		if (hi < 0 || lo < 0) return -1;
+		dst[i] = (unsigned char)((hi << 4) | lo);
+	}
+	return (int)n;
+}
+
 /* Minimal JSON helpers : extract "key":<int> or "key":"<str>" from a JSON line. */
 static int json_get_int_field(const char *s, const char *key, int *out)
 {
@@ -507,6 +630,88 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"numid\":%d,\"value\":\"%s\"}\n",
 			 numid, value);
+		return send_json(conn, 200, reply);
+	}
+
+	/* === Route GET /api/dsp/blob/<numid>/raw === (E7.4.c)
+	 * Returns the raw SOF blob (including ABI header) as hex.
+	 * Reply : {"ok":true,"numid":N,"size":S,"hex":"<2S hex chars>"}
+	 */
+	if (!strcmp(method, "GET") && !strncmp(url, "/api/dsp/blob/", 14)) {
+		const char *p = url + 14;
+		char *endp = NULL;
+		long numid = strtol(p, &endp, 10);
+		if (numid <= 0 || !endp || strcmp(endp, "/raw") != 0)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"bad numid path\"}\n");
+		static unsigned char buf[6000];
+		int sz = sof_blob_read((int)numid, buf, sizeof(buf));
+		if (sz < 0)
+			return send_json(conn, 503,
+				"{\"ok\":false,\"err\":\"tlv read failed\"}\n");
+		/* hex string + JSON envelope */
+		static char hex[12100];
+		hex_encode(buf, (size_t)sz, hex);
+		static char body[12300];
+		int n = snprintf(body, sizeof(body),
+			"{\"ok\":true,\"numid\":%ld,\"size\":%d,\"hex\":\"%s\"}\n",
+			numid, sz, hex);
+		(void)n;
+		return send_json(conn, 200, body);
+	}
+
+	/* === Route POST /api/dsp/blob/set === (E7.4.c)
+	 * Body : {"numid":N, "hex":"<bytes>"} where hex = full SOF payload
+	 *        (ABI header + blob bytes).
+	 */
+	if (!strcmp(method, "POST") && !strcmp(url, "/api/dsp/blob/set")) {
+		struct post_buf *pb = *con_cls;
+		if (!pb) {
+			pb = calloc(1, sizeof(*pb));
+			if (!pb) return MHD_NO;
+			*con_cls = pb;
+			return MHD_YES;
+		}
+		if (*upload_data_size > 0) {
+			size_t avail = POST_MAX_BYTES - 1 - pb->len;
+			size_t n = *upload_data_size < avail ? *upload_data_size : avail;
+			memcpy(pb->data + pb->len, upload_data, n);
+			pb->len += n;
+			pb->data[pb->len] = '\0';
+			*upload_data_size = 0;
+			return MHD_YES;
+		}
+		if (pb->len == 0)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"empty body\"}\n");
+		int numid = 0;
+		const char *p = strstr(pb->data, "\"hex\"");
+		if (json_get_int_field(pb->data, "numid", &numid) < 0 || !p)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"need numid + hex\"}\n");
+		p = strchr(p, '"'); if (p) p = strchr(p + 1, '"'); if (!p) p = NULL;
+		const char *hex_start = p ? p + 1 : NULL;
+		const char *hex_end = hex_start ? strchr(hex_start, '"') : NULL;
+		if (!hex_start || !hex_end || hex_end <= hex_start)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"bad hex field\"}\n");
+		size_t hex_len = (size_t)(hex_end - hex_start);
+		static char hex[12100];
+		if (hex_len >= sizeof(hex))
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"hex too large\"}\n");
+		memcpy(hex, hex_start, hex_len); hex[hex_len] = 0;
+		static unsigned char buf[6000];
+		int sz = hex_decode(hex, buf, sizeof(buf));
+		if (sz < 0)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"malformed hex\"}\n");
+		if (sof_blob_write(numid, buf, (size_t)sz) != 0)
+			return send_json(conn, 503,
+				"{\"ok\":false,\"err\":\"tlv write failed\"}\n");
+		char reply[128];
+		snprintf(reply, sizeof(reply),
+			 "{\"ok\":true,\"numid\":%d,\"size\":%d}\n", numid, sz);
 		return send_json(conn, 200, reply);
 	}
 

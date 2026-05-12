@@ -19,8 +19,8 @@ S = "${WORKDIR}"
 
 inherit systemd
 
-DEPENDS = "libmicrohttpd"
-RDEPENDS:${PN} = "libmicrohttpd mixer-pro"
+DEPENDS = "libmicrohttpd alsa-lib"
+RDEPENDS:${PN} = "libmicrohttpd alsa-lib mixer-pro"
 
 do_compile() {
     oe_runmake CC="${CC}" CFLAGS="${CFLAGS}" LDFLAGS="${LDFLAGS}"
