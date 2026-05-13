@@ -1,8 +1,16 @@
 # PROJECT_STATE — Plateforme Mastering Live Debix
 
 **Document maître unique. Source de vérité du projet.**
-Dernière mise à jour : 2026-04-26
-Branche active : `feature/audio-platform-v2` (basée sur `L6.12.3-debix_model_ab`)
+Dernière mise à jour : 2026-05-13
+Branche active : **`feature/v7.0-multiband-drc-tap`** (basée sur `L6.12.3-debix_model_ab`)
+
+Branche origine `feature/audio-platform-v2` archivée. La V7.0 a fork à
+partir du commit `0580b5f14` (E6.a multi-codec matrix 16×8 son OK) et
+poursuit en parallèle.
+
+**HEAD courant** : `6511f273 meta-local: sof-firmware-custom recipe`
+(yocto-nxp-debix) + `4bea8e59d` (sof). Voir `REPRODUCIBILITY.md` pour
+la procédure complète de rebuild from scratch.
 
 > **À LIRE EN PREMIER** par toute personne (humain ou IA) qui reprend le projet.
 > Ce document remplace toute lecture ad hoc des docs `PHASE_*.pdf` éparpillés.
@@ -365,25 +373,67 @@ Conformément à `CLAUDE.md` et `REGLES.md` :
 9. **Patch kernel OK pour nouvelle fonctionnalité isolée**, refusé pour changer le comportement ALSA/driver existant.
 10. **Tap NPU non-négociable** : ne JAMAIS abandonner cette contrainte projet.
 
-## 13. État actuel précis
+## 13. État actuel précis (2026-05-13)
 
-**Branch** : `feature/audio-platform-v2` (HEAD = `6299dbb1`)
-**Modifs locales non poussées** :
-- `sof/src/probe/probe.c` — Alt-A (à revert)
-- `sof/src/ipc/ipc3/handler.c` — Alt-A (à revert)
-- `sof/src/include/ipc/header.h` — Alt-A (à revert)
-- `sof/src/include/ipc3/probe.h` — Alt-A (à revert)
-- `sof/src/include/sof/probe/probe.h` — Alt-A (à revert)
-- `sof/app/boards/imx8mp_evk_mimx8ml8_adsp.conf` — Alt-A (à revert si CONFIG_PROBE encore présent)
+**Branch yocto-nxp-debix** : `feature/v7.0-multiband-drc-tap` (HEAD = `6511f273`)
+**Branch sof** : `feature/v7.0-multiband-drc-tap` (HEAD = `4bea8e59d`)
+**Modifs locales non poussées** : aucune (working tree clean).
 
-**Investigation finale Phase 1a.2 V1** : job `01688a32-341a-4979-85fe-f5ab27d09d7f` terminée, verdict GO conditionnel + 6 corrections.
+### V7.0 roadmap — état réel
 
-**Décision archivée** : `critic_decision` ID `3565abbf-19e4-4091-9bf6-19cfaf4c7708`.
+| Étape | Statut | Commit | Fiche |
+|---|---|---|---|
+| E0 — baseline + audit kernel | ✓ GO | — | `TESTS_V7.0_E0.md` |
+| E1 — topology simplifiée + ALSA low-lat | ✓ GO | — | `TESTS_V7.0_E1.md` |
+| E2 — multiband_drc CAP 8ch | ✓ GO | — | `TESTS_V7.0_E2.md` |
+| E3 — strips OUT play 8ch | ✓ GO | — | `TESTS_V7.0_E3.md` |
+| E4 — NPU tap IN brut (PIPE 1) | ✓ GO | — | `TESTS_V7.0_E4.md` |
+| E5 — NPU tap OUT post-FX (PIPE 2) | ✓ GO | — | `TESTS_V7.0_E5.md` |
+| E6.a — USB UAC2 gadget 8×8 | ✓ GO | — | `TESTS_V7.0_E6a.md` |
+| E6.b — Phone aloop 2×2 | ✓ GO | — | `TESTS_V7.0_E6b.md` |
+| E6.c — Routing ALSA paire-à-paire | ✓ GO | — | `TESTS_V7.0_E6c.md` |
+| E6.d — mixer-pro daemon 26 in × 18 out | ✓ MVP | — | `TESTS_V7.0_E6d.md` |
+| E6.e — 4 effets natifs C (compr/reverb/delay/EQ) | ✓ MVP | — | `TESTS_V7.0_E6e.md` |
+| E6.f — profiling + diagnostic hotspot | ✓ Diag | — | `TESTS_V7.0_E6f.md` |
+| E6.g — refactor 2-thread + ring SPSC | ✓ GO 48 kHz | — | `TESTS_V7.0_E6g.md` |
+| E6.h — eventfd + ring 8 périodes (latence 14 ms) | ✓ GO **baseline V7.0** | — | `TESTS_V7.0_E6h.md` |
+| E6.i / j / k / l — tentatives < 10 ms | ✗ KO empirique | — | `TESTS_V7.0_E6i/j/k/l.md` |
+| E7 — GUI HTTP mixer-gui-http + Alpine.js | ✓ GO | `079d3ddb` | `TESTS_V7.0_E7.md` |
+| E7.1 — peak meters + SSE 30 Hz | ✓ GO | `d055b946` | `TESTS_V7.0_E7.1.md` |
+| E7.2 — UI premium Apple-class + SAI fix | ✓ GO | `e3f3d7f6` | `TESTS_V7.0_E7.2.md` |
+| E7.3 — sidebar + FX bus panels complets | ✓ GO | `edf6dd50` + `0d0f844f` | `TESTS_V7.0_E7.3.md` |
+| E7.4.b-n — TAC + DRC editor + crossover + layout | ✓ GO | `45e6592b` (bundle) | `TESTS_V7.0_E7.4.md` |
+| E7.5 — 4 analyzer taps FFT + scope | ✓ GO | `4f4e4d0b` + `4124f97f` | `TESTS_V7.0_E7.5.md` |
+| E7.6 — documentation consolidée | ✓ GO | `18aa700e` + `0d7372e8` | — |
+| E7.7 — returns tags + R1..R8 fix + repro infra | ✓ GO | `0216bd71` + `87f71fd1` + `6511f273` | `TESTS_V7.0_E7.7.md` |
 
-**Prochaine action** : valider ce doc avec utilisateur, puis :
-1. Revert modifs Alt-A (`git checkout sof/`)
-2. Créer `PHASE_1A_2_NPU_TAP_V2.md` (spec corrigée)
-3. Démarrer J1 V2 (firmware hook)
+### Conclusion architecturale post-E6.l
+
+> Plancher physique V7.0 = TAC ADC 0.5 + DMA RX 2 + cap pipe 0.5 + ALSA cap min 2 + mix 0.5 + ALSA play min 2 + DMA TX 2 + DAC 0.5 = **10 ms exact AVANT marge anti-xrun**.
+
+E6.h (14 ms côté mixer, ~20 ms E2E) est la **limite pratique** sur SOF
+i.MX 8M Plus en userspace. Cible < 10 ms reportée à une V8.0 mixer DSP
+SOF natif (effort 4-8 semaines, gain structurel -8 à -14 ms).
+
+### État de reproductibilité
+
+Voir `REPRODUCIBILITY.md` (commit `6511f273`) :
+- Toutes les recettes Yocto présentes (mixer-pro, mixer-gui-http,
+  tac5212-service, sof-firmware-custom)
+- Firmware SOF custom et topology vendorés dans
+  `meta-local/recipes-bsp/sof-firmware-custom/files/`
+- SOF source tree poussé sur `github.com/Mjxkill/sof`
+- **Dette connue** : `kernel-module-imx-audio-tap` packaging deb à
+  réparer pour qu'un `bitbake imx-image-full -c rootfs` passe sans
+  workaround.
+
+### Prochaine étape envisagée
+
+- **E7.8 potentiel** : persistance d'état mixer (snapshot/restore au boot)
+- **E7.9 potentiel** : presets nommés (Live / Studio / Conf)
+- Réparer le packaging `kernel-module-imx-audio-tap` pour fermer la
+  dette reproductibilité
+- Sprint V8 mixer DSP natif si la cible < 10 ms redevient prioritaire
 
 ---
 
