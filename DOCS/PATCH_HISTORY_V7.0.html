@@ -1,0 +1,1352 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Debix Audio Platform — Historique complet des patches &amp; chemins explorés</title>
+<style>
+@page { size: A4; margin: 2cm 1.8cm; }
+:root {
+  --ink: #0f172a; --ink-2: #334155; --muted: #64748b;
+  --line: #e2e8f0; --line-2: #cbd5e1;
+  --bg: #ffffff; --bg-soft: #f8fafc; --bg-code: #f1f5f9;
+  --accent: #4f46e5; --accent-soft: #eef2ff;
+  --blue: #1d4ed8; --blue-soft: #dbeafe;
+  --green: #15803d; --green-soft: #dcfce7;
+  --amber: #b45309; --amber-soft: #fef3c7;
+  --red: #b91c1c; --red-soft: #fee2e2;
+  --pink: #be185d; --pink-soft: #fce7f3;
+  --teal: #0d9488; --teal-soft: #ccfbf1;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+  font-size: 10.2pt; line-height: 1.55;
+  color: var(--ink); background: var(--bg);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+code, pre, .mono { font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; }
+code {
+  background: var(--bg-code); border-radius: 4px;
+  padding: 1px 5px; font-size: 9pt; color: var(--blue);
+  border: 1px solid var(--line);
+}
+pre {
+  background: var(--bg-code); border-left: 3px solid var(--accent);
+  padding: 10px 12px; border-radius: 4px;
+  font-size: 8.8pt; line-height: 1.45; overflow-x: auto;
+  white-space: pre-wrap; word-break: break-word;
+}
+pre code { background: transparent; border: 0; padding: 0; color: var(--ink); }
+h1, h2, h3, h4 { color: var(--ink); margin-top: 0; line-height: 1.25; }
+h1 { font-size: 28pt; font-weight: 800; letter-spacing: -0.03em; }
+h2 { font-size: 18pt; font-weight: 700; letter-spacing: -0.02em;
+     border-bottom: 2px solid var(--line-2); padding-bottom: 8px;
+     margin-top: 36px; }
+h3 { font-size: 13pt; font-weight: 600; margin-top: 22px; color: var(--accent); }
+h4 { font-size: 10.8pt; font-weight: 700; margin-top: 16px;
+     text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); }
+p { margin: 7px 0; }
+ul, ol { margin: 6px 0 10px 0; padding-left: 22px; }
+li { margin: 2px 0; }
+li::marker { color: var(--muted); }
+strong { color: var(--ink); font-weight: 700; }
+em { color: var(--ink-2); font-style: italic; }
+table {
+  width: 100%; border-collapse: collapse;
+  margin: 12px 0; font-size: 9.2pt;
+  break-inside: avoid;
+}
+th, td {
+  text-align: left; padding: 6px 9px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+th {
+  background: var(--bg-soft);
+  font-weight: 700; font-size: 8.8pt;
+  text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--ink-2);
+  border-bottom: 2px solid var(--line-2);
+}
+tr:nth-child(even) td { background: rgba(248, 250, 252, 0.5); }
+.cover {
+  height: 100vh; min-height: 26cm;
+  display: flex; flex-direction: column; justify-content: space-between;
+  padding: 1cm 0; break-after: page;
+}
+.cover .tag {
+  display: inline-block; padding: 4px 12px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 9pt; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.cover h1 { font-size: 38pt; margin: 18px 0 10px 0; }
+.cover .subtitle {
+  font-size: 14pt; color: var(--ink-2); font-weight: 500;
+  margin-bottom: 30px; line-height: 1.4;
+}
+.cover .meta {
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: 6px 18px; font-size: 10pt;
+}
+.cover .meta .k { color: var(--muted); font-weight: 600; text-transform: uppercase;
+                   font-size: 9pt; letter-spacing: 0.05em; align-self: center; }
+.cover .meta .v { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
+.cover .footer {
+  border-top: 1px solid var(--line); padding-top: 14px;
+  font-size: 9pt; color: var(--muted);
+}
+.lede {
+  background: var(--accent-soft);
+  border-left: 4px solid var(--accent);
+  padding: 12px 16px; border-radius: 0 6px 6px 0;
+  margin: 14px 0; font-size: 10.2pt;
+}
+.callout {
+  margin: 12px 0; padding: 10px 14px;
+  border-radius: 6px; font-size: 9.5pt;
+  break-inside: avoid;
+}
+.callout .label {
+  font-size: 8.5pt; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; display: inline-block; margin-right: 6px;
+}
+.callout.info  { background: var(--blue-soft);  border-left: 4px solid var(--blue);  color: #1e3a8a; }
+.callout.info .label { color: var(--blue); }
+.callout.ok    { background: var(--green-soft); border-left: 4px solid var(--green); color: #14532d; }
+.callout.ok .label { color: var(--green); }
+.callout.warn  { background: var(--amber-soft); border-left: 4px solid var(--amber); color: #78350f; }
+.callout.warn .label { color: var(--amber); }
+.callout.fail  { background: var(--red-soft);   border-left: 4px solid var(--red);   color: #7f1d1d; }
+.callout.fail .label { color: var(--red); }
+.callout.note  { background: var(--bg-soft);    border-left: 4px solid var(--line-2); color: var(--ink-2); }
+.pill {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 8pt; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pill.ok    { background: var(--green-soft); color: var(--green); }
+.pill.fail  { background: var(--red-soft);   color: var(--red); }
+.pill.warn  { background: var(--amber-soft); color: var(--amber); }
+.pill.info  { background: var(--blue-soft);  color: var(--blue); }
+.pill.draft { background: var(--bg-code);    color: var(--muted); }
+.break  { break-before: page; }
+.no-break { break-inside: avoid; }
+.toc { font-size: 10pt; }
+.toc .level-2 { font-weight: 700; margin-top: 8px; }
+.toc .level-3 { padding-left: 18px; color: var(--ink-2); font-size: 9.5pt; }
+.toc .num { color: var(--accent); font-weight: 700; margin-right: 6px;
+             font-family: 'JetBrains Mono', monospace; }
+.diagram {
+  margin: 14px 0; padding: 10px;
+  background: var(--bg-soft); border: 1px solid var(--line);
+  border-radius: 8px; break-inside: avoid;
+}
+.diagram svg { width: 100%; height: auto; display: block; }
+.diagram .caption {
+  font-size: 8.8pt; color: var(--muted); margin-top: 6px;
+  text-align: center; font-style: italic;
+}
+.commit-hash {
+  font-family: 'JetBrains Mono', monospace; font-size: 8.5pt;
+  background: var(--bg-code); padding: 2px 6px; border-radius: 3px;
+  color: var(--pink); border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.phase-marker {
+  display: flex; align-items: center; gap: 12px;
+  margin: 24px 0 8px 0; padding: 8px 12px;
+  background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 100%);
+  border-left: 5px solid var(--accent); border-radius: 0 6px 6px 0;
+  break-inside: avoid;
+}
+.phase-marker .id {
+  font-family: 'JetBrains Mono', monospace; font-size: 11pt;
+  font-weight: 800; color: var(--accent);
+}
+.phase-marker .name {
+  font-size: 13pt; font-weight: 700; color: var(--ink);
+}
+.phase-marker .dates {
+  margin-left: auto; font-size: 9pt; color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+</style>
+</head>
+<body>
+
+<!-- ====================== COVER ====================== -->
+<section class="cover">
+  <div>
+    <span class="tag">Documentation technique · Livrable client</span>
+    <h1>Debix Audio Platform</h1>
+    <div class="subtitle">Historique complet des patches kernel &amp; SOF, chemins
+      explorés, voies abandonnées<br>De la baseline V3.2.2 à la production V7.0</div>
+    <div class="meta">
+      <span class="k">Cible matérielle</span><span class="v">NXP i.MX 8M Plus — board Debix Model AB</span>
+      <span class="k">Base logicielle</span><span class="v">Yocto Project 5.0 Scarthgap · Linux 6.6.36 · SOF Zephyr v2.10.0</span>
+      <span class="k">Branche projet</span><span class="v">feature/v7.0-multiband-drc-tap</span>
+      <span class="k">Origine projet</span><span class="v">2025-Q4 (bring-up TAC5212 sur board L6.6.36-1.0.0)</span>
+      <span class="k">Période couverte</span><span class="v">2025-12 → 2026-05 (≈ 6 mois)</span>
+      <span class="k">HEAD yocto-nxp-debix</span><span class="v">14c78ac9</span>
+      <span class="k">HEAD sof</span><span class="v">4bea8e59d</span>
+      <span class="k">Date du document</span><span class="v">2026-05-13</span>
+      <span class="k">Auteur</span><span class="v">Michael Jouannigot · Electrosens</span>
+    </div>
+  </div>
+  <div class="footer">
+    Ce document recense, depuis le démarrage du projet en 2025-Q4, l'intégralité
+    des modifications logicielles apportées au noyau Linux et au firmware SOF,
+    et trace toutes les voies techniques explorées — y compris celles qui ont
+    été abandonnées avec un verdict empirique. Il sert de référence projet et
+    de mémoire institutionnelle pour les itérations futures.
+  </div>
+</section>
+
+<!-- ====================== EXEC SUMMARY ====================== -->
+<section>
+<h2>Résumé exécutif</h2>
+<p class="lede">
+La plateforme audio Debix transforme une carte NXP i.MX 8M Plus standard
+en station de mastering audio embarquée temps réel : 26 entrées
+audio (8 mics DSP + 8 stems USB ASIO + 2 phone + 8 returns FX) mixées
+vers 18 sorties (8 DSP play + 8 ASIO + 2 phone), via un daemon C
+<code>mixer-pro</code> à latence ≈ 14 ms et une interface web servie sur
+LAN. Elle s'appuie sur 4 codecs Texas Instruments TAC5212 en TDM 8 canaux
+× 32 bits @ 48 kHz, un DSP HiFi4 dédié au traitement d'effets via Sound
+Open Firmware (SOF Zephyr), et un futur tap NPU pour mastering ML temps réel.
+</p>
+
+<p>Le projet a démarré fin 2025 par le bring-up du codec TAC5212 absent
+upstream, et a traversé en 6 mois <strong>7 phases majeures</strong>
+(P0 bring-up → P1a console MVP → P1a.2 NPU tap → P1a.3 DSP architecture
+→ V6.0 always-on archivé → V7.0 production). Le résultat actuel
+représente <strong>21 patches actifs</strong> (10 kernel Linux, 11 SOF
+firmware) et <strong>≈ 30 chemins techniques explorés et abandonnés</strong>
+avec leur verdict empirique documenté.</p>
+
+<table>
+  <thead><tr><th>Catégorie</th><th>Total</th><th>Détails</th></tr></thead>
+  <tbody>
+    <tr><td>Phases majeures projet</td><td>7</td><td>P0 bring-up · P1a console · P1a.2 NPU tap · P1a.3 DSP V5 · V6.0 always-on · V7.0 prod · doc consolidée</td></tr>
+    <tr><td>Patches kernel actifs</td><td>10</td><td>codec, DT scripts, machine driver, cfg fragments, module NPU tap</td></tr>
+    <tr><td>Patches SOF firmware actifs</td><td>11</td><td>SAI, IPC, dai-legacy, multiband_drc, drc, pipeline, topology</td></tr>
+    <tr><td>Chemins abandonnés</td><td>≈30</td><td>5 ALSA capture · 5 NPU tap · 3 components SOF · 5 SDMA AP2AP · 4 latence userspace · 8 misc</td></tr>
+    <tr><td>Recipes Yocto custom</td><td>8</td><td>mixer-pro, mixer-gui-http, tac5212-service, sof-firmware-custom, imx-audio-tap, snd-aloop-phone, usb-uac2-gadget, alsa-route-bridge</td></tr>
+    <tr><td>Commits yocto-nxp-debix</td><td>190</td><td>sur la branche feature/v7.0-multiband-drc-tap</td></tr>
+    <tr><td>Commits sof</td><td>≈ 30 spécifiques projet</td><td>sur fork github.com/Mjxkill/sof feature/v7.0-multiband-drc-tap</td></tr>
+  </tbody>
+</table>
+
+<p>Latence acoustique finale mesurée : <strong>≈ 14 ms côté mixer
+userspace, ≈ 20 ms E2E</strong> (incluant DMA + DAC). Le théorème de
+Little a démontré un <strong>plancher physique 10 ms exact</strong> sur
+SOF i.MX 8M Plus, plaçant la cible &lt; 10 ms dans un futur sprint V8 de
+mixer DSP SOF natif.</p>
+</section>
+
+<!-- ====================== TOC ====================== -->
+<section class="break">
+<h2>Table des matières</h2>
+<div class="toc">
+  <p class="level-2"><span class="num">1.</span> Vue d'ensemble &amp; chronologie complète</p>
+  <p class="level-3"><span class="num">1.1</span> Frise des 7 phases du projet</p>
+  <p class="level-3"><span class="num">1.2</span> Arbre de décisions clés</p>
+  <p class="level-3"><span class="num">1.3</span> Conventions de branches</p>
+
+  <p class="level-2"><span class="num">2.</span> Phase 0 — Bring-up TAC5212 + SOF (2025-Q4 → 2026-01)</p>
+  <p class="level-3"><span class="num">2.1</span> Driver TAC5212 ex nihilo</p>
+  <p class="level-3"><span class="num">2.2</span> Intégration SOF première chaîne</p>
+  <p class="level-3"><span class="num">2.3</span> Bug ASYNC -58 dBFS noise floor</p>
+  <p class="level-3"><span class="num">2.4</span> tac-reset boot persistence</p>
+
+  <p class="level-2"><span class="num">3.</span> Phase 1a.1 — Console 8ch masterclass V2 → V4.2</p>
+  <p class="level-3"><span class="num">3.1</span> 7 itérations PHASE_1A_SPEC V2 → V2.6</p>
+  <p class="level-3"><span class="num">3.2</span> V3 reset console + V4 MUXDEMUX</p>
+  <p class="level-3"><span class="num">3.3</span> V4.2 GO MVP — premier son end-to-end</p>
+
+  <p class="level-2"><span class="num">4.</span> Phase 1a.2 — NPU tap (5 voies explorées)</p>
+  <p class="level-3"><span class="num">4.1</span> V1.0 → V1.5 ALSA capture PCM (5 iter KO)</p>
+  <p class="level-3"><span class="num">4.2</span> S1 SOF Probes upstream</p>
+  <p class="level-3"><span class="num">4.3</span> Alt-A modification probe.c SOF</p>
+  <p class="level-3"><span class="num">4.4</span> S6 mem_sink direct</p>
+  <p class="level-3"><span class="num">4.5</span> V3.2.2 kernel module + DT carve (GO final)</p>
+
+  <p class="level-2"><span class="num">5.</span> Phase 1a.3 — DSP V5 architecture (5 itérations spec)</p>
+  <p class="level-3"><span class="num">5.1</span> Spec V5 → V5.4.2 (puis revert)</p>
+  <p class="level-3"><span class="num">5.2</span> SDRAM2 8 MB DSP-only carve</p>
+  <p class="level-3"><span class="num">5.3</span> Composants SOF custom (deinterleave_8, mixer16, tee_1to2)</p>
+  <p class="level-3"><span class="num">5.4</span> Itérations E1 → E5.d (NOK runtime)</p>
+  <p class="level-3"><span class="num">5.5</span> E5.e.1 Option F++ — 1 strip IN ch1</p>
+  <p class="level-3"><span class="num">5.6</span> E5.e.2 step1 pivot 1-comp-8ch</p>
+  <p class="level-3"><span class="num">5.7</span> E5.e.2 D3 DRC multi-config per-channel</p>
+  <p class="level-3"><span class="num">5.8</span> E6.a matrix 16×8 + pipeline guard</p>
+
+  <p class="level-2"><span class="num">6.</span> V6.0 — Always-on DAI-to-DAI (archivé)</p>
+  <p class="level-3"><span class="num">6.1</span> Concept always-on no-host</p>
+  <p class="level-3"><span class="num">6.2</span> Patches kernel K0 → K5</p>
+  <p class="level-3"><span class="num">6.3</span> Bug SAI_OFS=8 i.MX 8M Plus</p>
+  <p class="level-3"><span class="num">6.4</span> Décision archivage</p>
+
+  <p class="level-2"><span class="num">7.</span> V7.0 — Production courante (E0 → E7.7)</p>
+  <p class="level-3"><span class="num">7.1</span> E0 baseline + audit kernel</p>
+  <p class="level-3"><span class="num">7.2</span> E1 → E3 topology simplifiée</p>
+  <p class="level-3"><span class="num">7.3</span> E4 → E5 NPU dual-tap</p>
+  <p class="level-3"><span class="num">7.4</span> E6.a → E6.h mixer-pro + ring SPSC</p>
+  <p class="level-3"><span class="num">7.5</span> E6.i → E6.l 4 tentatives &lt; 10 ms (KO)</p>
+  <p class="level-3"><span class="num">7.6</span> E7 → E7.7 GUI HTTP + effets + analyseur</p>
+
+  <p class="level-2"><span class="num">8.</span> Inventaire patches kernel Linux actifs</p>
+  <p class="level-2"><span class="num">9.</span> Inventaire patches SOF firmware actifs</p>
+  <p class="level-2"><span class="num">10.</span> Synthèse chemins abandonnés</p>
+  <p class="level-2"><span class="num">11.</span> Leçons apprises &amp; règles projet</p>
+  <p class="level-2"><span class="num">12.</span> Index commits référencés</p>
+</div>
+</section>
+
+<!-- ====================== 1. CHRONO ====================== -->
+<section class="break">
+<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">1.</span> Vue d'ensemble &amp; chronologie complète</h2>
+
+<h3>1.1 Frise des 7 phases du projet</h3>
+<div class="diagram no-break">
+<svg viewBox="0 0 900 380" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4f46e5"/></marker>
+  </defs>
+  <style>
+    .axis { stroke: #cbd5e1; stroke-width: 1; }
+    .tick { stroke: #cbd5e1; stroke-width: 1; }
+    .tlbl { font: 600 9.5px 'Inter'; fill: #64748b; }
+    .phase { fill: #eef2ff; stroke: #4f46e5; stroke-width: 1.5; rx: 6; }
+    .phase-ok { fill: #dcfce7; stroke: #15803d; }
+    .phase-ko { fill: #fee2e2; stroke: #b91c1c; }
+    .phase-cur { fill: #fef3c7; stroke: #b45309; stroke-width: 2.5; }
+    .pname { font: 700 11px 'Inter'; fill: #0f172a; }
+    .pdesc { font: 8.5px 'JetBrains Mono'; fill: #334155; }
+  </style>
+
+  <!-- Time axis -->
+  <line class="axis" x1="40" y1="350" x2="880" y2="350"/>
+  <line class="tick" x1="40"  y1="345" x2="40"  y2="355"/>
+  <line class="tick" x1="180" y1="345" x2="180" y2="355"/>
+  <line class="tick" x1="320" y1="345" x2="320" y2="355"/>
+  <line class="tick" x1="460" y1="345" x2="460" y2="355"/>
+  <line class="tick" x1="600" y1="345" x2="600" y2="355"/>
+  <line class="tick" x1="740" y1="345" x2="740" y2="355"/>
+  <line class="tick" x1="880" y1="345" x2="880" y2="355"/>
+  <text class="tlbl" x="40"  y="370">2025-11</text>
+  <text class="tlbl" x="180" y="370">2026-01</text>
+  <text class="tlbl" x="320" y="370">2026-02</text>
+  <text class="tlbl" x="460" y="370">2026-03</text>
+  <text class="tlbl" x="600" y="370">2026-04</text>
+  <text class="tlbl" x="740" y="370">2026-05-13 (auj.)</text>
+
+  <!-- Phase 0 -->
+  <rect class="phase phase-ok" x="40"  y="30"  width="160" height="42"/>
+  <text class="pname" x="50"  y="50">P0 Bring-up</text>
+  <text class="pdesc" x="50"  y="64">TAC5212 + SOF first sound</text>
+
+  <!-- Phase 1a.1 -->
+  <rect class="phase phase-ok" x="160" y="86"  width="180" height="42"/>
+  <text class="pname" x="170" y="106">P1a.1 Console V4.2</text>
+  <text class="pdesc" x="170" y="120">MUXDEMUX → MVP 8ch</text>
+
+  <!-- Phase 1a.2 NPU tap -->
+  <rect class="phase phase-ok" x="240" y="142" width="240" height="42"/>
+  <text class="pname" x="250" y="162">P1a.2 NPU tap V3.2.2</text>
+  <text class="pdesc" x="250" y="176">5 voies essayées · GO final</text>
+
+  <!-- Phase 1a.3 DSP V5 -->
+  <rect class="phase phase-ok" x="380" y="198" width="240" height="42"/>
+  <text class="pname" x="390" y="218">P1a.3 DSP V5 → matrix 16×8</text>
+  <text class="pdesc" x="390" y="232">SDRAM2 + 1-comp-8ch pivot</text>
+
+  <!-- V6.0 archived -->
+  <rect class="phase phase-ko" x="520" y="254" width="160" height="42"/>
+  <text class="pname" x="530" y="274">V6.0 always-on</text>
+  <text class="pdesc" x="530" y="288">archived 2026-05-08</text>
+
+  <!-- V7.0 current -->
+  <rect class="phase phase-cur" x="600" y="30"  width="280" height="42"/>
+  <text class="pname" x="615" y="50">V7.0 (production courante)</text>
+  <text class="pdesc" x="615" y="64">E0 → E7.7 · doc consolidée</text>
+
+  <!-- Lifelines -->
+  <line class="axis" x1="120" y1="72"  x2="120" y2="142"/>
+  <line class="axis" x1="250" y1="128" x2="250" y2="198"/>
+  <line class="axis" x1="450" y1="184" x2="450" y2="254"/>
+  <line class="axis" x1="600" y1="240" x2="600" y2="30"/>
+
+  <!-- Legend -->
+  <rect class="phase phase-ok"  x="40"  y="318" width="14" height="14"/>
+  <text class="tlbl" x="60"  y="330">validé</text>
+  <rect class="phase phase-ko"  x="120" y="318" width="14" height="14"/>
+  <text class="tlbl" x="140" y="330">archivé</text>
+  <rect class="phase phase-cur" x="200" y="318" width="14" height="14"/>
+  <text class="tlbl" x="220" y="330">courant</text>
+</svg>
+<div class="caption">Figure 1 — Frise temporelle des 7 phases majeures du projet. Chaque phase a fork à partir d'un état validé de la phase précédente. La phase V6.0 (always-on DAI-to-DAI) a été archivée au profit de V7.0 (architecture DSP indépendant classique). Total : ≈ 6 mois.</div>
+</div>
+
+<h3>1.2 Arbre de décisions clés</h3>
+<div class="diagram no-break">
+<svg viewBox="0 0 900 410" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker>
+    <marker id="ar2-ko" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b91c1c"/></marker>
+  </defs>
+  <style>
+    .node { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+    .nok { fill: #dcfce7; stroke: #15803d; }
+    .nko { fill: #fee2e2; stroke: #b91c1c; }
+    .ncur { fill: #fef3c7; stroke: #b45309; stroke-width: 2.5; }
+    .lbl { font: 600 10px 'Inter'; fill: #0f172a; }
+    .sub { font: 8px 'JetBrains Mono'; fill: #64748b; }
+    .e { stroke: #64748b; stroke-width: 1.3; fill: none; }
+    .eko { stroke: #b91c1c; stroke-width: 1.3; stroke-dasharray: 4 3; fill: none; }
+  </style>
+
+  <rect class="node nok" x="20" y="20" width="150" height="40" rx="6"/>
+  <text class="lbl" x="32" y="38">TAC5212 driver</text>
+  <text class="sub" x="32" y="52">307a72d8 (P0)</text>
+
+  <rect class="node nok" x="200" y="20" width="150" height="40" rx="6"/>
+  <text class="lbl" x="212" y="38">SOF ASYNC fix</text>
+  <text class="sub" x="212" y="52">25d11fea (-121dBFS)</text>
+
+  <rect class="node nok" x="380" y="20" width="150" height="40" rx="6"/>
+  <text class="lbl" x="392" y="38">Console V4.2 MVP</text>
+  <text class="sub" x="392" y="52">9532d649 GO</text>
+
+  <rect class="node nko" x="20" y="90" width="150" height="40" rx="6"/>
+  <text class="lbl" x="32" y="108">V1.x ALSA tap</text>
+  <text class="sub" x="32" y="122">5 iter IPC3 KO</text>
+
+  <rect class="node nko" x="200" y="90" width="150" height="40" rx="6"/>
+  <text class="lbl" x="212" y="108">S1 SOF Probes</text>
+  <text class="sub" x="212" y="122">latence trop élevée</text>
+
+  <rect class="node nko" x="380" y="90" width="150" height="40" rx="6"/>
+  <text class="lbl" x="392" y="108">Alt-A probe.c</text>
+  <text class="sub" x="392" y="122">reverted</text>
+
+  <rect class="node nok" x="560" y="90" width="150" height="40" rx="6"/>
+  <text class="lbl" x="572" y="108">V3.2.2 kernel module</text>
+  <text class="sub" x="572" y="122">b083331d GO 1.22 MB/s</text>
+
+  <rect class="node nko" x="20" y="160" width="150" height="40" rx="6"/>
+  <text class="lbl" x="32" y="178">deinterleave_8</text>
+  <text class="sub" x="32" y="192">trigger overrun</text>
+
+  <rect class="node nko" x="200" y="160" width="150" height="40" rx="6"/>
+  <text class="lbl" x="212" y="178">mixer16 + tee</text>
+  <text class="sub" x="212" y="192">runtime KO</text>
+
+  <rect class="node nok" x="380" y="160" width="150" height="40" rx="6"/>
+  <text class="lbl" x="392" y="178">Pivot 1-comp-8ch</text>
+  <text class="sub" x="392" y="192">9cf6fa257 son OK</text>
+
+  <rect class="node nok" x="560" y="160" width="150" height="40" rx="6"/>
+  <text class="lbl" x="572" y="178">DRC D3 per-channel</text>
+  <text class="sub" x="572" y="192">ea984a266 GO</text>
+
+  <rect class="node nko" x="20" y="230" width="150" height="40" rx="6"/>
+  <text class="lbl" x="32" y="248">V6.0 always-on</text>
+  <text class="sub" x="32" y="262">K0-K5 SAI_OFS KO</text>
+
+  <rect class="node nok" x="200" y="230" width="150" height="40" rx="6"/>
+  <text class="lbl" x="212" y="248">V7.0 E0 baseline</text>
+  <text class="sub" x="212" y="262">retrait always-on</text>
+
+  <rect class="node nok" x="380" y="230" width="150" height="40" rx="6"/>
+  <text class="lbl" x="392" y="248">E4 dual-tap NPU</text>
+  <text class="sub" x="392" y="262">6ee842c67 GO</text>
+
+  <rect class="node nok" x="560" y="230" width="150" height="40" rx="6"/>
+  <text class="lbl" x="572" y="248">E6.h mixer-pro</text>
+  <text class="sub" x="572" y="262">14 ms baseline</text>
+
+  <rect class="node nko" x="20" y="300" width="150" height="40" rx="6"/>
+  <text class="lbl" x="32" y="318">E6.i 4 tentatives</text>
+  <text class="sub" x="32" y="332">&lt;10 ms KO empirique</text>
+
+  <rect class="node nok" x="200" y="300" width="150" height="40" rx="6"/>
+  <text class="lbl" x="212" y="318">E7 GUI HTTP</text>
+  <text class="sub" x="212" y="332">079d3ddb</text>
+
+  <rect class="node nok" x="380" y="300" width="150" height="40" rx="6"/>
+  <text class="lbl" x="392" y="318">E7.4 effets complets</text>
+  <text class="sub" x="392" y="332">45e6592b</text>
+
+  <rect class="node ncur" x="560" y="300" width="150" height="40" rx="6"/>
+  <text class="lbl" x="572" y="318">E7.7 prod actuelle</text>
+  <text class="sub" x="572" y="332">14c78ac9</text>
+
+  <!-- Edges (simplifiés) -->
+  <path class="e"   d="M170 40 L200 40" marker-end="url(#ar2)"/>
+  <path class="e"   d="M350 40 L380 40" marker-end="url(#ar2)"/>
+  <path class="eko" d="M170 110 L200 110" marker-end="url(#ar2-ko)"/>
+  <path class="eko" d="M350 110 L380 110" marker-end="url(#ar2-ko)"/>
+  <path class="e"   d="M530 110 L560 110" marker-end="url(#ar2)"/>
+  <path class="eko" d="M170 180 L200 180" marker-end="url(#ar2-ko)"/>
+  <path class="e"   d="M350 180 L380 180" marker-end="url(#ar2)"/>
+  <path class="e"   d="M530 180 L560 180" marker-end="url(#ar2)"/>
+  <path class="eko" d="M170 250 L200 250" marker-end="url(#ar2-ko)"/>
+  <path class="e"   d="M350 250 L380 250" marker-end="url(#ar2)"/>
+  <path class="e"   d="M530 250 L560 250" marker-end="url(#ar2)"/>
+  <path class="eko" d="M170 320 L200 320" marker-end="url(#ar2-ko)"/>
+  <path class="e"   d="M350 320 L380 320" marker-end="url(#ar2)"/>
+  <path class="e"   d="M530 320 L560 320" marker-end="url(#ar2)"/>
+
+  <!-- Vertical lifelines -->
+  <path class="e" d="M455 60 L455 90" marker-end="url(#ar2)"/>
+  <path class="e" d="M635 130 L635 160" marker-end="url(#ar2)"/>
+  <path class="e" d="M455 200 L455 230" marker-end="url(#ar2)"/>
+  <path class="e" d="M635 270 L635 300" marker-end="url(#ar2)"/>
+</svg>
+<div class="caption">Figure 2 — Arbre de décisions clés. Cases vertes = validé, rouges pleines = abandonné, jaune contour = état courant V7.0. Flèches pleines = succession logique, flèches pointillées = chemin abandonné.</div>
+</div>
+
+<h3>1.3 Conventions de branches &amp; tags</h3>
+<table>
+  <thead><tr><th>Repo</th><th>Branche prod</th><th>Branches archivées</th></tr></thead>
+  <tbody>
+    <tr><td><code>Mjxkill/yocto-nxp-debix</code></td>
+        <td><code>feature/v7.0-multiband-drc-tap</code></td>
+        <td><code>feature/audio-platform-v2</code> (fork avant E0), <code>feature/v6-always-on-async</code> (V6.0)</td></tr>
+    <tr><td><code>Mjxkill/sof</code></td>
+        <td><code>feature/v7.0-multiband-drc-tap</code></td>
+        <td>idem</td></tr>
+  </tbody>
+</table>
+<p>Chaque étape produit un commit dédié <code>V&lt;x&gt;-E&lt;y&gt;</code>
+et une fiche de test <code>TESTS_V&lt;x&gt;_E&lt;y&gt;.md</code>. Les
+commits portant <code>GO</code> sont validés par test utilisateur board.</p>
+</section>
+
+<!-- ====================== 2. PHASE 0 ====================== -->
+<section class="break">
+<div class="phase-marker">
+  <span class="id">2.</span><span class="name">Phase 0 — Bring-up TAC5212 + SOF</span>
+  <span class="dates">2025-11 → 2026-01</span>
+</div>
+
+<p>Phase initiale : la carte Debix Model AB n'avait aucun driver
+TAC5212 upstream et SOF n'avait jamais bound un TAC5212. 12 commits
+incrémentaux ont amené la chaîne audio à son premier "premier son" puis
+au full-duplex 8 canaux clean.</p>
+
+<h3>2.1 Driver TAC5212 ex nihilo</h3>
+<p>Le TAC5212 (Texas Instruments stéréo ADC/DAC, TDM master/slave,
+I²C-paged) n'existe nulle part dans le mainline Linux. Le projet ajoute
+un driver complet (~1500 lignes).</p>
+<table>
+<thead><tr><th>Commit</th><th>Apport</th></tr></thead>
+<tbody>
+<tr><td><span class="commit-hash">307a72d8</span></td><td>Squelette driver + SAI7 config initiale</td></tr>
+<tr><td><span class="commit-hash">77cdb084</span></td><td>Full-duplex capture fixes (RX/TX synchronisation)</td></tr>
+<tr><td><span class="commit-hash">4dc42f65</span></td><td>Alignement TDM slots + finalisation config registres</td></tr>
+<tr><td><span class="commit-hash">5795a2d8</span></td><td>Revert <code>dsp_b</code> mode + retrait 192 kHz (44.1/48 kHz seulement)</td></tr>
+<tr><td><span class="commit-hash">cbf00ed5</span></td><td>RX_OFFSET=1 + SOF firmware initial + DSP node DT</td></tr>
+<tr><td><span class="commit-hash">92dea036</span></td><td>Analog default + PDM mux préservation + premier <code>tac-reset.sh</code></td></tr>
+</tbody>
+</table>
+
+<h3>2.2 Intégration SOF première chaîne</h3>
+<p>Boot SOF sur le HiFi4 DSP et binding avec le SAI7 / TAC5212.</p>
+<table>
+<thead><tr><th>Commit</th><th>Apport</th></tr></thead>
+<tbody>
+<tr><td><span class="commit-hash">dc7f2010</span></td><td>Configure DSP node DT pour SOF firmware boot</td></tr>
+<tr><td><span class="commit-hash">995192e0</span></td><td>SOF topology initiale pour SAI7 TDM-8 TAC5212</td></tr>
+<tr><td><span class="commit-hash">452e7601</span></td><td>WIP : DAI SAI7 connecté, binding PCM en progress</td></tr>
+<tr><td><span class="commit-hash">3edf372f</span></td><td><strong>Sound card <code>tac5212-tdm</code> apparaît dans ALSA</strong></td></tr>
+<tr><td><span class="commit-hash">41cae6a4</span></td><td>SOF audio data in FIFO : clock gates + RX consumer fix</td></tr>
+<tr><td><span class="commit-hash">e93d1f6a</span></td><td><strong>SOF 8-channel audio capture working through HiFi4 DSP !</strong> (première étape "premier son")</td></tr>
+</tbody>
+</table>
+
+<h3>2.3 Bug ASYNC -58 dBFS noise floor</h3>
+<div class="callout warn"><span class="label">Symptôme</span>
+Après le premier audio fonctionnel, le bruit de fond mesurait
+<strong>-58 dBFS</strong> au lieu du -120 dBFS attendu pour un TAC5212
+24-bit en TDM async. Investigation longue, plusieurs hypothèses
+écartées (FFCONT, FCONT, clock gating, FRDE timing).
+</div>
+<p><strong>Cause identifiée</strong> : timing mismatch en mode SOF SYNC
+sur le SAI7 TDM async (Master TAC vs slave SOF). Le polling continu côté
+SOF amplifiait des transitions de bit clock incorrectes lors du
+re-sync.</p>
+<p><strong>Fix</strong> (commit <span class="commit-hash">25d11fea</span>) :
+firmware SOF custom configuré en mode <strong>ASYNC + continuous clock</strong>.
+Le BCLK reste actif en permanence, le DSP ne ré-acquiert plus la sync à
+chaque hw_start.</p>
+<div class="callout ok"><span class="label">Verdict</span>
+Noise floor passe à <strong>-121 dBFS</strong>, identique au niveau
+intrinsèque du TAC5212. Validé par mesure RTA + listening test.
+</div>
+
+<h3>2.4 tac-reset boot persistence</h3>
+<p>Le TAC5212 nécessite une séquence de reset i²c spécifique au boot
+(write register <code>0x01 = 0x01</code> dans P0, attendre 50 ms, etc.)
+sinon les samples ADC sont strictement à zéro. Mémoire critic
+<code>tac_reset_required_after_boot.md</code>.</p>
+<table>
+<thead><tr><th>Commit</th><th>Apport</th></tr></thead>
+<tbody>
+<tr><td><span class="commit-hash">2196b864</span></td><td>FCONT inscrit dans kernel + clear erreurs dans tac-reset</td></tr>
+<tr><td><span class="commit-hash">124dfe38</span></td><td>Auto-init TAC5212 au boot — <code>tac-reset.service</code> dans <code>tac5212-service</code> recipe systemd</td></tr>
+<tr><td><span class="commit-hash">12121454</span></td><td>Remove <code>tac5212 mute_stream</code> — fix duplex volume drop</td></tr>
+</tbody>
+</table>
+<p>Phase 0 terminée : board boot autonomously, 8 canaux capture + 8
+canaux playback opérationnels, noise floor -121 dBFS, tac-reset
+persistant.</p>
+</section>
+
+<!-- ====================== 3. PHASE 1A.1 ====================== -->
+<section class="break">
+<div class="phase-marker">
+  <span class="id">3.</span><span class="name">Phase 1a.1 — Console 8ch masterclass V2 → V4.2</span>
+  <span class="dates">2026-02 → 2026-03</span>
+</div>
+
+<p>Objectif : construire la console de mixage masterclass — 8 entrées
+mics avec EQ par voie + 4 bus FX + master stéréo. 14 itérations de
+spec dans <code>PHASE_1A_SPEC</code> avec investigations critic à chaque
+version.</p>
+
+<h3>3.1 7 itérations PHASE_1A_SPEC V2 → V2.6</h3>
+<table>
+<thead><tr><th>Version</th><th>Commit doc</th><th>Findings</th></tr></thead>
+<tbody>
+<tr><td>V2</td><td><span class="commit-hash">f37e3788</span></td><td>5 bugs critiques + hardening</td></tr>
+<tr><td>V2.1</td><td><span class="commit-hash">e66d9c60</span></td><td>Fix C1/C2/C3 + H1/H2/H3</td></tr>
+<tr><td>V2.2</td><td><span class="commit-hash">30096be5</span></td><td>Fix 7 bugs m4 du squelette V2.1</td></tr>
+<tr><td>V2.3</td><td><span class="commit-hash">a87861e7</span></td><td>Fix 3 bugs L1/L2/L3 + polish</td></tr>
+<tr><td>V2.4</td><td><span class="commit-hash">09f94c02</span></td><td>Fix K1/K2/K3 cross-pipeline routing via MUXDEMUX</td></tr>
+<tr><td>V2.5</td><td><span class="commit-hash">210788d2</span></td><td>Fix K6/K7/K8 squelette demux</td></tr>
+<tr><td>V2.6</td><td><span class="commit-hash">8eac663c</span></td><td>Fix ROUTE_MATRIX pipeline_id + compile OK</td></tr>
+</tbody>
+</table>
+
+<h3>3.2 V3 reset console + V4 MUXDEMUX</h3>
+<table>
+<thead><tr><th>Version</th><th>Commit doc</th><th>Apport</th></tr></thead>
+<tbody>
+<tr><td>V3</td><td><span class="commit-hash">aa22e233</span></td><td>Reset console 8ch end-to-end — repart de zéro après V2.6</td></tr>
+<tr><td>V4</td><td><span class="commit-hash">5b7495d7</span></td><td>Intègre findings investigation V3 → architecture stabilisée</td></tr>
+<tr><td>V4.1</td><td><span class="commit-hash">083cfbc7</span></td><td>Corrige bugs V4 identifiés par investigation</td></tr>
+<tr><td><strong>V4.2</strong></td><td><span class="commit-hash">9532d649</span></td><td><strong>GO Phase 1a.1 MVP</strong> — micro-fixes + son end-to-end OK</td></tr>
+</tbody>
+</table>
+
+<h3>3.3 V4.2 GO MVP — premier son end-to-end</h3>
+<p>Commits SOF côté firmware :</p>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">2e7960248</span></td><td>Topology Phase 1a.1 MVP V4.2 — TAC5212 console 8ch end-to-end</td></tr>
+<tr><td><span class="commit-hash">778740b68</span></td><td>Fix T4 duplex — period 1 ms → 2 ms (latence cap+play stable)</td></tr>
+<tr><td><span class="commit-hash">f5e4bea34</span></td><td>Topology masterlite Phase 1a — mbdrc + pga + drc + muxdemux tap</td></tr>
+</tbody>
+</table>
+<p>Architecture livrée : 8 strips IN avec <code>EQ_IIR → MULTIBAND_DRC →
+PGA</code>, MUXDEMUX cross-pipeline pour les sends, 8 strips OUT play.
+Latence E2E 2 ms par period × 4 periods = 8 ms ALSA.</p>
+</section>
+
+<!-- ====================== 4. PHASE 1A.2 NPU TAP ====================== -->
+<section class="break">
+<div class="phase-marker">
+  <span class="id">4.</span><span class="name">Phase 1a.2 — NPU tap : 5 voies explorées</span>
+  <span class="dates">2026-03 → 2026-04</span>
+</div>
+
+<p>Phase la plus contentieuse du projet. L'objectif central
+<strong>tap audio post-effets vers NPU</strong> (mastering ML en boucle
+fermée) a buté sur 4 voies bloquées avant la solution finale. Mémoire
+critic <code>phase_1a2_history.md</code> capitalise les blocages.</p>
+
+<h3>4.1 V1.0 → V1.5 — ALSA capture PCM additionnel</h3>
+<p>Tentative : exposer le tap comme un 3e PCM ALSA capture sur la même
+sound card, alimenté par cross-pipeline MUXDEMUX → BE DAI dummy.</p>
+<table>
+<thead><tr><th>Version</th><th>Commit doc</th><th>Approche</th></tr></thead>
+<tbody>
+<tr><td>V1.0</td><td><span class="commit-hash">b73f0f07</span></td><td>HP_Monitor post-effets OUT via MUXDEMUX cross-pipeline</td></tr>
+<tr><td>V1.1</td><td><span class="commit-hash">2c806f07</span></td><td>Corrige bugs V1 identifiés par investigation</td></tr>
+<tr><td>V1.2</td><td><span class="commit-hash">71028634</span></td><td>Fix bug ordre m4 identifié par worker gemini</td></tr>
+<tr><td>V1.5_glm</td><td><span class="commit-hash">8fd0bf72</span></td><td>Option A m4-only (worker glm candidate)</td></tr>
+<tr><td>V1.5</td><td><span class="commit-hash">e6744fa8</span></td><td>Patch DT <code>snd-soc-dummy</code> BE DAI + topology PIPE 7 autonome</td></tr>
+</tbody>
+</table>
+<div class="callout fail"><span class="label">KO multi-blocage</span>
+<ul>
+  <li><strong>IPC3 trigger -22 EINVAL</strong> : asymétrie <code>pipeline_comp_prepare</code> (filtre direction) vs <code>pipeline_comp_trigger</code> (filtre sched)</li>
+  <li><strong>Kernel ASoC DPCM</strong> : <code>dpcm_end_walk_at_be()</code> rejette les widgets autres que <code>dai_in/dai_out/aif_in/aif_out</code></li>
+  <li><strong>simple-audio-card</strong> ne supporte pas DPCM dummy BE (<code>snd-soc-dummy</code> sans binding DT)</li>
+  <li>Patch DT + machine driver custom requis, mais cumul de blockers → ROI négatif</li>
+</ul>
+</div>
+
+<h3>4.2 S1 — SOF Probes upstream</h3>
+<p>Tentative : utiliser le mécanisme SOF Probes upstream pour exposer
+le tap via <code>/dev/snd/comprC?D?</code> + debugfs <code>probe_points</code>.</p>
+<p>Patches additifs kernel (<span class="commit-hash">005047ee</span>) :</p>
+<ul>
+  <li><code>imx-probes.c</code> : ~95 lignes, host_ops minimaux</li>
+  <li>Ajout entrée <code>snd_sof.imx-probes</code> dans
+      <code>sof_probes_client_id_table</code></li>
+  <li><code>CONFIG_SND_SOC_SOF_DEBUG_PROBES=y</code> via cfg fragment</li>
+  <li>Module <code>snd-sof-probes</code> avec option <code>enable=1</code></li>
+</ul>
+<div class="callout warn"><span class="label">Partiel</span>
+Côté kernel : déployé et fonctionnel — card 4 sofprobes +
+<code>/dev/snd/comprC4D0</code> visibles, V4.2 PCM intacte. Côté
+extraction : latence trop élevée pour un mastering live en boucle
+fermée (le sof probe consumer ne tient pas 48 kHz steady).
+</div>
+
+<h3>4.3 Alt-A — modification probe.c SOF</h3>
+<p>Tentative : modifier <code>sof/src/probe/probe.c</code> +
+<code>sof/src/ipc/ipc3/handler.c</code> +
+<code>sof/src/include/{ipc/header.h,ipc3/probe.h,sof/probe/probe.h}</code>
+pour ajouter une extraction custom plus rapide.</p>
+<div class="callout fail"><span class="label">Reverted</span>
+Conflit avec d'autres patches IPC3 et avec le composant
+<code>probe</code> upstream. Pression de maintenance trop élevée. Toutes
+les modifs ont été reverted (<code>git checkout sof/</code>).
+</div>
+
+<h3>4.4 S6 — mem_sink direct via reserved-memory</h3>
+<p>Tentative : nouveau composant SOF <code>mem_sink</code> qui pousse
+directement les samples dans une zone reserved-memory partagée
+DSP↔A53, court-circuitant ALSA et SOF Probes.</p>
+<div class="callout fail"><span class="label">Trop intrusif</span>
+Nécessite : nouveau composant SOF + nouveau type IPC + patch
+host_ops + bindings DT. Surface de patch SOF trop large pour un projet
+custom qui doit rester rebasable sur SOF upstream stable.
+</div>
+
+<h3>4.5 V3.2.2 — kernel module + DT carve (GO final)</h3>
+<p>Solution finale : exposer le tap au userspace via un module kernel
+out-of-tree <code>imx-audio-tap</code> qui mappe une zone
+reserved-memory, et un hook firmware SOF minimal qui écrit les samples
+dans cette zone.</p>
+<table>
+<thead><tr><th>Commit</th><th>Apport</th></tr></thead>
+<tbody>
+<tr><td><span class="commit-hash">b083331d</span></td><td>J2 V3.2.2 NPU tap kernel module + DT carve (recipe <code>meta-local/recipes-kernel/imx-audio-tap/</code>)</td></tr>
+<tr><td><span class="commit-hash">b71e9f33</span></td><td>imx-audio-tap : fix sysfs phys_addr/size + Makefile KERNEL_SRC Yocto</td></tr>
+<tr><td><span class="commit-hash">61fcb2e7d</span></td><td><strong>SOF</strong> — audio/dai-legacy : V3.2.2 NPU tap hook (capture post-DRC vers DRAM partagée DSP↔A53)</td></tr>
+<tr><td><span class="commit-hash">9f6f70a21</span></td><td><strong>SOF</strong> — guard defensive <code>period_bytes==0</code> dans init</td></tr>
+<tr><td><span class="commit-hash">8054f6fd</span></td><td>J3 userspace consumer <code>npu_tap_reader.c</code> (mmap + WAV dump)</td></tr>
+<tr><td><span class="commit-hash">c1bcc16e</span></td><td>apply-npu-tap-dt.py : rewrite using DT overrides (no SoC dtsi edit)</td></tr>
+</tbody>
+</table>
+<div class="callout ok"><span class="label">GO 2026-05-11</span>
+1.22 MB/s mesuré sur le tap, latence ajoutée &lt; 50 µs, V4.2 audio
+intact, 8 investigations critic GO 6/6. Mémoire
+<code>npu_tap_v1_proposal.md</code>.
+</div>
+</section>
+
+<!-- ====================== 5. PHASE 1A.3 ====================== -->
+<section class="break">
+<div class="phase-marker">
+  <span class="id">5.</span><span class="name">Phase 1a.3 — DSP V5 architecture (8 strips IN + matrix 16×8)</span>
+  <span class="dates">2026-04</span>
+</div>
+
+<p>Phase d'architecture DSP : passer du MVP 8 mics console à une vraie
+architecture mastering avec matrix de routing, returns FX, et strips OUT
+indépendants. 5 itérations de spec + 9 itérations de tests SOF.</p>
+
+<h3>5.1 Itérations spec V5 → V5.4.2</h3>
+<table>
+<thead><tr><th>Version</th><th>Commit doc</th><th>Investigation critic</th></tr></thead>
+<tbody>
+<tr><td>V5</td><td><span class="commit-hash">19101cd3</span></td><td>Spec channel strips ×8 + matrix 8×16 + SDRAM2 128 MB</td></tr>
+<tr><td>V5.1</td><td><span class="commit-hash">8f2765f5</span></td><td>+13 corrections (job <code>ef3c1ede</code>)</td></tr>
+<tr><td>V5.2</td><td><span class="commit-hash">2543c087</span></td><td>Architecture figée 8 strips IN + matrix 16×8 + 8 strips OUT + ASIO 8/8</td></tr>
+<tr><td>V5.3</td><td><span class="commit-hash">329fe804</span></td><td>+4 corrections (job <code>6b1216e2</code>)</td></tr>
+<tr><td>V5.4</td><td><span class="commit-hash">1f5dd3af</span></td><td>+ corrections issues V5.3 (job <code>de3e0184</code>)</td></tr>
+<tr><td>V5.4.1</td><td><span class="commit-hash">6713215d</span></td><td>+7 ajustements + risques R-K à R-V (investigation GO 6/6 <code>65d71d8c</code>)</td></tr>
+<tr><td>V5.4.2</td><td><span class="commit-hash">d7cbdbf0</span></td><td>DMA-driven only (suppression TIMER)</td></tr>
+<tr><td>V5.4.2 revert</td><td><span class="commit-hash">31f6690e</span></td><td><span class="pill fail">Reverted</span> — V3.2.2 utilise déjà TIMER avec succès</td></tr>
+</tbody>
+</table>
+
+<h3>5.2 SDRAM2 8 MB DSP-only carve</h3>
+<p>Pour la matrix 16×8 + buffers per-strip, besoin d'une zone mémoire
+exclusive DSP non visible Linux. Carve <code>no-map</code> à 0xA0000000
++ WT cache region 5 pour cohérence.</p>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">c829807b5</span></td><td><strong>SOF</strong> — imx8m E0.5 : SDRAM2 8 MB DSP-only carve-out + WT cache region 5</td></tr>
+<tr><td><span class="commit-hash">094583398</span></td><td><strong>SOF</strong> — E0.7 : C14 MODULE_MAX_SOURCES + C21 PLATFORM_MAX_STREAMS 8→16</td></tr>
+<tr><td><span class="commit-hash">f5d94dba</span></td><td>linux-imx : E0.5.b apply-sdram2-dt.py + bbappend</td></tr>
+</tbody>
+</table>
+
+<h3>5.3 Composants SOF custom (deinterleave_8, mixer16, tee_1to2)</h3>
+<p>Tentative ambitieuse : ajouter 3 composants audio custom au firmware
+SOF pour gérer la matrix 16×8 nativement.</p>
+<table>
+<thead><tr><th>Commit SOF</th><th>Composant</th></tr></thead>
+<tbody>
+<tr><td><span class="commit-hash">fbf0269b6</span></td><td>E1 — skeleton tee_1to2 + mixer16 + interleave_8</td></tr>
+<tr><td><span class="commit-hash">04eadda17</span></td><td>E2 — mixer16 mix loop + bytes blob 512 B + interleave_8 process</td></tr>
+<tr><td><span class="commit-hash">ebcd4d268</span></td><td>E3.a — m4 widgets tee_1to2/mixer16/interleave_8 + compile test</td></tr>
+<tr><td><span class="commit-hash">6f166d00a</span></td><td>E3.c — pipe-tee-volume-playback + topology fonctionnelle test</td></tr>
+<tr><td><span class="commit-hash">710bb72f5</span></td><td>E4 — NEW comp deinterleave_8 (1×8ch → 8 mono)</td></tr>
+<tr><td><span class="commit-hash">a3dee1137</span></td><td>E5.a — pipe-deinterleave-interleave-capture (round-trip)</td></tr>
+<tr><td><span class="commit-hash">a54247599</span></td><td>E5.d — deinterleave_8/interleave_8/tee_1to2 trigger overrun + prepare channel override</td></tr>
+</tbody>
+</table>
+<div class="callout fail"><span class="label">KO progressif</span>
+<ul>
+  <li>E5.a — round-trip deinterleave + interleave : NOK runtime (commit <span class="commit-hash">6bbca80f</span> fiche test)</li>
+  <li>E5.b.1 — quick-fix buffers 8ch : NOK runtime (<span class="commit-hash">acbb046f</span>)</li>
+  <li>E5.c.1 — multi-pipelines cross-buffer : NOK runtime (<span class="commit-hash">54f6cd35</span>)</li>
+  <li>E5.d — passthrough 8ch deinterleave/interleave OK (<span class="commit-hash">021b8552</span>) <strong>mais</strong> ne se branche pas avec les autres composants</li>
+</ul>
+Verdict : les 3 composants custom <strong>fonctionnent en isolation</strong>
+mais ne s'intègrent pas dans le graph SOF complet à cause de trigger
+overrun et de problèmes de scheduling cross-pipeline. Approche
+abandonnée au profit du pivot 1-comp-8ch.
+</div>
+
+<h3>5.4 E5.e.1 — Option F++ : 1 strip IN ch1 + bypass</h3>
+<p>Pivot tactique : valider la chaîne complète d'effets <strong>sur une
+seule voie</strong> avant de la généraliser. Pipeline test :
+<code>eq_iir → drc → pga_L → pga_R</code> sur ch1 uniquement.</p>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">59e3d3c1e</span></td><td>SOF topology — V5.4.1 E5.e.1 : 1 strip IN ch1</td></tr>
+<tr><td><span class="commit-hash">7499505ec</span></td><td>SOF audio — preserve_channels pour branched mono buffers</td></tr>
+<tr><td><span class="commit-hash">e22d969d</span></td><td>Fiche test : <strong>GO board "loopback-c très bon" 2026-05-01</strong></td></tr>
+</tbody>
+</table>
+
+<h3>5.5 E5.e.2 step1 — Pivot architecture 1-comp-8ch</h3>
+<div class="callout ok"><span class="label">Pivot stratégique</span>
+Plutôt que 8 instances de chaque composant (8 × eq_iir + 8 × drc + ...),
+utiliser <strong>1 instance multi-channel</strong> de chaque composant
+(1 × eq_iir 8 ch + 1 × drc 8 ch + ...). Réduction massive du nombre de
+widgets dans le graph SOF, scheduling simplifié, mémoire réduite.
+</div>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">9cf6fa257</span></td><td>SOF topology — V5.4.1 E5.e.2 : 1-comp-8ch native pipe (architecture pivot)</td></tr>
+<tr><td><span class="commit-hash">8189ffb5</span></td><td>Fiche test : <strong>GO board "super son" 2026-05-01</strong></td></tr>
+</tbody>
+</table>
+
+<h3>5.6 E5.e.2 D3 — DRC multi-config per-channel</h3>
+<p>Avec le pivot 1-comp-8ch, le DRC mono doit pouvoir appliquer des
+paramètres DIFFÉRENTS par canal. Patch SOF du composant DRC :
+détection runtime de N sets de <code>sof_drc_params</code> dans le blob
+(taille du blob - header / sizeof(params)), application
+<code>params[ch]</code> par canal avec clamping.</p>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">ea984a266</span></td><td>SOF audio — drc multi-config per-channel (V5.4.1 E5.e.2 D3)</td></tr>
+<tr><td><span class="commit-hash">9d241291</span></td><td>Fiche test : <strong>GO board "c'est ok" 2026-05-01</strong></td></tr>
+</tbody>
+</table>
+<p>Back-compat strict : si <code>params_per_band == 1</code>,
+comportement legacy préservé (existing topologies continuent à
+fonctionner sans modification).</p>
+
+<h3>5.7 E6.a — Matrix 16×8 PIPE 2 play + pipeline copy guard</h3>
+<p>Avec D3 validé, généralisation à la matrix 16×8 pour PIPE 2 play.
+Multi-fanout intra-pipeline introduit une explosion combinatoire dans
+<code>pipeline_comp_copy</code> walk-récursif → glitch audible.</p>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">0580b5f14</span></td><td><strong>SOF audio</strong> — pipeline_comp_copy re-entry guard (flag de séquence par composant)</td></tr>
+<tr><td><span class="commit-hash">3dd5bbb17</span></td><td>SOF topology — V5.4.1 E6.a : matrix 16x8 playback</td></tr>
+<tr><td><span class="commit-hash">46b37516</span></td><td>Fiche test : <strong>GO board "le son est bon" 2026-05-02</strong></td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ====================== 6. V6.0 ====================== -->
+<section class="break">
+<div class="phase-marker">
+  <span class="id">6.</span><span class="name">V6.0 — Always-on DAI-to-DAI (archivé)</span>
+  <span class="dates">2026-05-08 archivé</span>
+</div>
+
+<p>Branche <code>feature/v6-always-on-async</code>. Concept : DSP
+toujours actif sans host PCM client, exposant un flux DAI-to-DAI direct
+pour le NPU et les sorties XLR, avec USB ASIO et console comme clients
+secondaires.</p>
+
+<h3>6.1 Concept always-on</h3>
+<p>Motivation : permettre le tap NPU et la sortie XLR <strong>sans
+nécessiter un client userspace</strong> (arecord/aplay). Le DSP démarre
+au boot et tourne en continu.</p>
+
+<h3>6.2 Patches kernel K0 → K5</h3>
+<table>
+<thead><tr><th>Patch</th><th>Commit</th><th>Effet</th></tr></thead>
+<tbody>
+<tr><td>K0</td><td rowspan="5"><span class="commit-hash">7db34a5d</span> bundle</td>
+    <td><code>fsl_sai</code> async clock + continuous BCLK</td></tr>
+<tr><td>K2</td><td>SOF IPC3 force-start sans PCM client</td></tr>
+<tr><td>K4</td><td>Skip waiting host trigger pour <code>sched_comp</code></td></tr>
+<tr><td>K5</td><td>Extension struct IPC pour passer rate/ch/fmt/dir on PRE_START</td></tr>
+<tr><td>K1 hook</td><td>Warn-not-fail sur PIPE_TRIGGER (<span class="commit-hash">ac929d80</span>)</td></tr>
+<tr><td>K5 extend</td><td><span class="commit-hash">14f6dcbf</span></td><td>Send rate/ch/fmt/dir on PRE_START</td></tr>
+</tbody>
+</table>
+
+<h3>6.3 Bug SAI_OFS=8 sur i.MX 8M Plus</h3>
+<div class="callout warn"><span class="label">Diagnostic critique</span>
+Pendant l'investigation V6.0 E1 (SAI7 underflow permanent), découverte
+d'un bug majeur dans les diags : sur i.MX 8M Plus, <strong>tous les
+offsets registres SAI sont décalés de +8 bytes</strong> (TCSR=0x08,
+TCR4=0x18, RCSR=0x88...). Les diags lisaient TCR2 au lieu de TCR4, et
+SAI5 au lieu de SAI7 (bug d'adresse de base).
+</div>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">a1e24059c</span></td><td>SOF — diag V6.0 SAI7 underflow root cause identified</td></tr>
+<tr><td><span class="commit-hash">314411eb6</span></td><td>SOF — fix SAI base address (was reading SAI5 instead of SAI7)</td></tr>
+<tr><td><span class="commit-hash">a7d4eff36</span></td><td>SOF — fix SAI_OFS=8 in MMIO direct reads (handler + pipeline-stream)</td></tr>
+<tr><td><span class="commit-hash">e328eb7d</span></td><td>fiche TESTS_V6.0_E1 — fix offset SAI_OFS + per-channel diag, sched_comp bug identified</td></tr>
+</tbody>
+</table>
+<p>Mémoires critic résultantes : <code>sof_sai_ofs_imx8mp.md</code>,
+<code>feedback_no_hardcoded_mmio.md</code>.</p>
+
+<h3>6.4 Décision archivage</h3>
+<div class="callout fail"><span class="label">Archive 2026-05-08</span>
+Après les fix SAI_OFS, le sched_comp ne tournait toujours pas
+correctement sans host trigger. Cumul des risques (patch kernel
+invasif K0-K5, dépendance fragile au scheduling SOF interne, ROI faible
+face à V7.0) → archivage de la branche au profit de V7.0 (architecture
+DSP indépendant classique avec mixer-pro userspace). La branche
+<code>feature/v6-always-on-async</code> reste pour archive et
+ré-activable si SOF upstream introduit un support no-host natif.
+</div>
+</section>
+
+<!-- ====================== 7. V7.0 ====================== -->
+<section class="break">
+<div class="phase-marker">
+  <span class="id">7.</span><span class="name">V7.0 — Production courante (E0 → E7.7)</span>
+  <span class="dates">2026-05-09 → 2026-05-13</span>
+</div>
+
+<p>Phase courante. Architecture finale livrée : DSP indépendant
+"classique" (PCM cap/play host attendus) + mixer-pro daemon userspace
+RT 26 in × 18 out + GUI HTTP. 22 étapes de E0 à E7.7.</p>
+
+<h3>7.1 E0 — Baseline + audit kernel</h3>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">1053aad6</span></td><td>doc V7.0 architecture — DSP indépendant + NPU dual-tap (master reference)</td></tr>
+<tr><td><span class="commit-hash">91194f59</span></td><td>meta-local — retrait <code>apply-v6-always-on.py</code></td></tr>
+<tr><td><span class="commit-hash">eacf6c20</span></td><td>fiche E0 — baseline E6.a + audit kernel/driver TAC + retrait V6.0</td></tr>
+</tbody>
+</table>
+
+<h3>7.2 E1 → E3 — Topology simplifiée</h3>
+<p>Retrait des composants custom mixer16 / deinterleave_8 / interleave_8
+(qui ne se branchaient pas), remplacement par <code>multiband_drc 8ch
+multi-config</code> + PGA per-strip.</p>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">7440b3c21</span></td><td>SOF audio — multiband_drc per-channel params (back-compat ABI)</td></tr>
+<tr><td><span class="commit-hash">5eafab230</span></td><td>SOF audio — multiband_drc 8ch blob infrastructure</td></tr>
+<tr><td><span class="commit-hash">dfe9b2497</span></td><td>SOF topology — V7.0-E1 simplify play pipeline + custom 8ch passthrough macro</td></tr>
+<tr><td><span class="commit-hash">75635305e</span></td><td>SOF topology — V7.0-E3 strips OUT play 8ch (multiband_drc + pga + drc-limiter)</td></tr>
+<tr><td><span class="commit-hash">a535405ca</span></td><td>SOF topology — V7.0-E3 final (drc retiré après diag tic tic)</td></tr>
+</tbody>
+</table>
+
+<h3>7.3 E4 — E5 NPU dual-tap</h3>
+<p>Refactor V3.2.2 NPU tap en dual-tap (tap-IN brut + tap-OUT post-FX),
+multi-instance via prop DT <code>device-name</code>.</p>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">6ee842c67</span></td><td>SOF audio/dai-legacy + npu_tap : V7.0-E4 NPU dual-tap firmware hook</td></tr>
+<tr><td><span class="commit-hash">d2a9808f</span></td><td>meta-local + ARCHI — E4 dual-tap kernel side</td></tr>
+<tr><td><span class="commit-hash">ae7128fa</span></td><td>tests + ARCHI — E5 GO : modulation PGA Strip1 -40 dB visible sur tap-out</td></tr>
+</tbody>
+</table>
+
+<h3>7.4 E6.a → E6.h — mixer-pro userspace + ring SPSC</h3>
+<p>Construction du daemon C <code>mixer-pro</code> qui consomme/produit
+les 3 paires de PCMs (DSP TAC5212, UAC2 gadget, Phone aloop) et
+implémente la matrix de mixage 26 in × 18 out + 4 bus FX stéréo.</p>
+<table>
+<thead><tr><th>Sprint</th><th>Apport</th><th>Latence</th></tr></thead>
+<tbody>
+<tr><td>E6.a</td><td>USB UAC2 8×8 gadget configfs + systemd</td><td>—</td></tr>
+<tr><td>E6.b</td><td>Phone 2×2 snd-aloop simulé (pas de modem hardware)</td><td>—</td></tr>
+<tr><td>E6.c</td><td>Routing ALSA paire-à-paire (alsa-route-bridge déclaratif)</td><td>—</td></tr>
+<tr><td>E6.d MVP</td><td>mixer-pro daemon C — 26 in × 18 out + socket JSON</td><td>8 ms ALSA</td></tr>
+<tr><td>E6.e MVP</td><td>4 effets natifs C (compressor/reverb/delay/EQ) + vtable + set_fx_param</td><td>—</td></tr>
+<tr><td>E6.f Diag</td><td>Profiling <code>clock_gettime</code> exposé via <code>get_state</code> — <strong>hotspot = ALSA, pas les effets</strong> (mix 4 effets = 473 µs / 24 % budget)</td><td>diag</td></tr>
+<tr><td>E6.g</td><td>Refactor 2-thread cap+mix / play + ring SPSC 32 périodes — retrait <code>snd_pcm_link</code></td><td>~66 ms E2E (ring 58 ms)</td></tr>
+<tr><td><strong>E6.h</strong></td><td>Optim ring : <code>nanosleep</code> → eventfd + ring 32 → 8 périodes</td><td><strong>14 ms mixer / 20 ms E2E (baseline finale)</strong></td></tr>
+</tbody>
+</table>
+
+<h3>7.5 E6.i → E6.l — 4 tentatives &lt; 10 ms (toutes KO)</h3>
+<p>Voir Section 10 §10.3 pour le détail empirique. Conclusion :
+plancher physique 10 ms (théorème de Little), cible reportée à V8.</p>
+
+<h3>7.6 E7 → E7.7 — GUI HTTP + effets + analyseur + reproductibilité</h3>
+<table>
+<thead><tr><th>Étape</th><th>Commit</th><th>Apport</th></tr></thead>
+<tbody>
+<tr><td>E7</td><td><span class="commit-hash">079d3ddb</span></td><td>Daemon mixer-gui-http (libmicrohttpd) + frontend Alpine.js + Tailwind CDN</td></tr>
+<tr><td>E7.1</td><td><span class="commit-hash">d055b946</span></td><td>Peak meters + SSE streaming 30 Hz chunked callback</td></tr>
+<tr><td>E7.2</td><td><span class="commit-hash">e3f3d7f6</span> + <span class="commit-hash">4bea8e59d</span></td><td>UI Apple-class glassmorphism + SAI TX FIFO alignment fix SOF</td></tr>
+<tr><td>E7.3</td><td><span class="commit-hash">edf6dd50</span> + <span class="commit-hash">0d0f844f</span></td><td>Sidebar detail per-strip + ALSA kcontrols proxy + FX bus panels complets</td></tr>
+<tr><td>E7.4</td><td><span class="commit-hash">13379c88</span> à <span class="commit-hash">45e6592b</span></td><td>24 biquads × 4 TACs + 6 paged-blobs + Phase B DRC editor + crossover éditable + layout 2-col + sidebar tabs + tac-reset systemd</td></tr>
+<tr><td>E7.5</td><td><span class="commit-hash">4f4e4d0b</span> + <span class="commit-hash">4124f97f</span></td><td>4 analyzer taps FFT radix-2 1024 inline + goniomètre stéréo</td></tr>
+<tr><td>E7.6</td><td><span class="commit-hash">18aa700e</span> + <span class="commit-hash">0d7372e8</span></td><td>Documentation consolidée + roadmap ARCHI</td></tr>
+<tr><td>E7.7</td><td><span class="commit-hash">0216bd71</span> + <span class="commit-hash">87f71fd1</span> + <span class="commit-hash">6511f273</span></td><td>Returns to tags + R1..R8 clickable fix + recipe sof-firmware-custom reproductibilité</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ====================== 8. KERNEL PATCHES INVENTORY ====================== -->
+<section class="break">
+<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">8.</span> Inventaire patches kernel Linux actifs</h2>
+<p>10 patches actifs déclarés dans <code>meta-local/recipes-kernel/linux/linux-imx_%.bbappend</code>.</p>
+
+<h3>8.1 Patches binaires <code>.patch</code></h3>
+<table>
+<thead><tr><th>Fichier</th><th>Effet</th></tr></thead>
+<tbody>
+<tr><td><code>0001-imx8mp-evk-audio-mipi.patch</code></td><td>Vendor NXP — ajustements board audio SAI + MIPI-DSI</td></tr>
+<tr><td><code>0002-add-tac5212-codec-driver.patch</code></td><td>Stub historique — superseded par <code>do_patch:prepend</code></td></tr>
+<tr><td><code>0003-imx8mp-evk-tac5212-tdm.patch</code></td><td>Stub historique — superseded par <code>apply-tac5212-dt.py</code></td></tr>
+</tbody>
+</table>
+
+<h3>8.2 Cfg fragments</h3>
+<table>
+<thead><tr><th>Fichier</th><th>Effet</th></tr></thead>
+<tbody>
+<tr><td><code>spdif.cfg</code></td><td><code>CONFIG_SND_SOC_SPDIF=y</code> + drivers SPDIF DIR/DIT</td></tr>
+<tr><td><code>disable-at24.cfg</code></td><td>Désactive driver EEPROM AT24 (conflit I²C bus 3)</td></tr>
+<tr><td><code>tac5212.cfg</code></td><td><code>CONFIG_SND_SOC_TAC5212=y</code> (built-in)</td></tr>
+<tr><td><code>sof-imx-probes.cfg</code></td><td><code>CONFIG_SND_SOC_SOF_DEBUG_PROBES=y</code></td></tr>
+</tbody>
+</table>
+
+<h3>8.3 Scripts Python (do_patch:prepend)</h3>
+<table>
+<thead><tr><th>Script</th><th>Modification</th></tr></thead>
+<tbody>
+<tr><td><code>apply-tac5212-dt.py</code></td><td>4 nodes TAC5212 sur i2c3 (0x50-0x53) + sound-card <code>fsl,imx-audio-card</code> + 4 DAI links TDM + regulators + gpio reset</td></tr>
+<tr><td><code>apply-imx-card-linkid.py</code></td><td>Patche <code>sound/soc/fsl/imx-card.c</code> pour commenter <code>link->id = args.args[0]</code> (sinon SOF topology rejette les 4 TACs)</td></tr>
+<tr><td><code>apply-simple-card-multicodec.py</code></td><td><strong>Stub désactivé</strong> après pivot E7.4.b vers <code>fsl,imx-audio-card</code></td></tr>
+<tr><td><code>apply-npu-tap-dt.py</code></td><td>2 carves reserved-memory <code>no-map</code> (tap-in @0x942B0000, tap-out) + 2 nodes <code>imx-audio-tap</code> multi-instance</td></tr>
+<tr><td><code>apply-sdram2-dt.py</code></td><td>8 MB no-map @0xA0000000 — SDRAM2 DSP-only</td></tr>
+<tr><td><code>apply-imx-probes.py</code></td><td>Ajout entrée <code>snd_sof.imx-probes</code> + intègre <code>imx-probes.c</code></td></tr>
+</tbody>
+</table>
+
+<h3>8.4 Sources kernel ajoutées (<code>do_patch:prepend</code> copy + Kconfig/Makefile sed)</h3>
+<table>
+<tbody>
+<tr><td><code>tac5212.c</code> + <code>tac5212.h</code></td><td>Driver codec complet (~1500 lignes + 250 lignes) avec regmap I²C paged, 24 SOC_BYTES_EXT biquads, 6 paged-blobs (AGC, HPF, DRC, ADSR, Aux Mixer, AGC Rate), DAI master/slave</td></tr>
+<tr><td><code>imx-probes.c</code></td><td>SOF Probes client kernel additif</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ====================== 9. SOF PATCHES INVENTORY ====================== -->
+<section class="break">
+<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">9.</span> Inventaire patches SOF firmware actifs</h2>
+<p>11 commits clés sur la branche <code>feature/v7.0-multiband-drc-tap</code>
+du fork <code>github.com/Mjxkill/sof</code> par rapport à
+<code>origin/main</code> (stable v2.10).</p>
+
+<table>
+<thead><tr><th>Commit</th><th>Sujet</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><span class="commit-hash">4bea8e59d</span></td><td>imx sai — V7.0-E7.2 TX FIFO alignment (prime N zeros)</td><td>V7</td></tr>
+<tr><td><span class="commit-hash">6ee842c67</span></td><td>audio/dai-legacy + npu_tap — V7.0-E4 NPU dual-tap firmware hook</td><td>V7</td></tr>
+<tr><td><span class="commit-hash">a535405ca</span></td><td>topology — V7.0-E3 final strips OUT play (multiband_drc + pga)</td><td>V7</td></tr>
+<tr><td><span class="commit-hash">5eafab230</span></td><td>audio/multiband_drc — V7.0-E2.b 8ch blob infrastructure</td><td>V7</td></tr>
+<tr><td><span class="commit-hash">7440b3c21</span></td><td>audio/multiband_drc — V7.0-E2 per-channel params back-compat ABI</td><td>V7</td></tr>
+<tr><td><span class="commit-hash">dfe9b2497</span></td><td>topology — V7.0-E1 simplify play pipeline + custom 8ch macro</td><td>V7</td></tr>
+<tr><td><span class="commit-hash">0580b5f14</span></td><td>audio — pipeline_comp_copy re-entry guard</td><td>V5.4.1</td></tr>
+<tr><td><span class="commit-hash">ea984a266</span></td><td>audio — drc multi-config per-channel D3</td><td>V5.4.1</td></tr>
+<tr><td><span class="commit-hash">9cf6fa257</span></td><td>topology — V5.4.1 E5.e.2 1-comp-8ch native pipe (architecture pivot)</td><td>V5.4.1</td></tr>
+<tr><td><span class="commit-hash">7499505ec</span></td><td>audio — preserve_channels pour branched mono buffers</td><td>V5.4.1</td></tr>
+<tr><td><span class="commit-hash">bf24053fd</span></td><td>imx sai — idempotence patch (flag configured + FRDE toggled)</td><td>V5.4.1</td></tr>
+<tr><td><span class="commit-hash">61fcb2e7d</span></td><td>audio/dai-legacy — V3.2.2 NPU tap hook (capture post-DRC vers DRAM)</td><td>P1a.2</td></tr>
+<tr><td><span class="commit-hash">9f6f70a21</span></td><td>audio/dai-legacy — guard defensive period_bytes==0 NPU tap init</td><td>P1a.2</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ====================== 10. DEAD ENDS ====================== -->
+<section class="break">
+<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">10.</span> Synthèse chemins abandonnés</h2>
+<p>≈ 30 chemins techniques explorés et abandonnés avec verdict empirique
+documenté. Préservés en mémoire critic et certains encore présents en
+branches archivées.</p>
+
+<h3>10.1 NPU tap — 4 voies bloquées (5e GO final)</h3>
+<table>
+<thead><tr><th>Voie</th><th>Approche</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td>V1.0 → V1.5 ALSA</td><td>3e PCM capture via DPCM dummy BE + MUXDEMUX</td><td><span class="pill fail">multi-blocage</span> IPC3 -22 + DPCM walk reject + simple-card no-DPCM</td></tr>
+<tr><td>S1 SOF Probes</td><td>Mécanisme upstream <code>/dev/snd/comprC?D?</code></td><td><span class="pill warn">Partiel</span> kernel OK mais latence trop élevée</td></tr>
+<tr><td>Alt-A probe.c</td><td>Modif <code>sof/src/probe/probe.c</code> + IPC3 handler</td><td><span class="pill fail">Reverted</span> conflits IPC3</td></tr>
+<tr><td>S6 mem_sink</td><td>Nouveau composant SOF + reserved-memory</td><td><span class="pill fail">Trop intrusif</span></td></tr>
+<tr><td><strong>V3.2.2</strong></td><td>Module kernel + DT carve + hook <code>dai_dma_cb</code></td><td><span class="pill ok">GO 1.22 MB/s</span></td></tr>
+</tbody>
+</table>
+
+<h3>10.2 Composants SOF abandonnés</h3>
+<table>
+<thead><tr><th>Composant</th><th>Commit SOF</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td><code>deinterleave_8</code> (1×8ch → 8×mono)</td><td><span class="commit-hash">710bb72f5</span></td><td><span class="pill fail">KO trigger overrun</span></td></tr>
+<tr><td><code>interleave_8</code> (8×mono → 1×8ch)</td><td><span class="commit-hash">710bb72f5</span></td><td><span class="pill fail">KO</span></td></tr>
+<tr><td><code>mixer16</code> + <code>tee_1to2</code></td><td><span class="commit-hash">fbf0269b6</span></td><td><span class="pill fail">KO runtime</span></td></tr>
+</tbody>
+</table>
+<p>Verdict global : approche "ajouter des composants custom au graph SOF"
+abandonnée au profit du pivot <strong>1-comp-8ch</strong> (1 instance
+multi-channel par composant existant). Beaucoup plus simple et stable.</p>
+
+<h3>10.3 Optim latence userspace E6.i / j / k / l</h3>
+<table>
+<thead><tr><th>Sprint</th><th>Approche</th><th>Verdict empirique</th></tr></thead>
+<tbody>
+<tr><td><strong>E6.i</strong></td><td>Drainage agressif play_thread blocking + <code>MAX_DRAIN_PERIODS=4</code></td><td><span class="pill fail">reverted</span> ring saturé 16 ms</td></tr>
+<tr><td><strong>E6.j</strong></td><td>Drainage NONBLOCK + <code>snd_pcm_avail_update</code></td><td><span class="pill fail">non commité</span> EAGAIN systématique, drops 50k/s</td></tr>
+<tr><td><strong>E6.k</strong></td><td><code>N_PERIODS=2</code> seul (logic E6.h conservée)</td><td><span class="pill fail">non commité</span> ring saturé, +6 ms régression</td></tr>
+<tr><td><strong>E6.l</strong></td><td>Single-thread (suppression ring + play_thread + eventfd)</td><td><span class="pill fail">non commité</span> throughput 3.2 %, recover 122 ms cascade</td></tr>
+</tbody>
+</table>
+<div class="callout info"><span class="label">Théorème de Little</span>
+Worker claude-code dans le job critic E6.l : <strong>plancher physique
+10 ms exact AVANT marge anti-xrun</strong> = TAC ADC 0.5 + DMA RX 2 + cap
+pipe 0.5 + ALSA cap min 2 + mix 0.5 + ALSA play min 2 + DMA TX 2 + DAC 0.5.
+Cible &lt; 10 ms acoustique mathématiquement inatteignable en userspace —
+reportée à un sprint V8 mixer DSP SOF natif (effort 4-8 semaines).
+</div>
+
+<h3>10.4 SDMA AP2AP iterations</h3>
+<p>Avant la V3.2.2 NPU tap, plusieurs commits SOF expérimentaux ont
+exploré SDMA mem-to-mem (AP2AP) pour transfert DSP↔A53. Remplacé par
+le hook <code>dai_dma_cb</code> direct beaucoup plus simple. Commits
+conservés en branche pour référence :</p>
+<table>
+<tbody>
+<tr><td><span class="commit-hash">eecb74eb</span></td><td>SDMA_CHAN_TYPE_AP2AP host memory-to-memory (concept initial)</td></tr>
+<tr><td><span class="commit-hash">aa241bf2a</span></td><td>EVTOVR fix — channel was never runnable sans EVTOVR=1 avant HSTART (mémoire <code>sdma_ap2ap_evtovr.md</code>)</td></tr>
+<tr><td><span class="commit-hash">bc8c73417</span></td><td>SDMA_BD_LAST on AP2AP one-shot BD</td></tr>
+<tr><td><span class="commit-hash">1e8e4d1a2</span></td><td>Skip HSTART &amp; BD_INT pour fix TRIGGER_START timeout</td></tr>
+<tr><td><span class="commit-hash">216da2511</span></td><td>RT 8ch TDM playback + capture sur i.MX 8M Plus TAC5212</td></tr>
+</tbody>
+</table>
+
+<h3>10.5 V6.0 always-on (archived)</h3>
+<p>Voir section 6 ci-dessus. Patches K0-K5 (commit
+<span class="commit-hash">7db34a5d</span>) en branche
+<code>feature/v6-always-on-async</code>.</p>
+
+<h3>10.6 simple-card multi-codec</h3>
+<p>Tentative E7.4.b : patcher <code>sound/soc/generic/simple-card.c</code>
+pour supporter <code>num_codecs &gt; 1</code> via
+<code>apply-simple-card-multicodec.py</code>. Échec : erreur kernel
+<em>Neither Component name/of_node are set for sai3-tac5212-hifi</em>
+car <code>simple_parse_node()</code> ne parse que <code>codec[0]</code>.</p>
+<div class="callout fail"><span class="label">Pivot</span>
+Abandonné au profit de <code>fsl,imx-audio-card</code> qui utilise
+<code>snd_soc_of_get_dai_link_codecs()</code> (remplit correctement) +
+<code>apply-imx-card-linkid.py</code> pour le problème séparé du
+<code>link->id</code>. Script <code>apply-simple-card-multicodec.py</code>
+conservé comme stub désactivé pour traçabilité historique.
+</div>
+
+<h3>10.7 V5.4.2 DMA-driven only (revert)</h3>
+<p>Spec <code>PHASE_1A_3_DSP_V5.4.2</code> (<span class="commit-hash">d7cbdbf0</span>)
+proposait de supprimer le mode TIMER scheduling au profit de DMA-driven
+only. Revert immédiat (<span class="commit-hash">31f6690e</span>) après
+constat que V3.2.2 utilisait déjà TIMER avec succès — la suppression
+aurait été une régression.</p>
+
+<h3>10.8 Composant <code>probe</code> SOF intégré V1.2 skeleton</h3>
+<p>Commit <span class="commit-hash">20304bfae</span> — <em>topology:
+Phase 1a.2 V1.2 skeleton — HP_Monitor tap (BUG runtime à investiguer)</em>.
+Skeleton conservé en branche mais bug runtime non résolu. Abandonné lors
+du pivot V3.2.2 NPU tap.</p>
+
+<h3>10.9 Voies misc explorées et écartées</h3>
+<ul>
+  <li><strong>PREEMPT_RT kernel</strong> : non activé. Memory <code>kernel_preempt_status.md</code> documente que le kernel a déjà <code>CONFIG_PREEMPT=y</code> (low-latency, jitter ~100 µs). PREEMPT_RT gain estimé négligeable face aux blocages SOF recover de 60 ms (jusqu'à 122 ms en single-thread).</li>
+  <li><strong>SCHED_FIFO sur loopback-c</strong> : tenté en E6.h, dégrade au lieu d'améliorer (kernel non-PREEMPT_RT). TODO si PREEMPT_RT activé un jour.</li>
+  <li><strong>NEON-optimisée FFT</strong> : abandonnée pour <strong>FFT radix-2 inline simple</strong> dans <code>analyzer.c</code> (E7.5) — perf suffisante (~50 µs/FFT × 30 Hz × 4 taps = 0.6 % CPU).</li>
+  <li><strong>kissfft library vendor</strong> : envisagée mais inutile, FFT inline 70 lignes suffit.</li>
+</ul>
+</section>
+
+<!-- ====================== 11. LESSONS ====================== -->
+<section class="break">
+<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">11.</span> Leçons apprises &amp; règles projet</h2>
+
+<div class="callout ok"><span class="label">Règle 1 — Critic_analyze obligatoire</span>
+<strong>Avant toute modification non triviale</strong> du firmware SOF
+ou du kernel. Le système de critique externe identifie les voies déjà
+tentées (mémoire persistante), les contradictions avec le code existant,
+et propose des alternatives. Évite de re-faire les 5 itérations NPU tap.
+Mémoires <code>feedback_critic_imperative.md</code>,
+<code>feedback_critic_persistent_memory.md</code>.
+</div>
+
+<div class="callout ok"><span class="label">Règle 2 — Validation empirique board systématique</span>
+Chaque sprint produit une fiche <code>TESTS_V&lt;x&gt;_E&lt;y&gt;.md</code>
+avec champ <strong>"Test utilisateur OUI/NON" non négociable</strong>.
+Pas de GO sans son utilisateur. Mémoire <code>feedback_test_fiches.md</code>.
+</div>
+
+<div class="callout ok"><span class="label">Règle 3 — Patches scripts Python &gt; patches binaires</span>
+Pour les modifications DT, Kconfig, Makefile. Plus robustes face aux
+updates upstream, locate-by-pattern au lieu de patch ligne fragile.
+</div>
+
+<div class="callout ok"><span class="label">Règle 4 — Reproductibilité from git clone</span>
+Firmware SOF custom vendoré dans recipe <code>sof-firmware-custom</code>
+avec ses md5. SOF source sur github Mjxkill/sof. Voir
+<code>REPRODUCIBILITY.md</code>.
+</div>
+
+<div class="callout warn"><span class="label">Règle 5 — Plancher physique &gt; sprint sans gain</span>
+4 itérations latence E6.i/j/k/l ont coûté du temps avant le verdict
+théorème de Little. Maintenant établi : sprint &lt; 10 ms = V8 mixer
+DSP SOF natif (4-8 semaines), pas userspace tweak.
+</div>
+
+<div class="callout warn"><span class="label">Règle 6 — Patches additifs &gt; patches invasifs</span>
+Toujours préférer un patch additif (nouveau fichier) à un patch invasif
+d'un fichier existant. Cf. SOF Probes Alt-A reverted vs imx-probes
+additif accepté. Mémoire <code>feedback_kernel_patch_policy.md</code>.
+</div>
+
+<div class="callout warn"><span class="label">Règle 7 — Verdict empirique &gt; spec</span>
+Spec V5.4.2 a été reverted en quelques heures car ne correspondait pas
+à l'observé V3.2.2. Toujours valider empiriquement sur board avant
+formaliser une spec.
+</div>
+
+<div class="callout warn"><span class="label">Règle 8 — SAI_OFS=8 sur i.MX 8M Plus</span>
+Tous les offsets registres SAI sont décalés de +8 bytes. Vérifier dans
+<code>memory.h</code> AVANT d'écrire des diags MMIO. Bug d'adresse de
+base SAI5 vs SAI7 à éviter. Mémoire <code>sof_sai_ofs_imx8mp.md</code>.
+</div>
+
+<div class="callout warn"><span class="label">Règle 9 — TX pilote tout, jamais le TAC</span>
+Si RX = 0 IRQ, chercher SAI/SDMA/pinmux, jamais le TAC. TX TERE+BCE=1
+fait sortir BCLK+FSYNC qui boucle PCB → RX clocke peu importe l'état
+TAC. Mémoire <code>feedback_tx_master_drives_all.md</code>.
+</div>
+
+<div class="callout warn"><span class="label">Règle 10 — tac-reset obligatoire avant capture</span>
+Sinon samples strictement à 0. Service systemd
+<code>tac-reset.service</code> auto-init au boot. Mémoire
+<code>tac_reset_required_after_boot.md</code>.
+</div>
+</section>
+
+<!-- ====================== 12. INDEX COMMITS ====================== -->
+<section class="break">
+<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">12.</span> Index commits référencés</h2>
+
+<h3>12.1 yocto-nxp-debix — commits prod (par ordre chronologique inversé)</h3>
+<table>
+<thead><tr><th>Hash</th><th>Description</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><span class="commit-hash">14c78ac9</span></td><td>HEAD — fiches E7/E7.3/E7.7 + REPRODUCIBILITY + PROJECT_STATE</td><td>V7.0</td></tr>
+<tr><td><span class="commit-hash">6511f273</span></td><td>recipe sof-firmware-custom (reproductibilité)</td><td>E7.7</td></tr>
+<tr><td><span class="commit-hash">87f71fd1</span></td><td>fix R1..R8 clickable</td><td>E7.7</td></tr>
+<tr><td><span class="commit-hash">0216bd71</span></td><td>returns tags BUS FX cards</td><td>E7.7</td></tr>
+<tr><td><span class="commit-hash">0d7372e8</span></td><td>ARCHI HTML + PDF mis à jour</td><td>E7.6</td></tr>
+<tr><td><span class="commit-hash">18aa700e</span></td><td>doc test sheets E7.4 + E7.5</td><td>E7.6</td></tr>
+<tr><td><span class="commit-hash">4124f97f</span></td><td>analyzer boxes 1.5x layout</td><td>E7.5b</td></tr>
+<tr><td><span class="commit-hash">4f4e4d0b</span></td><td>4 analyzer taps FFT + scope</td><td>E7.5</td></tr>
+<tr><td><span class="commit-hash">45e6592b</span></td><td>persistence + DRC editor + crossover + layout</td><td>E7.4.f-n</td></tr>
+<tr><td><span class="commit-hash">48759a7a</span></td><td>SOF TLV-byte read/write helpers</td><td>E7.4.c</td></tr>
+<tr><td><span class="commit-hash">61849c36</span></td><td>FX bus modal + DSP scope</td><td>E7.4.b</td></tr>
+<tr><td><span class="commit-hash">917ecd73</span></td><td>fix imx-card link_id mismatch</td><td>E7.4.b</td></tr>
+<tr><td><span class="commit-hash">b9f1b189</span></td><td>switch fsl,imx-audio-card 4× TAC</td><td>E7.4.b</td></tr>
+<tr><td><span class="commit-hash">9320458d</span></td><td>6 paged-blob effets + multi-codec</td><td>E7.4.b</td></tr>
+<tr><td><span class="commit-hash">13379c88</span></td><td>tac5212 — 24 biquads SOC_BYTES_EXT</td><td>E7.4</td></tr>
+<tr><td><span class="commit-hash">0d0f844f</span></td><td>ALSA kcontrols proxy + per-strip effects panel</td><td>E7.3b</td></tr>
+<tr><td><span class="commit-hash">edf6dd50</span></td><td>detail panel sidebar + routage exhaustif</td><td>E7.3a</td></tr>
+<tr><td><span class="commit-hash">e3f3d7f6</span></td><td>GUI Apple-class redesign + strip gain</td><td>E7.2</td></tr>
+<tr><td><span class="commit-hash">d055b946</span></td><td>peak meters + SSE streaming 30 Hz</td><td>E7.1</td></tr>
+<tr><td><span class="commit-hash">079d3ddb</span></td><td>mixer-gui-http base + frontend Alpine.js</td><td>E7</td></tr>
+<tr><td><span class="commit-hash">cddc9243</span></td><td>mixer-pro daemon MVP</td><td>E6.d</td></tr>
+<tr><td><span class="commit-hash">005047ee</span></td><td>SOF Probes — patch kernel additif</td><td>P1a.2</td></tr>
+<tr><td><span class="commit-hash">b083331d</span></td><td>NPU tap V3.2.2 kernel module</td><td>P1a.2</td></tr>
+<tr><td><span class="commit-hash">7db34a5d</span></td><td>V6.0 K0+K1+K2+K4+K5 always-on (archived)</td><td>V6.0</td></tr>
+<tr><td><span class="commit-hash">f5d94dba</span></td><td>apply-sdram2-dt.py + bbappend</td><td>P1a.3</td></tr>
+<tr><td><span class="commit-hash">9532d649</span></td><td>PHASE_1A_SPEC V4.2 GO MVP</td><td>P1a.1</td></tr>
+<tr><td><span class="commit-hash">124dfe38</span></td><td>auto-init TAC5212 boot</td><td>P0</td></tr>
+<tr><td><span class="commit-hash">25d11fea</span></td><td>SOF ASYNC mode -58→-121 dBFS</td><td>P0</td></tr>
+<tr><td><span class="commit-hash">307a72d8</span></td><td>TAC5212 TDM codec driver initial</td><td>P0</td></tr>
+</tbody>
+</table>
+
+<h3>12.2 sof (firmware DSP) — commits prod</h3>
+<table>
+<thead><tr><th>Hash</th><th>Description</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><span class="commit-hash">4bea8e59d</span></td><td>HEAD — imx sai V7.0-E7.2 TX FIFO alignment</td><td>V7</td></tr>
+<tr><td><span class="commit-hash">6ee842c67</span></td><td>NPU dual-tap firmware hook</td><td>V7-E4</td></tr>
+<tr><td><span class="commit-hash">a535405ca</span></td><td>topology V7.0-E3 final</td><td>V7-E3</td></tr>
+<tr><td><span class="commit-hash">5eafab230</span></td><td>multiband_drc 8ch blob infra</td><td>V7-E2.b</td></tr>
+<tr><td><span class="commit-hash">7440b3c21</span></td><td>multiband_drc per-channel params</td><td>V7-E2</td></tr>
+<tr><td><span class="commit-hash">dfe9b2497</span></td><td>topology V7.0-E1 simplify</td><td>V7-E1</td></tr>
+<tr><td><span class="commit-hash">0580b5f14</span></td><td>pipeline_comp_copy re-entry guard</td><td>V5.4.1-E6.a</td></tr>
+<tr><td><span class="commit-hash">3dd5bbb17</span></td><td>topology matrix 16x8 playback</td><td>V5.4.1-E6.a</td></tr>
+<tr><td><span class="commit-hash">ea984a266</span></td><td>drc multi-config per-channel D3</td><td>V5.4.1-E5.e.2</td></tr>
+<tr><td><span class="commit-hash">9cf6fa257</span></td><td>1-comp-8ch native pipe pivot</td><td>V5.4.1-E5.e.2</td></tr>
+<tr><td><span class="commit-hash">59e3d3c1e</span></td><td>topology 1 strip IN ch1 Option F++</td><td>V5.4.1-E5.e.1</td></tr>
+<tr><td><span class="commit-hash">7499505ec</span></td><td>preserve_channels branched mono</td><td>V5.4.1-E5.e.1</td></tr>
+<tr><td><span class="commit-hash">bf24053fd</span></td><td>imx sai idempotence flag</td><td>V5.4.1</td></tr>
+<tr><td><span class="commit-hash">a54247599</span></td><td>deinterleave_8/interleave_8/tee_1to2</td><td>V5.4.1-E4 (abandonné)</td></tr>
+<tr><td><span class="commit-hash">61fcb2e7d</span></td><td>dai-legacy V3.2.2 NPU tap hook</td><td>P1a.2 V3.2.2</td></tr>
+<tr><td><span class="commit-hash">9f6f70a21</span></td><td>dai-legacy guard period_bytes==0</td><td>P1a.2 V3.2.2.1</td></tr>
+<tr><td><span class="commit-hash">216da2511</span></td><td>SDMA RT 8ch TDM (V3 baseline)</td><td>SDMA experiments</td></tr>
+<tr><td><span class="commit-hash">aa241bf2a</span></td><td>SDMA EVTOVR fix</td><td>SDMA experiments</td></tr>
+<tr><td><span class="commit-hash">2e7960248</span></td><td>topology Phase 1a.1 MVP V4.2</td><td>P1a.1</td></tr>
+<tr><td><span class="commit-hash">a7d4eff36</span></td><td>diag V6.0 SAI_OFS=8 fix</td><td>V6.0 (archived)</td></tr>
+<tr><td><span class="commit-hash">fcf6c7642</span></td><td>multiband_drc multi-config (V6.0 étape 0)</td><td>V6.0 (archived)</td></tr>
+</tbody>
+</table>
+
+<div class="callout info" style="margin-top:30px;">
+<span class="label">Fin du document</span> Document généré le 2026-05-13.
+Sources : commits git yocto-nxp-debix + sof, mémoires critic, fiches
+<code>TESTS_V*_E*.md</code>, document architecture
+<code>ARCHI/ARCHI_V7.0</code>. Document maintenu à chaque étape validée
+(cf. règle projet <code>feedback_docs_always_updated.md</code>).
+</div>
+
+</section>
+
+</body>
+</html>

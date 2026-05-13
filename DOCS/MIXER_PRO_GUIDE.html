@@ -1,0 +1,1127 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>mixer-pro — Guide utilisateur &amp; guide développeur</title>
+<style>
+@page { size: A4; margin: 2cm 1.8cm; }
+:root {
+  --ink: #0f172a; --ink-2: #334155; --muted: #64748b;
+  --line: #e2e8f0; --line-2: #cbd5e1;
+  --bg: #ffffff; --bg-soft: #f8fafc; --bg-code: #f1f5f9;
+  --accent: #4f46e5; --accent-soft: #eef2ff;
+  --blue: #1d4ed8; --blue-soft: #dbeafe;
+  --green: #15803d; --green-soft: #dcfce7;
+  --amber: #b45309; --amber-soft: #fef3c7;
+  --red: #b91c1c; --red-soft: #fee2e2;
+  --pink: #be185d; --pink-soft: #fce7f3;
+  --teal: #0d9488; --teal-soft: #ccfbf1;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+  font-size: 10.2pt; line-height: 1.55;
+  color: var(--ink); background: var(--bg);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+code, pre, .mono { font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; }
+code {
+  background: var(--bg-code); border-radius: 4px;
+  padding: 1px 5px; font-size: 9pt; color: var(--blue);
+  border: 1px solid var(--line);
+}
+pre {
+  background: var(--bg-code); border-left: 3px solid var(--accent);
+  padding: 10px 12px; border-radius: 4px;
+  font-size: 8.6pt; line-height: 1.42; overflow-x: auto;
+  white-space: pre-wrap; word-break: break-word;
+}
+pre code { background: transparent; border: 0; padding: 0; color: var(--ink); }
+h1, h2, h3, h4 { color: var(--ink); margin-top: 0; line-height: 1.25; }
+h1 { font-size: 28pt; font-weight: 800; letter-spacing: -0.03em; }
+h2 { font-size: 18pt; font-weight: 700; letter-spacing: -0.02em;
+     border-bottom: 2px solid var(--line-2); padding-bottom: 8px;
+     margin-top: 36px; }
+h3 { font-size: 13pt; font-weight: 600; margin-top: 22px; color: var(--accent); }
+h4 { font-size: 10.8pt; font-weight: 700; margin-top: 16px;
+     text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); }
+p { margin: 7px 0; }
+ul, ol { margin: 6px 0 10px 0; padding-left: 22px; }
+li { margin: 2px 0; }
+li::marker { color: var(--muted); }
+strong { color: var(--ink); font-weight: 700; }
+em { color: var(--ink-2); font-style: italic; }
+table {
+  width: 100%; border-collapse: collapse;
+  margin: 12px 0; font-size: 9.2pt;
+  break-inside: avoid;
+}
+th, td {
+  text-align: left; padding: 6px 9px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+th {
+  background: var(--bg-soft);
+  font-weight: 700; font-size: 8.8pt;
+  text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--ink-2);
+  border-bottom: 2px solid var(--line-2);
+}
+tr:nth-child(even) td { background: rgba(248, 250, 252, 0.5); }
+.cover {
+  height: 100vh; min-height: 26cm;
+  display: flex; flex-direction: column; justify-content: space-between;
+  padding: 1cm 0; break-after: page;
+}
+.cover .tag {
+  display: inline-block; padding: 4px 12px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 9pt; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.cover h1 { font-size: 38pt; margin: 18px 0 10px 0; }
+.cover .subtitle {
+  font-size: 14pt; color: var(--ink-2); font-weight: 500;
+  margin-bottom: 30px; line-height: 1.4;
+}
+.cover .meta {
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: 6px 18px; font-size: 10pt;
+}
+.cover .meta .k { color: var(--muted); font-weight: 600; text-transform: uppercase;
+                   font-size: 9pt; letter-spacing: 0.05em; align-self: center; }
+.cover .meta .v { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
+.cover .footer {
+  border-top: 1px solid var(--line); padding-top: 14px;
+  font-size: 9pt; color: var(--muted);
+}
+.lede {
+  background: var(--accent-soft);
+  border-left: 4px solid var(--accent);
+  padding: 12px 16px; border-radius: 0 6px 6px 0;
+  margin: 14px 0; font-size: 10.2pt;
+}
+.callout {
+  margin: 12px 0; padding: 10px 14px;
+  border-radius: 6px; font-size: 9.5pt;
+  break-inside: avoid;
+}
+.callout .label {
+  font-size: 8.5pt; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; display: inline-block; margin-right: 6px;
+}
+.callout.info  { background: var(--blue-soft);  border-left: 4px solid var(--blue);  color: #1e3a8a; }
+.callout.info .label { color: var(--blue); }
+.callout.ok    { background: var(--green-soft); border-left: 4px solid var(--green); color: #14532d; }
+.callout.ok .label { color: var(--green); }
+.callout.warn  { background: var(--amber-soft); border-left: 4px solid var(--amber); color: #78350f; }
+.callout.warn .label { color: var(--amber); }
+.callout.fail  { background: var(--red-soft);   border-left: 4px solid var(--red);   color: #7f1d1d; }
+.callout.fail .label { color: var(--red); }
+.callout.note  { background: var(--bg-soft);    border-left: 4px solid var(--line-2); color: var(--ink-2); }
+.pill {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 8pt; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pill.ok    { background: var(--green-soft); color: var(--green); }
+.pill.fail  { background: var(--red-soft);   color: var(--red); }
+.pill.warn  { background: var(--amber-soft); color: var(--amber); }
+.pill.info  { background: var(--blue-soft);  color: var(--blue); }
+.pill.draft { background: var(--bg-code);    color: var(--muted); }
+.break  { break-before: page; }
+.no-break { break-inside: avoid; }
+.toc { font-size: 10pt; }
+.toc .level-2 { font-weight: 700; margin-top: 8px; }
+.toc .level-3 { padding-left: 18px; color: var(--ink-2); font-size: 9.5pt; }
+.toc .num { color: var(--accent); font-weight: 700; margin-right: 6px;
+             font-family: 'JetBrains Mono', monospace; }
+.diagram {
+  margin: 14px 0; padding: 10px;
+  background: var(--bg-soft); border: 1px solid var(--line);
+  border-radius: 8px; break-inside: avoid;
+}
+.diagram svg { width: 100%; height: auto; display: block; }
+.diagram .caption {
+  font-size: 8.8pt; color: var(--muted); margin-top: 6px;
+  text-align: center; font-style: italic;
+}
+.endpoint {
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: 4px 14px; margin: 8px 0 14px 0;
+  padding: 8px 12px; background: var(--bg-soft);
+  border-left: 3px solid var(--accent); border-radius: 4px;
+  font-size: 9.4pt; break-inside: avoid;
+}
+.endpoint .method {
+  font-family: 'JetBrains Mono', monospace; font-weight: 700;
+  font-size: 9pt; color: var(--accent);
+}
+.endpoint .path {
+  font-family: 'JetBrains Mono', monospace; color: var(--ink);
+}
+.endpoint .desc { grid-column: 1 / -1; color: var(--ink-2);
+                   font-size: 9.2pt; margin-top: 4px; }
+.kv-grid {
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: 4px 14px; font-size: 9.4pt; margin: 8px 0;
+}
+.kv-grid .k { color: var(--muted); font-weight: 600;
+              text-transform: uppercase; font-size: 8.5pt;
+              letter-spacing: 0.04em; }
+.kv-grid .v { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<!-- ====================== COVER ====================== -->
+<section class="cover">
+  <div>
+    <span class="tag">Documentation logiciel · Livrable client</span>
+    <h1>mixer-pro</h1>
+    <div class="subtitle">Console de mixage temps réel embarquée<br>
+      Guide utilisateur &amp; guide développeur</div>
+    <div class="meta">
+      <span class="k">Composant</span><span class="v">mixer-pro · mixer-gui-http</span>
+      <span class="k">Version</span><span class="v">v7.0-e7.7b (GUI) · v7.0-e7.5a (daemon)</span>
+      <span class="k">Plateforme cible</span><span class="v">Debix Model AB — NXP i.MX 8M Plus</span>
+      <span class="k">Langage daemon</span><span class="v">C99 · ALSA-lib · pthread · libwebsockets-free</span>
+      <span class="k">Langage GUI</span><span class="v">C99 (libmicrohttpd) · Alpine.js · Tailwind CDN</span>
+      <span class="k">Audio</span><span class="v">26 in · 18 out · 4 bus FX stéréo · 48 kHz · 32 bit · 2 ms periods</span>
+      <span class="k">Latence one-way</span><span class="v">≈ 14 ms (8 ms ALSA + 6 ms ring SPSC + DMA)</span>
+      <span class="k">Date du document</span><span class="v">2026-05-13</span>
+      <span class="k">Auteur</span><span class="v">Michael Jouannigot · Electrosens</span>
+    </div>
+  </div>
+  <div class="footer">
+    Ce document couvre l'intégralité du composant <code>mixer-pro</code> et de
+    son interface web <code>mixer-gui-http</code> : utilisation depuis le
+    navigateur (sound engineer / opérateur board), puis architecture interne
+    (threads RT, ring SPSC, matrice de mix, moteurs d'effets, analyzer FFT,
+    protocole JSON et endpoints REST) pour le développeur appelé à maintenir
+    ou étendre le système.
+  </div>
+</section>
+
+<!-- ====================== EXEC SUMMARY ====================== -->
+<section>
+<h2>Résumé exécutif</h2>
+<p class="lede">
+<strong>mixer-pro</strong> est une console de mixage logicielle temps-réel
+écrite en C, conçue pour la plateforme audio embarquée Debix Model AB.
+Elle remplace fonctionnellement une table de mixage analogique 26→18 +
+4 bus d'effets, expose une matrice de routage complète à 612 points de
+gain individuels, fournit 4 moteurs d'effets natifs (compresseur, reverb,
+delay, EQ 3 bandes), et publie un analyseur 4 canaux FFT 1024 +
+oscilloscope X-Y. L'ensemble est piloté en HTTP/JSON depuis un navigateur
+standard sur le LAN.
+</p>
+
+<p>Cette documentation comprend deux volets :</p>
+<ul>
+  <li><strong>Volet utilisateur</strong> — tour de l'interface web,
+      vocabulaire (strips, sends, returns, bus FX, taps, biquads),
+      procédures opérationnelles (tac-reset, snapshot, monitoring).</li>
+  <li><strong>Volet développeur</strong> — architecture des threads RT,
+      ring buffer SPSC, matrice de mix, vtable des effets, codec FFT
+      radix-2, protocole JSON sur socket UNIX, endpoints REST,
+      modèle d'état Alpine.js, procédures de build Yocto et déploiement.</li>
+</ul>
+
+<h4>Repères chiffrés</h4>
+<table>
+  <thead><tr><th>Métrique</th><th>Valeur</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Inputs gérés</td><td>26 (8 mics + 8 stems USB + 2 phone + 8 returns FX)</td><td>Tous mono à l'entrée mixer, stéréo via link</td></tr>
+    <tr><td>Outputs gérés</td><td>18 (8 DSP play + 8 USB out + 2 phone)</td><td>Idem, link symétrique</td></tr>
+    <tr><td>Bus FX stéréo</td><td>4 (= 8 canaux)</td><td>Compressor, Reverb, Delay, EQ par défaut</td></tr>
+    <tr><td>Points de gain matriciels</td><td>612</td><td>26 × 8 sends + 34 × 18 master</td></tr>
+    <tr><td>Frequency / format</td><td>48 kHz / float32 interne / S32_LE ALSA</td><td>Conversion fixe ↔ flottant aux frontières</td></tr>
+    <tr><td>Period / buffer</td><td>96 frames (2 ms) / 4 periods = 8 ms</td><td>Plus 8 periods en ring SPSC = 16 ms tolérance jitter</td></tr>
+    <tr><td>Latence one-way</td><td>≈ 14 ms</td><td>Plancher Little &amp; jitter, validé loopback</td></tr>
+    <tr><td>Lignes de code daemon</td><td>≈ 1 600 (mixer-pro.c+h) + 200 (analyzer) + 500 (effects)</td><td>C99 pur, pas d'allocations dans le hot path</td></tr>
+    <tr><td>Lignes de code GUI back</td><td>≈ 800 (mixer-gui-http.c)</td><td>libmicrohttpd, 1 thread reverse-proxy</td></tr>
+    <tr><td>Lignes de code GUI front</td><td>≈ 3 200 (index.html)</td><td>Alpine.js inline + Tailwind CDN</td></tr>
+  </tbody>
+</table>
+</section>
+
+<!-- ====================== TOC ====================== -->
+<section class="break">
+<h2>Table des matières</h2>
+<div class="toc">
+  <div class="level-2"><span class="num">1.</span> Vue d'ensemble &amp; topologie audio</div>
+  <div class="level-3"><span class="num">1.1</span> Place de mixer-pro dans la pile Debix</div>
+  <div class="level-3"><span class="num">1.2</span> Vocabulaire : strips, sends, returns, bus FX, taps</div>
+  <div class="level-3"><span class="num">1.3</span> Diagramme de flux audio</div>
+
+  <div class="level-2"><span class="num">2.</span> Guide utilisateur</div>
+  <div class="level-3"><span class="num">2.1</span> Premier accès — URL, status, version GUI</div>
+  <div class="level-3"><span class="num">2.2</span> Layout 2 colonnes : strips + BUS FX</div>
+  <div class="level-3"><span class="num">2.3</span> Sidebar détail d'une voie (input / return / output)</div>
+  <div class="level-3"><span class="num">2.4</span> Sends &amp; returns FX</div>
+  <div class="level-3"><span class="num">2.5</span> Onglet EFFETS — kcontrols TAC + DRC + biquads + crossover</div>
+  <div class="level-3"><span class="num">2.6</span> Modaux BUS FX — Compressor / Reverb / Delay / EQ</div>
+  <div class="level-3"><span class="num">2.7</span> Analyzer 4 taps — FFT + scope X-Y</div>
+  <div class="level-3"><span class="num">2.8</span> Bouton tac-reset</div>
+
+  <div class="level-2"><span class="num">3.</span> Guide développeur — daemon mixer-pro</div>
+  <div class="level-3"><span class="num">3.1</span> Threads RT : audio / play / control / analyzer</div>
+  <div class="level-3"><span class="num">3.2</span> Ring buffer SPSC inter-thread</div>
+  <div class="level-3"><span class="num">3.3</span> Mix matrix : send_gain &amp; master_gain</div>
+  <div class="level-3"><span class="num">3.4</span> Smoothing &amp; ramp anti-zip</div>
+  <div class="level-3"><span class="num">3.5</span> FX engines — vtable, signatures, paramètres</div>
+  <div class="level-3"><span class="num">3.6</span> Analyzer FFT radix-2 inline + Hann window</div>
+  <div class="level-3"><span class="num">3.7</span> ALSA setup : capture/playback, recover</div>
+  <div class="level-3"><span class="num">3.8</span> Sécurité, RT prio, ulimit, signaux</div>
+
+  <div class="level-2"><span class="num">4.</span> Protocole JSON sur /run/mixer-pro.sock</div>
+  <div class="level-3"><span class="num">4.1</span> Format ligne, parser hand-rolled</div>
+  <div class="level-3"><span class="num">4.2</span> Opérations exhaustives (16 ops)</div>
+  <div class="level-3"><span class="num">4.3</span> Exemples</div>
+
+  <div class="level-2"><span class="num">5.</span> Guide développeur — mixer-gui-http</div>
+  <div class="level-3"><span class="num">5.1</span> Architecture libmicrohttpd</div>
+  <div class="level-3"><span class="num">5.2</span> Endpoints REST exhaustifs</div>
+  <div class="level-3"><span class="num">5.3</span> SSE streaming meters / analyzer</div>
+  <div class="level-3"><span class="num">5.4</span> Modèle Alpine.js — état réactif côté front</div>
+  <div class="level-3"><span class="num">5.5</span> Écriture des blobs DSP (TLV SOF binary)</div>
+
+  <div class="level-2"><span class="num">6.</span> Build &amp; déploiement</div>
+  <div class="level-3"><span class="num">6.1</span> Recipes Yocto</div>
+  <div class="level-3"><span class="num">6.2</span> systemd units</div>
+  <div class="level-3"><span class="num">6.3</span> Push incremental sur la board</div>
+
+  <div class="level-2"><span class="num">7.</span> Debug &amp; profiling</div>
+  <div class="level-3"><span class="num">7.1</span> Logs journal + dmesg</div>
+  <div class="level-3"><span class="num">7.2</span> ALSA xrun &amp; ring drops</div>
+  <div class="level-3"><span class="num">7.3</span> mixerctl CLI</div>
+  <div class="level-3"><span class="num">7.4</span> Pistes de profilage (perf, eBPF)</div>
+
+  <div class="level-2"><span class="num">8.</span> Roadmap &amp; extensions envisagées</div>
+</div>
+</section>
+
+<!-- ====================== 1 — OVERVIEW ====================== -->
+<section class="break">
+<h2>1. Vue d'ensemble &amp; topologie audio</h2>
+
+<h3>1.1 Place de mixer-pro dans la pile Debix</h3>
+<p><code>mixer-pro</code> est le composant userspace temps-réel qui
+implémente la fonction "table de mixage" entre les périphériques audio
+exposés par le kernel Linux et le DSP SOF (HiFi4) chargé d'appliquer les
+effets. Il ne traite <em>pas</em> lui-même les effets temps-réel lourds
+(reverb, delay, EQ multi-bandes) — ceux-ci sont délégués au DSP via la
+chaîne ALSA <code>softac5212tdm</code>. mixer-pro gère :</p>
+<ul>
+  <li>L'<strong>acquisition</strong> de 3 PCM capture en parallèle (DSP mics
+      8 ch, USB UAC2 gadget 8 ch, phone aloop 2 ch) ;</li>
+  <li>Le <strong>mixage temps-réel</strong> entre 26 sources et 18
+      destinations via une matrice 34×18 de gains, avec ramps anti-zip ;</li>
+  <li>L'application en <strong>fallback CPU</strong> de 4 bus d'effets
+      "natifs" (compressor/reverb/delay/EQ) pour les sends FX, en
+      attendant que le DSP les prenne en charge ;</li>
+  <li>La <strong>restitution</strong> sur 3 PCM playback (DSP play 8 ch,
+      USB out 8 ch, phone aloop out 2 ch) ;</li>
+  <li>L'<strong>analyseur FFT 4 taps</strong> pour l'affichage live
+      dans la GUI.</li>
+</ul>
+
+<div class="diagram no-break">
+<svg viewBox="0 0 1000 380" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill:#eef2ff; stroke:#4f46e5; stroke-width:1.5; rx:8; }
+    .box-dsp { fill:#dcfce7; stroke:#15803d; }
+    .box-kernel { fill:#fef3c7; stroke:#b45309; }
+    .box-usr { fill:#dbeafe; stroke:#1d4ed8; }
+    .box-gui { fill:#fce7f3; stroke:#be185d; }
+    .lbl { font:600 11px Inter, sans-serif; fill:#0f172a; text-anchor:middle; }
+    .sub { font:9px Inter, sans-serif; fill:#475569; text-anchor:middle; }
+    .arr { stroke:#475569; stroke-width:1.5; fill:none; marker-end:url(#arr); }
+    .arr-bus { stroke:#7c3aed; stroke-width:2; }
+    .hdr { font:700 11px Inter, sans-serif; fill:#334155; text-anchor:start; text-transform:uppercase; letter-spacing:0.05em; }
+  </style>
+  <text class="hdr" x="20" y="22">Hardware</text>
+  <rect class="box" x="20" y="35" width="180" height="65" rx="8"/>
+  <text class="lbl" x="110" y="58">4× TAC5212 codecs</text>
+  <text class="sub" x="110" y="75">TDM 8 ch / 32 b / 48 kHz</text>
+  <text class="sub" x="110" y="88">SAI7 i.MX 8M Plus</text>
+  <rect class="box" x="20" y="115" width="180" height="48" rx="8"/>
+  <text class="lbl" x="110" y="135">USB UAC2 gadget</text>
+  <text class="sub" x="110" y="150">8 ch in/out (DAW)</text>
+
+  <text class="hdr" x="20" y="195">DSP HiFi4</text>
+  <rect class="box box-dsp" x="20" y="208" width="180" height="80" rx="8"/>
+  <text class="lbl" x="110" y="230">SOF Zephyr DSP</text>
+  <text class="sub" x="110" y="247">DRC 8 ch · biquads</text>
+  <text class="sub" x="110" y="261">crossover · multiband</text>
+  <text class="sub" x="110" y="275">NPU tap (RAW + FX)</text>
+
+  <text class="hdr" x="240" y="22">Kernel</text>
+  <rect class="box box-kernel" x="240" y="35" width="170" height="48" rx="8"/>
+  <text class="lbl" x="325" y="55">ALSA softac5212tdm</text>
+  <text class="sub" x="325" y="71">PCM cap+play 8 ch S32</text>
+  <rect class="box box-kernel" x="240" y="100" width="170" height="40" rx="8"/>
+  <text class="lbl" x="325" y="123">UAC2Gadget PCM</text>
+  <rect class="box box-kernel" x="240" y="155" width="170" height="40" rx="8"/>
+  <text class="lbl" x="325" y="178">Phone aloop PCM</text>
+  <rect class="box box-kernel" x="240" y="210" width="170" height="48" rx="8"/>
+  <text class="lbl" x="325" y="230">imx-audio-tap</text>
+  <text class="sub" x="325" y="246">/dev/imx-audio-tap-*</text>
+
+  <text class="hdr" x="450" y="22">User-space (this doc)</text>
+  <rect class="box box-usr" x="450" y="35" width="280" height="225" rx="10"/>
+  <text class="lbl" x="590" y="60" style="font-size:14px;">mixer-pro daemon (C)</text>
+  <line x1="465" y1="72" x2="715" y2="72" stroke="#1d4ed8" stroke-width="0.5" stroke-dasharray="3,3"/>
+  <text class="sub" x="590" y="92" style="font-size:10px;font-weight:600;">audio_thread (RT 80)</text>
+  <text class="sub" x="590" y="106">cap → matrix mix → ring SPSC</text>
+  <text class="sub" x="590" y="130" style="font-size:10px;font-weight:600;">play_thread</text>
+  <text class="sub" x="590" y="144">ring SPSC → 3× PCM playback</text>
+  <text class="sub" x="590" y="168" style="font-size:10px;font-weight:600;">control_thread</text>
+  <text class="sub" x="590" y="182">/run/mixer-pro.sock JSON ops</text>
+  <text class="sub" x="590" y="206" style="font-size:10px;font-weight:600;">analyzer_thread (RT 60)</text>
+  <text class="sub" x="590" y="220">FFT 1024 · 30 Hz · 4 taps</text>
+  <text class="sub" x="590" y="244">+ 4 native FX engines C (fallback)</text>
+
+  <text class="hdr" x="760" y="22">GUI tier</text>
+  <rect class="box box-gui" x="760" y="35" width="220" height="100" rx="8"/>
+  <text class="lbl" x="870" y="58">mixer-gui-http</text>
+  <text class="sub" x="870" y="74">libmicrohttpd :8080</text>
+  <text class="sub" x="870" y="90">REST · SSE · static files</text>
+  <text class="sub" x="870" y="106">amixer proxy · TLV SOF</text>
+  <text class="sub" x="870" y="122">tac-reset trigger</text>
+
+  <rect class="box box-gui" x="760" y="150" width="220" height="85" rx="8"/>
+  <text class="lbl" x="870" y="172">Browser GUI</text>
+  <text class="sub" x="870" y="188">Alpine.js + Tailwind</text>
+  <text class="sub" x="870" y="202">Strips · BUS FX · Sidebar</text>
+  <text class="sub" x="870" y="216">Analyzer FFT + scope</text>
+  <text class="sub" x="870" y="230">EFFETS DSP editor</text>
+
+  <!-- Arrows hardware → kernel -->
+  <path class="arr" d="M205,65 L235,59"/>
+  <path class="arr" d="M205,135 L235,120"/>
+  <!-- Kernel → user -->
+  <path class="arr" d="M415,55 L445,60"/>
+  <path class="arr" d="M415,120 L445,90"/>
+  <path class="arr" d="M415,175 L445,120"/>
+  <!-- user → kernel (play back) -->
+  <path class="arr" d="M445,160 L415,68"/>
+  <!-- user → tap → DSP -->
+  <path class="arr" d="M325,235 L325,210"/>
+  <path class="arr" d="M205,242 L235,232"/>
+  <!-- GUI ↔ mixer-pro -->
+  <path class="arr arr-bus" d="M735,150 L755,100"/>
+  <path class="arr arr-bus" d="M755,80 L735,140"/>
+  <!-- Browser → gui-http -->
+  <path class="arr" d="M870,150 L870,140"/>
+  <path class="arr" d="M860,140 L860,150"/>
+</svg>
+<div class="caption">Figure 1 — Place de mixer-pro entre les périphériques ALSA, le DSP SOF et l'interface web</div>
+</div>
+
+<h3>1.2 Vocabulaire</h3>
+<div class="kv-grid">
+  <span class="k">Strip</span><span class="v">Une voie d'entrée ou de sortie dans la GUI (analogie console : tranche). 26 strips d'entrée + 18 strips de sortie + 8 strips returns FX.</span>
+  <span class="k">Send</span><span class="v">Niveau d'envoi d'une voie vers un bus FX. Une voie a 8 sends (4 bus × L/R). Gain de -∞ à +6 dB.</span>
+  <span class="k">Return FX</span><span class="v">Le signal de sortie d'un bus FX, ré-injecté dans la matrice master au même niveau qu'une voie d'entrée (strips 18..25).</span>
+  <span class="k">Bus FX</span><span class="v">Un canal stéréo qui reçoit la somme des sends, applique un effet (compressor / reverb / delay / EQ), et publie un return FX en sortie.</span>
+  <span class="k">Master</span><span class="v">La matrice 34 × 18 qui mixe finalement toutes les sources (26 inputs + 8 returns FX = 34 colonnes virtuelles ; mais seuls 26 sources réelles + 8 returns gérés directement) vers les 18 sorties.</span>
+  <span class="k">Tap (analyzer)</span><span class="v">Un point d'écoute non-destructif (≠ NPU tap) où l'analyzer FFT prélève le signal pour l'afficher dans la GUI. 4 taps configurables.</span>
+  <span class="k">Tap (NPU)</span><span class="v">Au-delà du périmètre mixer-pro : le tap matériel kernel <code>imx-audio-tap</code> qui expose le flux post-DSP au NPU pour l'inférence ML. À ne pas confondre.</span>
+  <span class="k">tac-reset</span><span class="v">Script kernel/userspace qui ré-initialise les 4 codecs TAC5212 et leurs sub-blocs. Obligatoire après chaque boot avant le premier <code>mixer-pro</code>.</span>
+</div>
+</section>
+
+<!-- ====================== 2 — USER GUIDE ====================== -->
+<section class="break">
+<h2>2. Guide utilisateur</h2>
+
+<h3>2.1 Premier accès</h3>
+<p>Connecter la board sur le LAN (DHCP). Récupérer l'IP via la console UART ou
+votre routeur. Depuis n'importe quel navigateur récent (Chrome 120+, Firefox
+120+, Safari 17+) :</p>
+<pre><code>http://&lt;IP-board&gt;:8080/</code></pre>
+<p>La page principale affiche en haut un bandeau de statut :</p>
+<ul>
+  <li><span class="pill ok">Online</span> si <code>mixer-pro</code> répond — l'UI passe en mode actif ;</li>
+  <li><span class="pill fail">Offline</span> si le daemon ne répond pas dans 1 s — le bouton <em>Restart</em> tente <code>systemctl restart mixer-pro</code> ;</li>
+  <li>La version GUI (ex. <code>v7.0-e7.7b</code>) et la version daemon (ex. <code>v7.0-e7.5a</code>) sont affichées à droite, utiles pour vérifier qu'aucune mise à jour n'a été oubliée.</li>
+</ul>
+
+<div class="callout warn">
+<span class="label">À savoir</span>
+Si le daemon démarre pour la première fois après un boot board, il exécute
+automatiquement <code>tac-reset analog</code> avant d'ouvrir les PCM
+(<code>ExecStartPre=</code> dans le systemd unit). Sans ce reset, les TAC5212
+boot en mode hi-Z et la capture renvoie 0 silencieusement.
+</div>
+
+<h3>2.2 Layout 2 colonnes</h3>
+<p>Depuis la version E7.4d (refactor layout), l'écran est divisé verticalement
+en deux zones :</p>
+<ul>
+  <li><strong>Colonne gauche</strong> (≈ 75% largeur) : les strips d'entrée
+      au-dessus (M1..M8 mics, U1..U8 USB, P1..P2 phone, R1..R8 returns FX) et
+      les strips de sortie en-dessous (S1..S8 speakers DSP, U1..U8 USB out,
+      P1..P2 phone out). Chaque strip a son meter, son fader de gain, son
+      bouton mute, et un indicateur de stéréo-link sur les paires adjacentes.</li>
+  <li><strong>Colonne droite</strong> (≈ 25% largeur) : les 4 cartes BUS FX
+      verticales empilées, chacune avec son type d'effet, son niveau de
+      return, et la liste des sorties vers lesquelles le return est routé
+      (depuis E7.7a, code couleur vert/turquoise/orange selon L/R/both).</li>
+</ul>
+
+<h3>2.3 Sidebar détail d'une voie</h3>
+<p>Cliquer sur un strip (label ou zone vide) ouvre la <strong>sidebar
+détail</strong> sur la droite. Sa structure :</p>
+<ol>
+  <li><strong>Header</strong> : nom de la voie (ex. "M3 — DSP mic 3"), type
+      (input/return/output), bouton de stéréo-link avec la voie adjacente
+      (M3+M4, U1+U2, etc.).</li>
+  <li><strong>Section ROUTING</strong> :
+    <ul>
+      <li>Pour un input : 8 mini-faders L/R par bus FX (= 4 sends stéréo) +
+          18 mini-faders master vers les 18 sorties.</li>
+      <li>Pour un return FX : 18 mini-faders master uniquement.</li>
+      <li>Pour un output : section informationnelle (le routing s'édite côté input).</li>
+    </ul>
+  </li>
+  <li><strong>Section EFFETS</strong> (voir 2.5) : liste des kcontrols ALSA
+      pertinents pour cette voie + éditeur DRC/biquads/crossover si DSP play.</li>
+</ol>
+
+<h3>2.4 Sends &amp; returns FX</h3>
+<p>Pour envoyer une voie d'entrée vers un bus d'effets, ouvrir sa sidebar et
+ajuster les mini-faders <em>SEND</em> correspondants. Exemple : pour envoyer
+M1 vers un reverb sur BUS FX 2 avec 50 % en stéréo, mettre les deux faders
+"Send FX2 L" et "Send FX2 R" à -6 dB.</p>
+<p>Le signal traité revient comme <em>return FX</em> (strips R1..R8). Cliquer
+sur R1 ouvre sa sidebar (corrigé E7.7b) et permet de doser sa contribution
+finale vers chaque sortie (S1..S8, U1..U8, P1..P2). Depuis E7.7a, chaque
+carte BUS FX montre directement les destinations actives du return en tags
+colorés.</p>
+
+<h3>2.5 Onglet EFFETS</h3>
+<p>La section EFFETS de la sidebar affiche les <em>kcontrols ALSA</em>
+pertinents pour la voie courante. Ces kcontrols pilotent les sous-modules du
+TAC5212 (chaîne ADC / DAC) et du DSP SOF (DRC, biquads, crossover, multiband).</p>
+
+<table>
+<thead><tr><th>Type kcontrol</th><th>UI</th><th>Domaine</th></tr></thead>
+<tbody>
+<tr><td>INTEGER (1 valeur)</td><td>Slider linéaire avec min/max</td><td>Gain ADC, AGC threshold, etc.</td></tr>
+<tr><td>BOOLEAN</td><td>Toggle on/off</td><td>HPF enable, DC blocker, mute</td></tr>
+<tr><td>ENUMERATED</td><td>Dropdown</td><td>Mode AGC, Bias source</td></tr>
+<tr><td>BYTES (blob)</td><td>Éditeur dédié selon nom du kcontrol</td><td>Biquads RBJ, DRC, multiband, crossover</td></tr>
+</tbody>
+</table>
+
+<h4>Éditeur DRC per-channel</h4>
+<p>Cliquer "Edit DRC" ouvre l'éditeur DRC <em>inline</em> (depuis E7.4b) pour
+la voie courante uniquement (pas un modal global). 8 paramètres exposés :
+threshold (dB), knee (dB), ratio, attack (s), release (s), pre-gain (dB),
+post-gain (dB), enable. L'éditeur encode en blob SOF Q-format (Q1.31 / Q8.24
+/ Q2.30 selon le champ) et le pousse via TLV SOF binary.</p>
+
+<h4>Éditeur multiband DRC</h4>
+<p>Cliquer "Edit Multiband" expose <em>3 bandes × 7 params</em> + 2
+crossover-Hz éditables (depuis E7.4c, où ils étaient initialement câblés
+fixes à 250/3500). Le widget réutilise la grille de l'éditeur DRC simple.</p>
+
+<h4>Éditeur biquads RBJ</h4>
+<p>Pour les kcontrols "TACx biquad N" (24 par TAC × 4 = 96 biquads), un
+mini-éditeur expose type (LPF/HPF/BPF/Peak/LowShelf/HighShelf), F0 (Hz),
+Q, gain (dB). Coefficients calculés en JS via la cookbook RBJ et poussés en
+blob.</p>
+
+<h4>Éditeur crossover</h4>
+<p>2 sliders Hz (lo/hi) entre 20 et 20 000 Hz, encoding LR-style 2nd-order.</p>
+
+<h3>2.6 Modaux BUS FX</h3>
+<p>Cliquer "Edit effect ▸" sur une carte BUS FX ouvre un modal centré
+listant les paramètres du moteur d'effet associé :</p>
+
+<table>
+<thead><tr><th>Effet</th><th>Paramètres</th><th>Plages</th></tr></thead>
+<tbody>
+<tr><td>Compressor</td><td>threshold, ratio, attack, release, makeup</td><td>−60..0 dB · 1..20:1 · 0.1..200 ms · 10..2000 ms · 0..24 dB</td></tr>
+<tr><td>Reverb</td><td>size, damp, wet</td><td>0..1 · 0..1 · 0..1</td></tr>
+<tr><td>Delay</td><td>time, feedback, wet</td><td>0..1000 ms · 0..0.95 · 0..1</td></tr>
+<tr><td>EQ 3-band</td><td>freq L/M/H, gain L/M/H, Q</td><td>20..20k Hz · ±18 dB · 0.3..10</td></tr>
+</tbody>
+</table>
+<p>Tous les sliders ont un debounce 50 ms et envoient un <code>op:set_fx_param</code>
+au daemon ; l'audio change immédiatement (smoothing inclus côté FX engine).
+Le bouton <em>Reset</em> renvoie un <code>op:reset_fx</code>.</p>
+
+<h3>2.7 Analyzer 4 taps</h3>
+<p>Depuis E7.5, quatre cartes <strong>Analyzer</strong> sont disposées en
+ligne sous les strips outputs. Chacune :</p>
+<ul>
+  <li>Permet de choisir une source : mono (input 0..25, output 0..17) ou
+      stéréo (paire link).</li>
+  <li>Affiche un <strong>FFT spectrum</strong> 128 bins (20 Hz à 24 kHz,
+      échelle log) avec hold-peak vert ;</li>
+  <li>Affiche un <strong>oscilloscope X-Y</strong> 64 échantillons stéréo
+      pour vérifier la phase / largeur stéréo ;</li>
+  <li>Affiche le <strong>RMS dBFS</strong> en numérique sous le scope.</li>
+</ul>
+<p>L'analyzer est rafraîchi à 30 Hz par le daemon (thread RT prio 60,
+inférieure à audio prio 80, pour ne jamais préempter le traitement).</p>
+
+<h3>2.8 Bouton tac-reset</h3>
+<p>En bas à droite de la barre supérieure, un bouton <em>"Reset TAC"</em>
+exécute <code>/usr/bin/tac-reset analog</code> via l'endpoint
+<code>POST /api/tac/reset</code>. Utile si la capture devient muette
+(typiquement après un reload du module sans cycle d'alim) ou si un TAC
+a perdu sa configuration.</p>
+<p>Implémentation : <code>pthread_mutex_trylock</code> + <code>fcntl flock</code>
+côté serveur pour éviter deux runs concurrents qui se marcheraient dessus
+au reset i2c.</p>
+</section>
+
+<!-- ====================== 3 — DEV GUIDE DAEMON ====================== -->
+<section class="break">
+<h2>3. Guide développeur — daemon mixer-pro</h2>
+
+<h3>3.1 Threads</h3>
+<p>Le daemon démarre 4 threads explicitement :</p>
+
+<table>
+<thead><tr><th>Thread</th><th>Prio</th><th>Rôle</th><th>Fonction d'entrée</th></tr></thead>
+<tbody>
+<tr><td><code>audio_thread</code></td><td>SCHED_FIFO 80</td><td>Capture 3 PCM (DSP mics + UAC2 + phone), mix matrix vers 18 channels, écriture analyzer taps, push dans ring SPSC</td><td><code>audio_thread()</code> ligne 320</td></tr>
+<tr><td><code>play_thread</code></td><td>SCHED_FIFO 80</td><td>Pop du ring SPSC, écriture vers 3 PCM playback</td><td><code>play_thread()</code> ligne 626</td></tr>
+<tr><td><code>control_thread</code></td><td>SCHED_OTHER</td><td>Accept + select sur socket UNIX, dispatch des ops JSON</td><td><code>control_thread()</code> ligne 1043</td></tr>
+<tr><td><code>analyzer_thread</code></td><td>SCHED_FIFO 60</td><td>FFT 1024 + Hann + scope pour les 4 taps, every 33 ms</td><td><code>analyzer_thread()</code> dans analyzer.c</td></tr>
+</tbody>
+</table>
+
+<p>Tous sont lancés en main() après <code>mlockall(MCL_CURRENT|MCL_FUTURE)</code>
+pour éviter les page-faults dans le hot path. La prio audio supérieure à
+analyzer garantit que la FFT ne préempte jamais le mix.</p>
+
+<h3>3.2 Ring buffer SPSC</h3>
+<p>Le ring SPSC est l'unique canal de communication audio entre
+<code>audio_thread</code> (producteur) et <code>play_thread</code>
+(consommateur). Choix de design :</p>
+
+<ul>
+  <li><strong>Pourquoi un ring</strong> : découpler la capture (qui doit lire
+      96 frames à l'heure ALSA exactement) de la playback (qui peut subir
+      des recover SOF jusqu'à 60 ms). Sans ring, le moindre stutter de
+      <code>snd_pcm_writei</code> bloquerait la capture et provoquerait un
+      xrun cascade.</li>
+  <li><strong>Taille</strong> : 8 periods × 96 frames × 18 ch × 4 octets =
+      <strong>55 KB</strong>, tient en L1+L2 du Cortex-A53.</li>
+  <li><strong>Tampon temporel</strong> : 8 periods × 2 ms = <strong>16 ms</strong>
+      de jitter absorbé sans drop. Au-delà, l'écriture overrun → drop
+      visible dans <code>ring_drops</code>, audio coupé jusqu'au recover
+      (acceptable, rare).</li>
+  <li><strong>Synchronisation</strong> : indices <code>rd</code>/<code>wr</code>
+      en <code>_Atomic unsigned</code>, ordonnés par
+      <code>memory_order_acquire</code> côté reader,
+      <code>memory_order_release</code> côté writer. Pas de mutex.</li>
+</ul>
+
+<pre><code>/* mixer-pro.c — extraits ring */
+static float       g_ring[N_RING_PERIODS][PERIOD_FRAMES][N_OUTPUT_TOTAL];
+static _Atomic unsigned g_ring_wr = 0;
+static _Atomic unsigned g_ring_rd = 0;
+static _Atomic unsigned g_ring_drops = 0;</code></pre>
+
+<h3>3.3 Mix matrix</h3>
+<p>Le cœur du mixeur est <code>mix_frame()</code> (ligne 273), appelé en
+boucle pour chaque frame du period :</p>
+
+<pre><code>static void mix_frame(const float in[N_INPUT_REAL],
+                      float out[N_OUTPUT_TOTAL],
+                      float bus_pre[N_BUS_FX_CH],
+                      float ret[N_RETURN_CH])
+{
+    /* 1. Apply input gains + mute → in_post[] */
+    /* 2. Sends : for each (i in 0..25, b in 0..7) {
+              bus_pre[b] += in_post[i] * g_st.send_gain[i][b]; } */
+    /* 3. Apply FX engines : ret[] = fx[k]->process(bus_pre[2k..2k+1]) */
+    /* 4. Master : for each (s in 0..33, o in 0..17) {
+              out[o] += sources[s] * g_st.master_gain[s][o]; } */
+}</code></pre>
+
+<p>La matrice <code>g_st.master_gain[34][18] = 612 floats</code> est
+intégralement lue chaque frame. À 48 kHz, c'est 30 millions de
+multiplications/sec, parfaitement dans les capacités du A53 (un seul cœur
+suffit, le reste du SoC est libre).</p>
+
+<h3>3.4 Smoothing &amp; ramp anti-zip</h3>
+<p>Chaque changement de gain (send ou master) déclenche une rampe linéaire de
+<code>GAIN_RAMP_FRAMES = 64</code> frames (= 1.33 ms à 48 kHz) entre
+ancienne et nouvelle valeur, pour éviter les "zip" audibles. Implémentation
+dans <code>smooth_gains()</code> (ligne 243), appelée par
+<code>audio_thread</code> en début de chaque period.</p>
+
+<h3>3.5 FX engines</h3>
+<p>Les 4 moteurs d'effets natifs C (fallback CPU avant que le DSP les
+absorbe) sont définis dans <code>effects.c</code> via une vtable simple :</p>
+
+<pre><code>typedef struct fx_engine_s fx_engine_t;
+struct fx_engine_s {
+    fx_type_t type;
+    void   *state;          /* opaque par engine */
+    void  (*process)(fx_engine_t *e, const float in[2], float out[2], int frames);
+    int   (*set_param)(fx_engine_t *e, const char *name, float v);
+    void  (*reset)(fx_engine_t *e);
+    void  (*destroy)(fx_engine_t *e);
+};</code></pre>
+
+<p>Engines fournis : <code>fx_compressor_new()</code>, <code>fx_reverb_new()</code>,
+<code>fx_delay_new()</code>, <code>fx_eq3_new()</code>. Chacun alloue son
+state à l'init (jamais dans process), expose son set de paramètres
+via une table <code>fx_param_spec_t[]</code> consultable par
+<code>op:get_fx</code>.</p>
+
+<h3>3.6 Analyzer FFT</h3>
+<p>L'analyzer est implémenté dans <code>analyzer.c</code> (≈ 200 lignes,
+zéro dépendance externe). Spécifications :</p>
+
+<table>
+<tbody>
+<tr><td>FFT</td><td>Radix-2 Cooley-Tukey iterative DIT, 1024 points (inline ≈ 70 lignes)</td></tr>
+<tr><td>Window</td><td>Hann, précomputée à l'init dans <code>w_hann[1024]</code></td></tr>
+<tr><td>Output</td><td>Magnitude dB, downsamplée 4:1 en peak-hold → 128 bins int8</td></tr>
+<tr><td>Scope</td><td>64 paires stéréo, conversion float → S16 par <code>l × 32767</code></td></tr>
+<tr><td>Rate</td><td>30 Hz (33 ms <code>nanosleep</code>)</td></tr>
+<tr><td>Concurrence</td><td>Double-buffer ring : <code>side</code> 0/1, atomic, audio_thread écrit, analyzer_thread lit</td></tr>
+</tbody>
+</table>
+
+<p>Le hot path côté audio est <code>analyzer_tap_write(t, l, r)</code> inline
+dans le header : 5 loads atomic + 2 stores ring + éventuel side-swap.
+Coût mesuré ≈ 3 ns par frame × 4 taps actifs = 12 ns/frame, négligeable
+devant les 30 ns du mix.</p>
+
+<h3>3.7 ALSA setup</h3>
+<p>Ouverture PCM via <code>pcm_open()</code> (ligne 167). Paramètres fixes :</p>
+<pre><code>access      = SND_PCM_ACCESS_RW_INTERLEAVED
+format      = SND_PCM_FORMAT_S32_LE
+rate        = 48000
+channels    = 8 (DSP/UAC2) ou 2 (phone)
+period      = 96 frames
+buffer      = 4 × 96 = 384 frames
+start_thr   = 1 buffer  (start au premier write)
+stop_thr    = ULONG_MAX (jamais d'auto-stop)</code></pre>
+
+<p>Sur xrun, <code>pcm_recover()</code> (ligne 222) appelle
+<code>snd_pcm_recover(.., 1)</code> avec silent=1 pour ne pas spammer
+le journal en cas de cascade.</p>
+
+<h3>3.8 Sécurité runtime</h3>
+<ul>
+  <li><code>mlockall(MCL_CURRENT|MCL_FUTURE)</code> à l'init pour pin la
+      mémoire ;</li>
+  <li><code>pthread_setschedparam(SCHED_FIFO, prio)</code> par thread ;</li>
+  <li><code>signalfd</code> ou <code>sigaction</code> sur SIGINT/SIGTERM pour
+      un shutdown propre avec drain ring + close PCM ;</li>
+  <li><code>LimitMEMLOCK=infinity</code> et <code>LimitRTPRIO=99</code> dans
+      le systemd unit (<code>mixer-pro.service</code>) ;</li>
+  <li>Pas d'allocation, pas de printf, pas de syscall bloquante dans
+      <code>audio_thread</code> ni <code>play_thread</code> (mlog est
+      bloqué à init).</li>
+</ul>
+</section>
+
+<!-- ====================== 4 — JSON PROTOCOL ====================== -->
+<section class="break">
+<h2>4. Protocole JSON sur /run/mixer-pro.sock</h2>
+
+<h3>4.1 Format</h3>
+<p>Socket UNIX <code>SOCK_STREAM</code> à <code>/run/mixer-pro.sock</code>,
+permissions 0666. Le protocole est <strong>line-based</strong> : une
+requête = une ligne JSON terminée par <code>\n</code>, une réponse = une ou
+plusieurs lignes JSON.</p>
+
+<p>Le parser est hand-rolled (pas de cJSON) — il s'agit d'extraire 4 types
+de champs :</p>
+<ul>
+  <li><code>json_get_str(buf, key, out, max)</code> — string entre guillemets ;</li>
+  <li><code>json_get_int(buf, key, *out)</code> — entier décimal ;</li>
+  <li><code>json_get_float(buf, key, *out)</code> — float décimal ;</li>
+  <li><code>json_has_op(buf, "name")</code> — match l'opération.</li>
+</ul>
+<p>C'est suffisant car le format des messages est figé et contrôlé par
+mixer-gui-http. Aucune validation stricte n'est faite — un message
+malformé est silencieusement ignoré.</p>
+
+<h3>4.2 Opérations</h3>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">set_send</span>
+<div class="desc"><code>{ "op":"set_send", "in":&lt;0..25&gt;, "bus":&lt;0..7&gt;, "gain":&lt;float&gt; }</code><br>
+Met à jour <code>send_gain[in][bus]</code>. Active la ramp anti-zip.</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">set_master</span>
+<div class="desc"><code>{ "op":"set_master", "src":&lt;0..25&gt;, "out":&lt;0..17&gt;, "gain":&lt;float&gt; }</code><br>
+Met à jour <code>master_gain[src][out]</code>. src 0..17 = inputs réels, 18..25 = returns FX. Active la ramp anti-zip.</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">set_fx_bus</span>
+<div class="desc"><code>{ "op":"set_fx_bus", "bus":&lt;0..3&gt;, "type":"compressor|reverb|delay|eq3" }</code><br>
+Recrée le moteur d'effet sur ce bus. Détruit l'ancien.</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">set_input_gain</span>
+<div class="desc"><code>{ "op":"set_input_gain", "src":&lt;0..25&gt;, "gain":&lt;float&gt; }</code><br>
+Strip gain unitaire (E7.2). 0..2.0 linéaire.</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">set_mute</span>
+<div class="desc"><code>{ "op":"set_mute", "src":&lt;0..25&gt;, "mute":&lt;0|1&gt; }</code><br>
+Mute hard sur la voie (gain forcé à 0 avec ramp).</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">get_strip_routing</span>
+<div class="desc"><code>{ "op":"get_strip_routing", "src":&lt;0..25&gt; }</code><br>
+Réponse : <code>{ "sends":[8 floats], "master":[18 floats], "gain":float, "mute":int }</code></div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">get_state</span>
+<div class="desc"><code>{ "op":"get_state" }</code><br>
+Snapshot complet : version, send_gain[26][8], master_gain[34][18], input_gain[26], mute[26], fx_types[4], fx_params[4][...].</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">set_fx_param</span>
+<div class="desc"><code>{ "op":"set_fx_param", "bus":&lt;0..3&gt;, "name":"threshold|size|...", "value":&lt;float&gt; }</code><br>
+Met à jour un paramètre du moteur FX du bus. Routing vers la vtable <code>set_param</code>.</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">get_fx</span>
+<div class="desc"><code>{ "op":"get_fx", "bus":&lt;0..3&gt; }</code><br>
+Réponse : type courant + dictionnaire des paramètres.</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">get_meters</span>
+<div class="desc"><code>{ "op":"get_meters" }</code><br>
+Réponse compacte JSON ≤ 16 KB : tableau de niveaux RMS par strip (in / out / return) + payload analyzer 4 taps (spec128 + scope128 + rms_dB).</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">set_tap</span>
+<div class="desc"><code>{ "op":"set_tap", "id":&lt;0..3&gt;, "kind":&lt;0|1|2|3&gt;, "a":&lt;idx&gt;, "b":&lt;idx|-1&gt; }</code><br>
+Reconfigure un slot analyzer. kind : 0=NONE, 1=INPUT, 2=BUS_PRE, 3=OUTPUT. b=-1 → mono.</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">get_taps</span>
+<div class="desc"><code>{ "op":"get_taps" }</code><br>
+Réponse : configuration courante des 4 slots analyzer.</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">reset_fx</span>
+<div class="desc"><code>{ "op":"reset_fx", "bus":&lt;0..3&gt; }</code><br>
+Restaure les paramètres FX par défaut sur ce bus.</div>
+</div>
+
+<div class="endpoint">
+<span class="method">OP</span><span class="path">reset</span>
+<div class="desc"><code>{ "op":"reset" }</code><br>
+Remet toute la matrice à 0 et tous les strip gains à 1.</div>
+</div>
+
+<h3>4.3 Exemples (depuis le shell board)</h3>
+<pre><code># Ouvrir M3 → S5 à -6 dB
+echo '{"op":"set_master","src":2,"out":4,"gain":0.5}' | nc -U /run/mixer-pro.sock
+
+# Snapshot complet
+echo '{"op":"get_state"}' | nc -U /run/mixer-pro.sock
+
+# Configurer tap 0 sur la sortie S1+S2 stéréo
+echo '{"op":"set_tap","id":0,"kind":3,"a":0,"b":1}' | nc -U /run/mixer-pro.sock</code></pre>
+</section>
+
+<!-- ====================== 5 — DEV GUIDE GUI HTTP ====================== -->
+<section class="break">
+<h2>5. Guide développeur — mixer-gui-http</h2>
+
+<h3>5.1 Architecture</h3>
+<p><code>mixer-gui-http</code> est un serveur HTTP minimal écrit en C basé
+sur <strong>libmicrohttpd</strong>. Il joue trois rôles :</p>
+<ol>
+  <li><strong>Reverse-proxy JSON</strong> vers <code>/run/mixer-pro.sock</code> :
+      reçoit les requêtes du browser, sérialise l'op JSON, lit la réponse,
+      la renvoie.</li>
+  <li><strong>Static file server</strong> pour <code>index.html</code> et
+      assets (Tailwind/Alpine CDN charges depuis le navigateur, donc seul
+      le HTML est servi).</li>
+  <li><strong>Pont kernel</strong> pour les actions privilégiées :
+      <code>amixer cset/contents</code>, <code>tac-reset</code>, écriture
+      blobs TLV SOF.</li>
+</ol>
+
+<h3>5.2 Endpoints REST</h3>
+
+<table>
+<thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>GET</td><td><code>/</code></td><td>Renvoie <code>www/index.html</code> (Alpine.js single-page)</td></tr>
+<tr><td>GET</td><td><code>/api/version</code></td><td>Version GUI + version daemon</td></tr>
+<tr><td>GET</td><td><code>/api/state</code></td><td>Proxy → <code>op:get_state</code></td></tr>
+<tr><td>GET</td><td><code>/api/meters</code></td><td>Proxy → <code>op:get_meters</code> (JSON court)</td></tr>
+<tr><td>GET</td><td><code>/api/strip/routing?src=N</code></td><td>Proxy → <code>op:get_strip_routing</code></td></tr>
+<tr><td>POST</td><td><code>/api/send/set</code></td><td>Proxy → <code>op:set_send</code></td></tr>
+<tr><td>POST</td><td><code>/api/master/set</code></td><td>Proxy → <code>op:set_master</code></td></tr>
+<tr><td>POST</td><td><code>/api/strip/gain/set</code></td><td>Proxy → <code>op:set_input_gain</code></td></tr>
+<tr><td>POST</td><td><code>/api/strip/mute/set</code></td><td>Proxy → <code>op:set_mute</code></td></tr>
+<tr><td>POST</td><td><code>/api/fx/bus/set</code></td><td>Proxy → <code>op:set_fx_bus</code></td></tr>
+<tr><td>POST</td><td><code>/api/fx/param/set</code></td><td>Proxy → <code>op:set_fx_param</code></td></tr>
+<tr><td>POST</td><td><code>/api/fx/reset</code></td><td>Proxy → <code>op:reset_fx</code></td></tr>
+<tr><td>GET</td><td><code>/api/tap/list</code></td><td>Proxy → <code>op:get_taps</code></td></tr>
+<tr><td>POST</td><td><code>/api/tap/set</code></td><td>Proxy → <code>op:set_tap</code></td></tr>
+<tr><td>GET</td><td><code>/api/alsa/contents</code></td><td>Exec <code>amixer -c softac5212tdm contents</code>, parse, renvoie en JSON</td></tr>
+<tr><td>POST</td><td><code>/api/alsa/set</code></td><td>Exec <code>amixer -c softac5212tdm cset numid=N value</code></td></tr>
+<tr><td>POST</td><td><code>/api/dsp/blob/set</code></td><td>Écrit un blob binaire dans un kcontrol TLV (numid + payload hex)</td></tr>
+<tr><td>POST</td><td><code>/api/tac/reset</code></td><td>Lance <code>/usr/bin/tac-reset analog</code> en sous-processus mutex+flock</td></tr>
+<tr><td>POST</td><td><code>/api/system/restart</code></td><td><code>systemctl restart mixer-pro</code></td></tr>
+<tr><td>GET</td><td><code>/api/stream/meters</code></td><td>SSE streaming 30 Hz : meters + analyzer</td></tr>
+</tbody>
+</table>
+
+<h3>5.3 SSE streaming</h3>
+<p>Pour éviter le coût d'un long-poll HTTP, le streaming meters/analyzer est
+servi par <strong>Server-Sent Events</strong> :</p>
+<pre><code>Content-Type: text/event-stream
+Cache-Control: no-cache
+
+data: {"meters":[...],"analyzer":[{...},{...},{...},{...}]}
+
+data: {"meters":[...],"analyzer":[...]}
+</code></pre>
+<p>Côté serveur, un thread dédié par connection (libmicrohttpd
+<code>MHD_USE_THREAD_PER_CONNECTION</code>) appelle
+<code>op:get_meters</code> via le socket UNIX à 30 Hz et flush la réponse
+SSE.</p>
+
+<h3>5.4 Modèle Alpine.js</h3>
+<p>Le front est un seul fichier <code>index.html</code> (≈ 3 200 lignes,
+inlined CSS Tailwind + JS Alpine.js). Le state Alpine est :</p>
+
+<pre><code>function app() { return {
+    /* ── connexion ── */
+    online: false, lastTickMs: 0, version: '',
+    /* ── état mixer ── */
+    state: { send_gain: null, master_gain: null,
+             input_gain: null, mute: null,
+             fx_types: ['compressor','reverb','delay','eq3'],
+             fx_params: [{}, {}, {}, {}] },
+    /* ── meters & analyzer ── */
+    meters: { in:[], ret:[], out:[] },
+    analyzer: [ { spec:[], scope:[], rms:-120 }, ... ],
+    /* ── sélection ── */
+    selectedStrip: -1, selectedKind: 'input',
+    /* ── routing courant de la sidebar ── */
+    stripRouting: { sends:[], master:[], gain:1, mute:0 },
+    /* ── returns destinations cache (E7.7) ── */
+    returnsRouting: [ { L:[18], R:[18] } × 4 ],
+    /* ── blobs DSP (kcontrols BYTES) ── */
+    dspBlobs: { /* numid → { name, type, bytes } */ },
+    ...
+}}</code></pre>
+
+<p>Les fetches utilisent <code>fetch()</code> avec
+<code>AbortController</code> pour ne pas paralléliser les
+<code>get_strip_routing</code> en cas de double-click. La réactivité est
+naturelle : tous les changements d'état dans <code>state</code> ou
+<code>analyzer</code> repropagent automatiquement vers le DOM via le
+proxy Alpine.</p>
+
+<div class="callout warn">
+<span class="label">Piège</span>
+Toute affectation directe d'objet <code>dspBlobs[id] = { ... }</code> casse
+le proxy Alpine et la réactivité. Mutation correcte :
+<code>Object.assign(dspBlobs[id], { ... })</code>. Bug rencontré en E7.4b
+avec le multiband DRC (les sliders n'apparaissaient pas).
+</div>
+
+<h3>5.5 Écriture blobs DSP (TLV SOF binary)</h3>
+<p>Les kcontrols BYTES côté SOF sont écrits via <code>amixer cset</code> avec
+un payload TLV. Bug historique (corrigé E7.4d) : le tag TLV initialement
+codé <code>0x1004</code> (SOF_CTRL_TLV_DATA, format IPC4) est rejeté par le
+kernel SOF en IPC3 qui vérifie <code>header.numid == scontrol->cmd</code>.
+Le bon tag pour blobs IPC3 est <code>SOF_CTRL_CMD_BINARY = 3</code>.</p>
+
+<pre><code>/* mixer-gui-http.c — sof_blob_write */
+struct {
+    uint32_t numid;        /* MUST = 3 (SOF_CTRL_CMD_BINARY) for IPC3 */
+    uint32_t length;       /* size of payload in bytes */
+    uint8_t  data[];       /* the blob */
+} tlv = { 3, len, ... };
+ioctl(snd_ctl_elem_write, &tlv);</code></pre>
+
+<p>Le parser du POST body utilise 3 <code>strchr</code> successifs pour
+sauter au-delà de la colonne, du <code>"</code> d'ouverture, puis du
+<code>"</code> de la valeur — bug historique (E7.4d) où seuls 2 strchr
+étaient utilisés, ce qui faisait échouer l'écriture avec "malformed hex".</p>
+</section>
+
+<!-- ====================== 6 — BUILD & DEPLOY ====================== -->
+<section class="break">
+<h2>6. Build &amp; déploiement</h2>
+
+<h3>6.1 Recipes Yocto</h3>
+<p>Trois recipes vivent dans <code>meta-local/recipes-audio/</code> :</p>
+
+<table>
+<thead><tr><th>Recipe</th><th>Sources</th><th>Output</th></tr></thead>
+<tbody>
+<tr><td><code>mixer-pro_1.0.bb</code></td><td>mixer-pro.{c,h}, analyzer.{c,h}, effects.{c,h}, mixerctl.c, Makefile, mixer-pro.service</td><td><code>/usr/bin/mixer-pro</code>, <code>/usr/bin/mixerctl</code>, <code>/lib/systemd/system/mixer-pro.service</code></td></tr>
+<tr><td><code>mixer-gui-http_1.0.bb</code></td><td>mixer-gui-http.c, www/index.html, Makefile, mixer-gui-http.service</td><td><code>/usr/bin/mixer-gui-http</code>, <code>/var/www/mixer-gui/index.html</code>, <code>/lib/systemd/system/mixer-gui-http.service</code></td></tr>
+<tr><td><code>tac5212-service_1.0.bb</code></td><td>tac-reset script + service</td><td><code>/usr/bin/tac-reset</code>, <code>/lib/systemd/system/tac5212.service</code></td></tr>
+</tbody>
+</table>
+
+<p>Tous trois sont ajoutés à <code>imx-image-full</code> via
+<code>IMAGE_INSTALL:append = " mixer-pro mixer-gui-http tac5212-service"</code>
+dans <code>recipes-core/images/imx-image-full.bbappend</code>.</p>
+
+<h3>6.2 systemd units</h3>
+<p>L'unité <code>mixer-pro.service</code> :</p>
+<pre><code>[Unit]
+Description=mixer-pro DAW mixing daemon
+After=tac5212.service sound.target
+Requires=tac5212.service
+
+[Service]
+ExecStartPre=/usr/bin/tac-reset analog
+ExecStart=/usr/bin/mixer-pro --no-uac2 --no-phone
+TimeoutStartSec=30
+LimitMEMLOCK=infinity
+LimitRTPRIO=99
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+
+<p>Les flags <code>--no-uac2</code> et <code>--no-phone</code> sont
+temporaires en attendant que les recipes UAC2 et phone aloop soient stables ;
+ils permettent à mixer-pro de démarrer même si ces PCM ne sont pas
+disponibles.</p>
+
+<h3>6.3 Push incremental (sans full re-flash)</h3>
+<pre><code># Rebuild ciblé
+bitbake mixer-pro mixer-gui-http
+
+# scp les binaires
+IMG_PRO=Model_AB_Infinity/tmp/work/armv8a-poky-linux/mixer-pro/1.0/image
+IMG_GUI=Model_AB_Infinity/tmp/work/armv8a-poky-linux/mixer-gui-http/1.0/image
+
+scp $IMG_PRO/usr/bin/mixer-pro    root@192.168.0.9:/usr/bin/
+scp $IMG_GUI/usr/bin/mixer-gui-http root@192.168.0.9:/usr/bin/
+scp $IMG_GUI/var/www/mixer-gui/index.html root@192.168.0.9:/var/www/mixer-gui/
+
+# Redémarrer
+ssh root@192.168.0.9 \
+    "systemctl restart mixer-pro mixer-gui-http"</code></pre>
+
+<p>Le redémarrage est non destructif côté audio : le ring SPSC se draine, les
+PCM se ferment proprement, et mixer-pro restart en &lt; 1 s avec
+ré-application des kcontrols par défaut. Les paramètres ne sont
+<em>pas</em> persistants (dette E7.8 — voir roadmap).</p>
+</section>
+
+<!-- ====================== 7 — DEBUG & PROFILING ====================== -->
+<section class="break">
+<h2>7. Debug &amp; profiling</h2>
+
+<h3>7.1 Logs</h3>
+<pre><code># Logs daemon mixer-pro (mlog → stderr via systemd)
+journalctl -u mixer-pro -f
+
+# Logs GUI HTTP server
+journalctl -u mixer-gui-http -f
+
+# Kernel ALSA / SOF
+dmesg -w | grep -iE 'sof|tac5212|sai|softac5212tdm'</code></pre>
+
+<p>Points de vigilance :</p>
+<ul>
+  <li><code>ALSA xrun</code> dans dmesg → période trop courte ou load CPU
+      trop fort. Vérifier <code>top -H</code> pour les threads RT.</li>
+  <li><code>ring_drops</code> en log mixer-pro → tampon SPSC débordé,
+      typiquement après un recover SOF &gt; 16 ms.</li>
+  <li><code>SOF IPC error</code> dans dmesg → firmware DSP désynchronisé,
+      lancer <code>tac-reset analog</code>.</li>
+</ul>
+
+<h3>7.2 mixerctl CLI</h3>
+<p>Le binaire <code>mixerctl</code> (90 lignes) permet de scripter toutes
+les opérations JSON depuis le shell :</p>
+<pre><code>mixerctl get_state
+mixerctl set_master src=2 out=4 gain=0.5
+mixerctl set_tap id=0 kind=3 a=0 b=1
+mixerctl set_fx_param bus=0 name=threshold value=-12.0</code></pre>
+
+<div class="callout warn">
+<span class="label">Note</span>
+mixerctl n'est <em>pas encore</em> déployé sur la board (oubli dans
+<code>FILES:${PN} =</code> du recipe, dette E7.7). Workaround :
+<code>nc -U /run/mixer-pro.sock</code> + JSON brut.
+</div>
+
+<h3>7.3 Pistes de profilage</h3>
+<ul>
+  <li><code>perf top -C 0,1 -g</code> pour identifier le hot path du mix sur
+      les A53 ;</li>
+  <li><code>perf stat -e cache-misses,cycles</code> pour mesurer l'efficacité
+      L1/L2 du ring SPSC ;</li>
+  <li><code>cyclictest -p 80 -t 1 -i 2000 -l 100000</code> pour mesurer le
+      jitter SCHED_FIFO du kernel (PREEMPT activé, attendre &lt; 100 µs) ;</li>
+  <li>eBPF tracing : <code>bpftrace -e 'kprobe:snd_pcm_recover { @[comm] = count(); }'</code>
+      pour compter les recover ALSA par process.</li>
+</ul>
+</section>
+
+<!-- ====================== 8 — ROADMAP ====================== -->
+<section>
+<h2>8. Roadmap &amp; extensions envisagées</h2>
+
+<table>
+<thead><tr><th>Item</th><th>Sévérité</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>E7.8 — persistance state</td><td>moyenne</td><td>Snapshot binaire au shutdown + restore au boot. Cible : gains, sends, mutes, types FX, params FX, taps, kcontrols ALSA, blobs DSP.</td></tr>
+<tr><td>E7.x — presets nommés</td><td>moyenne</td><td>Live / Studio / Conf — pouvoir basculer entre 3 snapshots typés.</td></tr>
+<tr><td>E8 — programme GUI temps réel avancé</td><td>haute</td><td>Couplage tap NPU + analyzer GUI : FFT NPU + FFT voie + édition simultanée DSP/TAC en direct (objectif final V5.4.x).</td></tr>
+<tr><td>Migration FX vers DSP</td><td>moyenne</td><td>Les 4 moteurs natifs C deviennent un fallback ; le DSP HiFi4 absorbe les bus FX au full.</td></tr>
+<tr><td>Dette : mixerctl pas dans imx-image-full</td><td>faible</td><td>FILES:${PN} += à compléter dans le recipe.</td></tr>
+<tr><td>Dette : kernel-module-imx-audio-tap deb packaging</td><td>haute</td><td>Bloque <code>bitbake imx-image-full -c rootfs</code>. Pré-existant à E7.7.</td></tr>
+<tr><td>WS au lieu de SSE</td><td>faible</td><td>SSE est unidirectionnel — un WebSocket permettrait de réduire la latence des ack côté UI sur set_param.</td></tr>
+<tr><td>Authentification</td><td>haute (prod)</td><td>L'API REST est ouverte sur le LAN sans auth. Pas critique en dev, à régler avant déploiement client.</td></tr>
+</tbody>
+</table>
+
+<p style="margin-top: 30px; font-size: 9pt; color: var(--muted); text-align: center;
+          border-top: 1px solid var(--line); padding-top: 14px;">
+Fin du document — mixer-pro guide v7.0-e7.7b · 2026-05-13 · Michael Jouannigot · Electrosens
+</p>
+</section>
+
+</body>
+</html>

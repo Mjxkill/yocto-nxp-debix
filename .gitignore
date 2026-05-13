@@ -34,6 +34,7 @@ IMX8MPRM.pdf
 sbaa383c.pdf
 tac5212.pdf
 !ARCHI/*.pdf
+!DOCS/*.pdf
 
 # Build artefacts root
 flash.bin
