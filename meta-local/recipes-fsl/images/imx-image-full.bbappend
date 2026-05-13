@@ -9,6 +9,13 @@ IMAGE_INSTALL:append = " imx-dsp imx-dsp-codec-ext imx-dspc-asrc speexdsp ladspa
 # SOF (Sound Open Firmware) for HiFi4 DSP audio processing
 IMAGE_INSTALL:append = " sof-zephyr sof-tools"
 
+# V7.0 — custom SOF firmware (.ri) + TAC5212 topology (.tplg) — overrides
+# the vendor sof-zephyr binary which lacks TAC5212 codec support and the
+# project patches (multiband_drc multi-config, NPU dual-tap, DRC D3,
+# SAI TX FIFO align). See ARCHI §15 for build procedure to refresh from
+# the local sof/ source tree if firmware code changes.
+IMAGE_INSTALL:append = " sof-firmware-custom"
+
 # V3.2.2 NPU audio tap — kernel module exposing /dev/imx-audio-tap (mmap shared mem)
 IMAGE_INSTALL:append = " kernel-module-imx-audio-tap"
 
