@@ -39,7 +39,7 @@
 #include <microhttpd.h>
 #include <alsa/asoundlib.h>
 
-#define GUI_VERSION       "v7.0-e7.5b"
+#define GUI_VERSION       "v7.0-e7.7a"
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"

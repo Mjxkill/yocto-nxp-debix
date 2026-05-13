@@ -354,6 +354,32 @@ html, body {
   text-transform: uppercase; letter-spacing: 0.5px;
 }
 .fx-card .fx-reset:hover { background: rgba(245, 158, 11, 0.2); }
+.fx-routed-to {
+  display: flex; flex-wrap: wrap; gap: 3px; align-items: center;
+  margin: 4px 0 6px; padding-top: 6px;
+  border-top: 1px dashed rgba(255,255,255,0.08);
+}
+.fx-routed-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.4px;
+  text-transform: uppercase; color: var(--text-mute);
+  margin-right: 4px;
+}
+.fx-rt-empty {
+  font-size: 9.5px; color: var(--text-mute); font-style: italic;
+}
+.fx-rt-tag {
+  font-size: 9.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 1px 5px; border-radius: 3px; line-height: 1.5;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-pri);
+}
+.fx-rt-tag.lr { color: var(--good);  border-color: rgba(52,211,153,0.4);
+                background: rgba(52,211,153,0.10); }
+.fx-rt-tag.l  { color: var(--accent); border-color: rgba(45,212,191,0.4);
+                background: rgba(45,212,191,0.10); }
+.fx-rt-tag.r  { color: var(--accent-2); border-color: rgba(245,158,11,0.4);
+                background: rgba(245,158,11,0.10); }
 .fx-card .fx-placeholder-knobs {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
   margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(245,158,11,0.1);
@@ -1184,6 +1210,18 @@ html, body {
                  @input.debounce.50ms="setFxBus((b-1)*2+1, $event.target.value)">
           <span class="fx-val" x-text="fxBusGain[(b-1)*2+1].toFixed(2)"></span>
         </div>
+        <!-- Where the post-FX return is currently routed (master matrix) -->
+        <div class="fx-routed-to">
+          <span class="fx-routed-label">Returns to</span>
+          <template x-if="fxReturnDestinations(b-1).length === 0">
+            <span class="fx-rt-empty">— no output —</span>
+          </template>
+          <template x-for="d in fxReturnDestinations(b-1)" :key="'fx'+b+'_'+d.idx">
+            <span class="fx-rt-tag"
+                  :class="d.side === 'B' ? 'lr' : (d.side === 'L' ? 'l' : 'r')"
+                  x-text="d.label + (d.side === 'B' ? '' : ' '+d.side)"></span>
+          </template>
+        </div>
         <button class="fx-edit-btn" @click="openFxBus(b-1)">Edit effect ▸</button>
         <button class="fx-reset" @click="resetFx(b-1)">Reset bus</button>
       </div>
@@ -1666,6 +1704,16 @@ function mixerApp() {
      * the user sees one group at a time instead of stacking all of them. */
     activeEffectTab: '',
 
+    /* E7.7 — Returns FX master routing snapshot, keyed by FX bus index.
+     * `returnsRouting[b]` holds the master gains for L (idx 18+2b) and R
+     * (idx 19+2b) — each a 18-long array of gains for the 18 outputs.
+     * Populated by fetchAllReturnsRouting() at init() and refreshed when
+     * the user changes any master route. */
+    returnsRouting: [
+      { L: null, R: null }, { L: null, R: null },
+      { L: null, R: null }, { L: null, R: null },
+    ],
+
     /* E7.5 — 4 analyzer taps. Mirror of daemon's g_taps[] :
      *   kind : 0 none, 1 input, 2 bus_pre, 3 output
      *   a/b  : channel indices, b=-1 = mono. */
@@ -1692,6 +1740,7 @@ function mixerApp() {
       await this.fetchAlsaControls();
       this.initBiquadParams();
       await this.fetchFxStates();
+      await this.fetchAllReturnsRouting();
     },
 
     initStream() {
@@ -2006,6 +2055,66 @@ function mixerApp() {
       }
     },
 
+    /* E7.7 — fetch master routing of one return strip and store on
+     * returnsRouting[b].{L|R}. b = bus index 0..3, src 18..25 maps to
+     * (b = (src-18) >> 1, side = (src-18) & 1 ? 'R' : 'L'). */
+    async _fetchReturnMaster(src) {
+      try {
+        const r = await fetch('/api/cmd', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({op:'get_strip_routing', src}),
+        });
+        const j = await r.json();
+        if (j && j.ok && Array.isArray(j.master)) return j.master.slice();
+      } catch(e) { console.warn('_fetchReturnMaster failed', e); }
+      return null;
+    },
+
+    async fetchAllReturnsRouting() {
+      const promises = [];
+      for (let src = 18; src <= 25; src++) promises.push(this._fetchReturnMaster(src));
+      const results = await Promise.all(promises);
+      for (let i = 0; i < 8; i++) {
+        const b = i >> 1;
+        const side = (i & 1) ? 'R' : 'L';
+        if (!this.returnsRouting[b]) this.returnsRouting[b] = { L:null, R:null };
+        this.returnsRouting[b][side] = results[i];
+      }
+    },
+
+    async refreshReturnRouting(src) {
+      const m = await this._fetchReturnMaster(src);
+      if (!m) return;
+      const i = src - 18;
+      const b = i >> 1;
+      const side = (i & 1) ? 'R' : 'L';
+      this.returnsRouting[b][side] = m;
+    },
+
+    /* Returns a compact list of { idx, label, side:'L'|'R'|'B' } for the
+     * outputs receiving the FX bus `b` post-FX return. side='B' (Both)
+     * when L and R of the return are routed to the same output ; else
+     * one entry per active side. Threshold = -60 dB (~0.001 linear). */
+    fxReturnDestinations(b) {
+      const rr = this.returnsRouting[b];
+      if (!rr || !rr.L || !rr.R) return [];
+      const THR = 0.001;
+      const labels = (i) =>
+        i < 8  ? 'S' + (i + 1) :
+        i < 16 ? 'U' + (i - 7) :
+                 'P' + (i - 15);
+      const out = [];
+      for (let o = 0; o < 18; o++) {
+        const l = (rr.L[o] || 0) > THR;
+        const r = (rr.R[o] || 0) > THR;
+        if (!l && !r) continue;
+        out.push({ idx: o, label: labels(o),
+                   side: (l && r) ? 'B' : (l ? 'L' : 'R') });
+      }
+      return out;
+    },
+
     async openStripDetail(i, label, kind, isOutput) {
       this.selectedStrip = i;
       this.selectedIsOutput = !!isOutput;
@@ -2048,6 +2157,10 @@ function mixerApp() {
         const pair = src ^ 1;
         this.sendCmd({op:'set_master', src:pair, out, gain});
       }
+      /* E7.7 : if the strip being routed is a return (idx 18..25),
+       * refresh the cached returnsRouting so the BUS FX sidebar tags
+       * update in real time. */
+      if (src >= 18 && src <= 25) this.refreshReturnRouting(src);
     },
     setSendRoute(bus, db) {
       if (this.selectedStrip === null) return;
