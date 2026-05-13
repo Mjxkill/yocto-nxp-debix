@@ -1024,77 +1024,783 @@ plancher physique 10 ms (théorème de Little), cible reportée à V8.</p>
 
 <!-- ====================== 8. KERNEL PATCHES INVENTORY ====================== -->
 <section class="break">
-<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">8.</span> Inventaire patches kernel Linux actifs</h2>
-<p>10 patches actifs déclarés dans <code>meta-local/recipes-kernel/linux/linux-imx_%.bbappend</code>.</p>
+<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">8.</span> Inventaire patches kernel Linux — code &amp; rationale</h2>
 
-<h3>8.1 Patches binaires <code>.patch</code></h3>
+<p class="lede">
+Cette section détaille chaque patch kernel actif appliqué au-dessus de
+<code>linux-imx 6.6.36-2.2.0</code> (NXP L6.12.3 release). Pour chaque
+patch : ce que le code fait exactement, et la raison empirique ou de
+conception qui a motivé sa création. Les patches sont déclarés dans
+<code>meta-local/recipes-kernel/linux/linux-imx_%.bbappend</code> et
+appliqués en deux phases :
+<code>do_patch:prepend</code> (sources copiées, Kconfig/Makefile sed) puis
+<code>do_patch:append</code> (scripts Python qui éditent le DTS et certains
+fichiers C).
+</p>
+
+<h3>8.1 Patch <code>0001-imx8mp-evk-audio-mipi.patch</code></h3>
+
+<div class="callout info">
+<span class="label">Type</span> Patch unifié appliqué directement par
+<code>SRC_URI += "file://..."</code><br>
+<span class="label">Cible</span> <code>arch/arm64/boot/dts/freescale/imx8mp-evk.dts</code><br>
+<span class="label">Phase</span> Phase 0 — bring-up board
+</div>
+
+<h4>Ce que le patch fait</h4>
+<ul>
+  <li>Réassigne la GPIO de détection casque : <code>&amp;gpio4 29</code>
+      (référence NXP EVK) → <code>&amp;gpio2 29 GPIO_ACTIVE_LOW</code>
+      (câblage Debix Model AB).</li>
+  <li>Ajoute deux nœuds <strong>SPDIF</strong> dummy : <code>spdif_dir</code>
+      (récepteur, compatible <code>linux,spdif-dir</code>) et
+      <code>spdif_dit</code> (émetteur, compatible <code>linux,spdif-dit</code>),
+      tous deux avec <code>#sound-dai-cells = &lt;0&gt;</code>.</li>
+  <li>Ajuste quelques widgets de la sound-card par défaut (commentaires
+      audio-widgets/audio-routing).</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>Le DTS NXP EVK référence des GPIOs qui n'existent pas sur le câblage
+réel de la Debix Model AB. Sans cette correction, le kernel panic au
+boot sur la sound-card par défaut (<code>jack detection IRQ</code> sans
+GPIO valide). Les nœuds SPDIF sont ajoutés pour pouvoir tester ces lignes
+matérielles plus tard ; ils n'ont aucun effet sur les TDM TAC5212.</p>
+
+<p class="callout note"><span class="label">Note</span> Les patches
+<code>0002-add-tac5212-codec-driver.patch</code> et
+<code>0003-imx8mp-evk-tac5212-tdm.patch</code> sont des stubs historiques
+laissés dans le repo mais <strong>désactivés</strong> dans le
+<code>SRC_URI</code> — ils ont été superseded par
+<code>do_patch:prepend</code> (copie de <code>tac5212.c</code>) et
+<code>apply-tac5212-dt.py</code> respectivement, parce qu'un patch unifié
+sur un DTS qui change à chaque version de kernel cassait à chaque rebase.</p>
+
+<h3>8.2 Config fragments <code>.cfg</code></h3>
+
 <table>
-<thead><tr><th>Fichier</th><th>Effet</th></tr></thead>
+<thead><tr><th>Fichier</th><th>Lignes</th><th>Effet</th></tr></thead>
 <tbody>
-<tr><td><code>0001-imx8mp-evk-audio-mipi.patch</code></td><td>Vendor NXP — ajustements board audio SAI + MIPI-DSI</td></tr>
-<tr><td><code>0002-add-tac5212-codec-driver.patch</code></td><td>Stub historique — superseded par <code>do_patch:prepend</code></td></tr>
-<tr><td><code>0003-imx8mp-evk-tac5212-tdm.patch</code></td><td>Stub historique — superseded par <code>apply-tac5212-dt.py</code></td></tr>
+<tr><td><code>spdif.cfg</code></td><td>
+<pre><code>CONFIG_SND_SOC_SPDIF=y
+CONFIG_SND_SOC_SPDIF_RX=y
+CONFIG_SND_SOC_SPDIF_DIR=y</code></pre></td>
+<td>Active les drivers ALSA SPDIF DIT/DIR built-in (pas modules), nécessaires pour les nœuds <code>spdif_dir/dit</code> ajoutés au DTS</td></tr>
+
+<tr><td><code>disable-at24.cfg</code></td><td>
+<pre><code># CONFIG_EEPROM_AT24 is not set</code></pre></td>
+<td>Désactive le driver EEPROM générique AT24 qui sondait l'adresse 0x50 sur i2c3 — adresse occupée par TAC5212 #0. Sans ce désactivement, le probing AT24 lock l'I²C bus avant que tac5212 ait sa chance et tous les TACs voient un NACK initial.</td></tr>
+
+<tr><td><code>tac5212.cfg</code></td><td>
+<pre><code>CONFIG_SND_SOC_TAC5212=m</code></pre></td>
+<td>Active le driver codec en module loadable. Surchargé par <code>do_configure:append</code> qui force la valeur au cas où la merge config la fait sauter.</td></tr>
+
+<tr><td><code>sof-imx-probes.cfg</code></td><td>
+<pre><code>CONFIG_SND_SOC_SOF_IMX_PROBES=m</code></pre></td>
+<td>Active le module SOF Probes (mécanisme upstream d'extraction de buffer audio depuis le DSP). Ajouté pendant la phase NPU tap (voie S1) — conservé inactif mais buildable pour future réutilisation diagnostic.</td></tr>
 </tbody>
 </table>
 
-<h3>8.2 Cfg fragments</h3>
+<h3>8.3 Script <code>apply-tac5212-dt.py</code></h3>
+
+<div class="callout info">
+<span class="label">Type</span> Edit Python sur DTS (do_patch:append)<br>
+<span class="label">Cible</span> <code>arch/arm64/boot/dts/freescale/imx8mp-evk.dts</code><br>
+<span class="label">Phase</span> Phase 0 puis V7.0-E7.4.b (pivot simple-card → imx-card)
+</div>
+
+<h4>Ce que le script fait</h4>
+<ol>
+  <li>Supprime le nœud <code>spdif_dit</code> (sera remplacé par la
+      sound-card TAC).</li>
+  <li>Remplace tout le bloc <code>sound-dac-out</code> du DTS par une
+      sound-card <code>fsl,imx-audio-card</code> (modèle
+      <code>tac5212-tdm</code>) avec 4 DAI links TDM, un par TAC.</li>
+  <li>Configure les 4 codecs TAC5212 sur <code>&amp;i2c3</code> aux adresses
+      <code>0x50</code>, <code>0x51</code>, <code>0x52</code>, <code>0x53</code>
+      (sélection par strap A0/A1 hardware).</li>
+  <li>Déclare le régulateur <code>tac5212_avdd</code> (3V3) et le GPIO de
+      reset commun aux 4 TACs.</li>
+  <li>Pour chaque DAI link : <code>dai-format = "dsp_a"</code> (TDM
+      slot-based, edge-triggered FSYNC), <code>bitclock-master</code> et
+      <code>frame-master</code> côté SAI (= TX master, voir mémoire
+      <code>feedback_tx_master_drives_all.md</code>),
+      <code>dai-tdm-slot-num = &lt;8&gt;</code>,
+      <code>dai-tdm-slot-width = &lt;32&gt;</code>.</li>
+</ol>
+
+<h4>Pourquoi</h4>
+<p>Le DTS NXP par défaut configure une sound-card simple-audio-card
+mono-codec (un seul WM8962 ou wm8960). La board Debix porte 4 codecs
+TAC5212 sur un même bus TDM SAI7 — il faut une sound-card capable de
+binder N codecs sur 1 DAI link. <code>simple-audio-card</code> ne le
+permet pas ; <code>fsl,imx-audio-card</code> (driver
+<code>imx-card.c</code>) le permet via
+<code>snd_soc_of_get_dai_link_codecs()</code>. Pivot E7.4.b : on a
+d'abord tenté de patcher <code>simple-card.c</code> pour ajouter le
+multi-codec support (<code>apply-simple-card-multicodec.py</code>, encore
+présent comme stub désactivé), mais imx-card.c offre la même fonctionnalité
+out-of-the-box et est mieux maintenu côté NXP.</p>
+
+<h3>8.4 Script <code>apply-imx-card-linkid.py</code></h3>
+
+<div class="callout info">
+<span class="label">Type</span> Edit Python sur C (do_patch:append)<br>
+<span class="label">Cible</span> <code>sound/soc/fsl/imx-card.c</code><br>
+<span class="label">Phase</span> V7.0-E7.4.b — pivot multi-codec
+</div>
+
+<h4>Ce que le script fait</h4>
+<p>Une seule ligne neutralisée, sentinelle anti-double-application :</p>
+<pre><code>// AVANT
+link-&gt;platforms-&gt;of_node = link-&gt;cpus-&gt;of_node;
+link-&gt;id = args.args[0];
+
+// APRÈS
+link-&gt;platforms-&gt;of_node = link-&gt;cpus-&gt;of_node;
+/* V7.0-E7.4.b imx-card link_id : do NOT use args.args[0] as link-&gt;id.
+ * SOF topology link_id is a sequential ASoC index (0,1,2...),
+ * independent of the DSP DAI index from cpu sound-dai. Leaving
+ * link-&gt;id at its default 0/sequential allocation matches the
+ * convention used by simple-card and by SOF tplg files like
+ * sof-imx8mp-tac5212.tplg (DAI_CONFIG(SAI, 7, 0, tac5212-hifi)).
+ */
+/* link-&gt;id = args.args[0]; */</code></pre>
+
+<h4>Pourquoi</h4>
+<p><code>imx-card.c</code> force <code>link-&gt;id = args.args[0]</code> où
+<code>args.args[0]</code> est l'index DSP DAI extrait du DT
+(ex. <code>&lt;&amp;dsp 1&gt;</code> → 1). Mais les fichiers SOF tplg
+utilisent <code>link_id</code> comme un identifiant ASoC séquentiel
+(0,1,2...) indépendant de l'index DSP DAI : la topology
+<code>sof-imx8mp-tac5212.tplg</code> déclare
+<code>DAI_CONFIG(SAI, 7, 0, ...)</code> donc attend
+<code>link_id == 0</code>. Sans ce patch,
+<code>snd_soc_find_dai_link()</code> échoue avec :</p>
+<pre><code>ASoC: physical link tac5212-hifi (id 1) not exist
+ASoC: topology: could not load header: -22
+imx-card: probe of sof-sound-tac5212 failed with error -22</code></pre>
+<p><code>simple-card.c</code> ne touche pas <code>link-&gt;id</code> (laissé
+à 0 par <code>devm_kzalloc</code>), ce qui est la convention SOF tplg.
+On aligne <code>imx-card.c</code> sur cette convention.</p>
+
+<h3>8.5 Script <code>apply-npu-tap-dt.py</code></h3>
+
+<div class="callout info">
+<span class="label">Type</span> Edit Python sur DTS (do_patch:append)<br>
+<span class="label">Cible</span> <code>imx8mp-evk.dts</code> overlays<br>
+<span class="label">Phase</span> V3.2.2 puis étendu V7.0-E4 (dual-tap)
+</div>
+
+<h4>Ce que le script fait</h4>
+<ol>
+  <li><strong>Reclaim 512 KB</strong> sur le carve-out
+      <code>&amp;dsp_reserved_heap</code> (taille passe de <code>0xef0000</code>
+      à <code>0xe70000</code>) pour libérer l'espace nécessaire à 2 zones
+      de 256 KB.</li>
+  <li>Ajoute le carve <strong>tap_in_buffer</strong> @<code>0x94270000</code>
+      (256 KB, <code>no-map</code>) : ring buffer pour le signal capture
+      brut SAI7 RX (post-DAI cap, pré-DSP effects).</li>
+  <li>Ajoute le carve <strong>tap_out_buffer</strong> @<code>0x942B0000</code>
+      (256 KB, <code>no-map</code>) : ring buffer pour le signal playback
+      post-effets (pré-DAI TX), conserve l'adresse historique V3.2.2.</li>
+  <li>Ajoute 2 nœuds <code>imx_audio_tap_in</code> et
+      <code>imx_audio_tap_out</code> (compatible
+      <code>electrosens,imx-audio-tap</code>, propriété
+      <code>memory-region</code> pointant vers le carve associé,
+      <code>device-name = "imx-audio-tap-in"</code> /
+      <code>"imx-audio-tap-out"</code>).</li>
+</ol>
+
+<h4>Pourquoi</h4>
+<p>Le NPU doit avoir accès à 2 streams audio distincts dans la chaîne :
+le <em>raw input</em> (avant que le DSP applique les effets, pour
+détecteurs ML basés voix brute) et le <em>processed output</em> (après
+effets, pour mastering/loudness ML). C'est l'extension naturelle du
+V3.2.2 mono-tap (playback seul). Le choix d'adresses <code>no-map</code>
+juste avant <code>vdev0vring0</code> dans le layout DSP garantit zero
+overlap avec ce que le DSP alloue dynamiquement via SOF MEMORY{} blocks.</p>
+
+<h3>8.6 Script <code>apply-sdram2-dt.py</code></h3>
+
+<div class="callout info">
+<span class="label">Type</span> Edit Python sur DTS (do_patch:append)<br>
+<span class="label">Cible</span> <code>imx8mp-evk.dts</code> overlays<br>
+<span class="label">Phase</span> V5.4.1 — DSP architecture matrix 16×8
+</div>
+
+<h4>Ce que le script fait</h4>
+<ol>
+  <li>Ajoute le carve <strong>sdram2_reserved</strong> @<code>0xA0000000</code>
+      (8 MB, <code>no-map</code>) dans <code>&amp;{/reserved-memory}</code>.</li>
+  <li>Concatène <code>&amp;sdram2_reserved</code> au tableau
+      <code>memory-region</code> du nœud <code>dsp@3b6e8000</code>, ce qui
+      ajoute cette plage à la table de translation rproc et permet au
+      DSP de l'adresser.</li>
+</ol>
+
+<h4>Pourquoi</h4>
+<p>La V5.4.1 (DSP V5 multi-strips) avait besoin de tampons supplémentaires
+(8 MB) pour les composants mixer16/deinterleave_8/interleave_8 qui
+manipulent jusqu'à 16 sources × 8 channels × float32 (≈ 6 MB rien que
+pour les comp buffers). Le carve DSP standard <code>dsp_reserved_heap</code>
+était saturé. SDRAM2 est une seconde plage DDR mappée sur la portion
+haute du SoC, peu utilisée par Linux. Le firmware doit aussi être rebuilt
+avec <code>SDRAM2_SIZE</code> matching dans <code>memory.h</code>.</p>
+
+<h3>8.7 Script <code>apply-imx-probes.py</code></h3>
+
+<div class="callout info">
+<span class="label">Type</span> Edit Python (do_patch:prepend)<br>
+<span class="label">Cible</span> <code>sound/soc/sof/imx/{Kconfig,Makefile,imx8m.c}</code><br>
+<span class="label">Phase</span> Phase 1a.2 — voie S1 NPU tap (abandonnée mais code conservé)
+</div>
+
+<h4>Ce que le script fait</h4>
+<ul>
+  <li>Ajoute l'entrée Kconfig <code>SND_SOC_SOF_IMX_PROBES</code> dans
+      <code>sound/soc/sof/imx/Kconfig</code>.</li>
+  <li>Ajoute la cible Make <code>snd-sof-imx-probes</code> dans
+      <code>sound/soc/sof/imx/Makefile</code>.</li>
+  <li>Patche <code>imx8m.c</code> pour appeler
+      <code>imx_probes_register()</code> /
+      <code>imx_probes_unregister()</code> à la création/destruction du
+      device SOF i.MX.</li>
+  <li>Copie le nouveau fichier <code>imx-probes.c</code> dans
+      <code>sound/soc/sof/imx/imx-probes.c</code>.</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>Tentative <em>additive</em> (zéro modification de fichier existant
+hors les 3 hooks plus haut) d'activer le mécanisme upstream SOF Probes
+sur i.MX 8M+ (non supporté côté upstream — seules les plateformes Intel
+HDA l'ont). Voie abandonnée pour cause de latence trop élevée
+(&gt; 100 ms via <code>/dev/snd/comprC?D?</code>) — mais le code reste
+buildable et activable, peut servir à un futur diagnostic. Respect strict
+de la mémoire <code>feedback_kernel_patch_policy.md</code> : zéro
+modification de comportement existant.</p>
+
+<h3>8.8 Sources <code>tac5212.c</code> + <code>tac5212.h</code></h3>
+
+<div class="callout info">
+<span class="label">Type</span> Sources copiées (do_patch:prepend) +
+sed Kconfig/Makefile<br>
+<span class="label">Cible</span> <code>sound/soc/codecs/tac5212.{c,h}</code><br>
+<span class="label">Phase</span> Phase 0 — driver ex nihilo
+</div>
+
+<h4>Composition du driver</h4>
 <table>
-<thead><tr><th>Fichier</th><th>Effet</th></tr></thead>
+<thead><tr><th>Section</th><th>Lignes</th><th>Détail</th></tr></thead>
 <tbody>
-<tr><td><code>spdif.cfg</code></td><td><code>CONFIG_SND_SOC_SPDIF=y</code> + drivers SPDIF DIR/DIT</td></tr>
-<tr><td><code>disable-at24.cfg</code></td><td>Désactive driver EEPROM AT24 (conflit I²C bus 3)</td></tr>
-<tr><td><code>tac5212.cfg</code></td><td><code>CONFIG_SND_SOC_TAC5212=y</code> (built-in)</td></tr>
-<tr><td><code>sof-imx-probes.cfg</code></td><td><code>CONFIG_SND_SOC_SOF_DEBUG_PROBES=y</code></td></tr>
+<tr><td>Regmap I²C paged</td><td>~120</td><td>Page register 0x00 sélectionne la "page" (≤ 16 pages), accès en read/write via regmap_i2c_8bit avec lock. Cache writable côté kernel.</td></tr>
+<tr><td>Reset séquence</td><td>~40</td><td>Software reset register 0x01, puis attente 5 ms (datasheet), puis re-init clocks.</td></tr>
+<tr><td>DAI ops</td><td>~250</td><td><code>set_fmt</code>, <code>set_tdm_slot</code>, <code>hw_params</code>, <code>set_sysclk</code>. Configure ADC TDM slots (capture-only async, voir mémoire <code>tac5212_async_tx_config.md</code>).</td></tr>
+<tr><td>24 biquads SOC_BYTES_EXT</td><td>~300</td><td>Chaîne d'effets ADC (8 × 24 biquads paged-blob). Format coefficients : Q2.30. Get/put via amixer cset numid.</td></tr>
+<tr><td>6 paged-blobs effets</td><td>~400</td><td>AGC, HPF, DRC, ADSR, Aux Mixer, AGC Rate — exposés en BYTES_EXT, chacun avec son range size + sa page TAC.</td></tr>
+<tr><td>kcontrols énumérés</td><td>~250</td><td>Bias, gain ADC stage 1/2, AGC mode, channel routing, fold-back, etc. ≈ 80 INTEGER + 40 ENUMERATED par TAC.</td></tr>
+<tr><td>DAPM widgets</td><td>~100</td><td>ADC L/R, DAC L/R, MIXIN, MIXOUT, LINEIN, ESI bias.</td></tr>
+<tr><td>I²C driver</td><td>~60</td><td>Probe/remove, of_match_table, struct i2c_driver registration.</td></tr>
 </tbody>
 </table>
 
-<h3>8.3 Scripts Python (do_patch:prepend)</h3>
-<table>
-<thead><tr><th>Script</th><th>Modification</th></tr></thead>
-<tbody>
-<tr><td><code>apply-tac5212-dt.py</code></td><td>4 nodes TAC5212 sur i2c3 (0x50-0x53) + sound-card <code>fsl,imx-audio-card</code> + 4 DAI links TDM + regulators + gpio reset</td></tr>
-<tr><td><code>apply-imx-card-linkid.py</code></td><td>Patche <code>sound/soc/fsl/imx-card.c</code> pour commenter <code>link->id = args.args[0]</code> (sinon SOF topology rejette les 4 TACs)</td></tr>
-<tr><td><code>apply-simple-card-multicodec.py</code></td><td><strong>Stub désactivé</strong> après pivot E7.4.b vers <code>fsl,imx-audio-card</code></td></tr>
-<tr><td><code>apply-npu-tap-dt.py</code></td><td>2 carves reserved-memory <code>no-map</code> (tap-in @0x942B0000, tap-out) + 2 nodes <code>imx-audio-tap</code> multi-instance</td></tr>
-<tr><td><code>apply-sdram2-dt.py</code></td><td>8 MB no-map @0xA0000000 — SDRAM2 DSP-only</td></tr>
-<tr><td><code>apply-imx-probes.py</code></td><td>Ajout entrée <code>snd_sof.imx-probes</code> + intègre <code>imx-probes.c</code></td></tr>
-</tbody>
-</table>
+<h4>Pourquoi un driver ex nihilo</h4>
+<p>Texas Instruments TAC5212 n'avait <strong>aucun driver Linux upstream</strong>
+au démarrage du projet (Q4 2025). TI fournit un PDF datasheet, des PDF
+application notes (<code>sbaa383c.pdf</code>) et des coefficients
+default Excel, mais zéro code. Le driver a été écrit à partir de zéro
+en mimant le pattern du driver tac5x1x (cousin) mais en supportant
+explicitement :</p>
+<ul>
+  <li>Le mode <strong>TDM async master</strong> (TAC = slave de SAI7, TAC PLL
+      sync sur BCLK reçu) ;</li>
+  <li>L'<strong>adresse I²C strappée</strong> (4 codecs distinguables par
+      A0/A1 strap) ;</li>
+  <li>Les <strong>24 biquads paged-blob</strong> ADC accessibles via la
+      kcontrol BYTES_EXT (encodage RBJ Q2.30) ;</li>
+  <li>Les <strong>blobs d'effets DAC</strong> (DRC, foldback, tonalité…)
+      via paged page-register cache.</li>
+</ul>
 
-<h3>8.4 Sources kernel ajoutées (<code>do_patch:prepend</code> copy + Kconfig/Makefile sed)</h3>
-<table>
-<tbody>
-<tr><td><code>tac5212.c</code> + <code>tac5212.h</code></td><td>Driver codec complet (~1500 lignes + 250 lignes) avec regmap I²C paged, 24 SOC_BYTES_EXT biquads, 6 paged-blobs (AGC, HPF, DRC, ADSR, Aux Mixer, AGC Rate), DAI master/slave</td></tr>
-<tr><td><code>imx-probes.c</code></td><td>SOF Probes client kernel additif</td></tr>
-</tbody>
-</table>
+<h3>8.9 Source <code>imx-probes.c</code></h3>
+<p>Fichier nouveau ajouté à <code>sound/soc/sof/imx/imx-probes.c</code>
+(≈ 100 lignes). Client SOF Probes minimal pour i.MX 8M+ : enregistre
+le device DSP comme provider de probes, expose
+<code>/dev/snd/comprC?D?</code> et délègue tout au générique
+<code>snd-soc-sof-probes</code>. Code conservé buildable mais module
+non chargé par défaut (voie abandonnée).</p>
 </section>
 
 <!-- ====================== 9. SOF PATCHES INVENTORY ====================== -->
 <section class="break">
-<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">9.</span> Inventaire patches SOF firmware actifs</h2>
-<p>11 commits clés sur la branche <code>feature/v7.0-multiband-drc-tap</code>
-du fork <code>github.com/Mjxkill/sof</code> par rapport à
-<code>origin/main</code> (stable v2.10).</p>
+<h2><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;">9.</span> Inventaire patches SOF firmware — code &amp; rationale</h2>
 
+<p class="lede">
+13 commits clés sur la branche <code>feature/v7.0-multiband-drc-tap</code>
+du fork <code>github.com/Mjxkill/sof</code> par rapport à
+<code>origin/main</code> (stable v2.10). Chaque commit est listé ci-dessous
+avec son intent code-level et la cause empirique qui a motivé son
+écriture. Les commits sont ordonnés chronologiquement par phase.
+</p>
+
+<h3>9.1 <span class="commit-hash">61fcb2e7d</span> · dai-legacy NPU tap hook V3.2.2</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> Capture post-DRC vers DRAM partagée DSP↔A53<br>
+<span class="label">Phase</span> P1a.2 V3.2.2 — voie finale GO du NPU tap<br>
+<span class="label">Fichiers</span> <code>src/audio/dai-legacy.c</code>,
+  <code>src/include/sof/audio/npu_tap.h</code>,
+  <code>src/platform/imx8m/memory.h</code>
+</div>
+
+<h4>Ce que le commit fait</h4>
+<ul>
+  <li>Définit une structure <code>npu_tap_hdr</code> (128 B aligned cache
+      line HiFi4) en tête du carve DRAM : magic, epoch, write_idx, état,
+      sample_rate, channels, period_bytes.</li>
+  <li>Ajoute un hook dans <code>dai_dma_cb()</code> après
+      <code>dma_buffer_copy_to()</code> (branche succès playback
+      uniquement) qui : (a) calcule le wrap dans le ring buffer 256 KB,
+      (b) <code>audio_stream_rewind_wptr_by_bytes()</code> pour récupérer
+      les bytes tout juste produits, (c) <code>memcpy</code> vers tap,
+      (d) <code>dcache_writeback_region()</code> sur les données + le header.</li>
+  <li>Pattern de publication R3 (release/acquire) : data state FIRST →
+      <code>memw</code> → epoch → <code>memw</code> → magic LAST.</li>
+  <li>Sentinelle mono-DAI <code>npu_tap_owner</code> : un seul DAI playback
+      à la fois (single-core SOF, pas d'atomic nécessaire).</li>
+  <li>Carve DRAM 256 KB @<code>0x942B0000</code>, WT cache region 4
+      (cacheattr <code>0x22212222</code>, digit 4 = WT).</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>Aboutissement de 9 itérations spec (V1→V3.2.2) et 8 investigations
+multi-workers archivées dans critic. Voies abandonnées (V1 ALSA 3e PCM,
+S1 SOF Probes, Alt-A probe.c, S6 mem_sink) toutes documentées avec
+verdict empirique dans la mémoire critic. V3.2.2 = seule voie qui
+respecte les invariants stricts <em>(zéro touche aux PCM existants /
+zéro module ALSA additionnel / zéro perte latence audio)</em>.</p>
+
+<h3>9.2 <span class="commit-hash">9f6f70a21</span> · NPU tap defensive guard</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> guard period_bytes==0 NPU tap init<br>
+<span class="label">Phase</span> P1a.2 V3.2.2.1 — polish après critic_review<br>
+<span class="label">Fichiers</span> <code>src/audio/dai-legacy.c</code> (1 ligne)
+</div>
+
+<h4>Ce que le commit fait</h4>
+<pre><code>// AVANT
+if (dev-&gt;direction == SOF_IPC_STREAM_PLAYBACK)
+    aligned_ring_size = (NPU_TAP_DATA_SIZE_MAX / period_bytes) * period_bytes;
+
+// APRÈS
+if (dev-&gt;direction == SOF_IPC_STREAM_PLAYBACK &amp;&amp; period_bytes &gt; 0)
+    aligned_ring_size = (NPU_TAP_DATA_SIZE_MAX / period_bytes) * period_bytes;</code></pre>
+
+<h4>Pourquoi</h4>
+<p>Critic_review sev=medium turn 188 a flaggé un divide-by-zero théorique
+si <code>period_bytes == 0</code> (cas pathologique en pratique impossible
+car calculé depuis PCM hw_params qui valide &gt; 0). Garde défensive ajoutée
+en respect du critère "robustness sans changement comportemental". V4.2
+régression PASS, signe rimage <code>4061adcdda6768421c7c6abd4d42635c</code>.</p>
+
+<h3>9.3 <span class="commit-hash">bf24053fd</span> · SAI idempotence patch</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> flag configured + FRDE toggled dynamically<br>
+<span class="label">Phase</span> V5.4.1 — fix clic métallique au stop/start playback<br>
+<span class="label">Fichiers</span> <code>src/drivers/imx/sai.c</code>,
+  <code>src/include/sof/drivers/sai.h</code>
+</div>
+
+<h4>Ce que le commit fait</h4>
+<ul>
+  <li>Ajoute un champ <code>bool configured</code> dans
+      <code>struct sai_pdata</code>.</li>
+  <li><code>sai_set_config()</code> : early return 0 si déjà configured.
+      Set <code>configured = true</code> en fin. <strong>Retire FRDE</strong>
+      de l'écriture initiale TCSR(TX) — FRDE est désormais dynamique.</li>
+  <li><code>sai_start(PLAYBACK)</code> : si configured, ne set QUE FRDE et
+      return (skip prime FIFO + TRCE + TERE qui sont permanents).</li>
+  <li><code>sai_stop(PLAYBACK)</code> : si configured, ne clear QUE FRDE.</li>
+  <li><code>sai_release(PLAYBACK)</code> : identique à <code>sai_start</code>.</li>
+  <li>Capture (RX) inchangée : reste consumer-only avec stop normal.</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>À chaque cycle stop/start playback (par exemple changement de PCM
+source côté Linux, ou recover xrun), le code initial faisait un
+<code>regmap_update_bits()</code> sur TCSR(TX) qui touchait TE/BCE/MCLK_EN
+en plus de FRDE. Ce read-modify-write provoque un transient BCLK sub-cycle
+qui désynchronise le PLL TAC5212 → clic métallique audible. En clampant
+TE/BCE/MCLK_EN à write-once et en ne togglant que FRDE après init, le
+clock reste continu : le PLL TAC reste verrouillé, plus de clic. Mémoire
+<code>sof_sai_idempotence_patch.md</code> conserve cette règle stricte —
+ne JAMAIS reverter, ne JAMAIS rendre FRDE always-on.</p>
+
+<h3>9.4 <span class="commit-hash">7499505ec</span> · preserve_channels (Option F++)</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> Branched mono buffers in 8ch pipeline<br>
+<span class="label">Phase</span> V5.4.1-E5.e.1 — premier strip IN ch1<br>
+<span class="label">Fichiers</span> <code>src/audio/pipeline/pipeline-params.c</code>,
+  <code>src/audio/buffer.c</code>,
+  <code>src/include/sof/audio/buffer.h</code>
+</div>
+
+<h4>Ce que le commit fait</h4>
+<ol>
+  <li>Ajoute <code>bool preserve_channels</code> dans
+      <code>struct comp_buffer</code> + reset dans
+      <code>buffer_reset_params()</code>.</li>
+  <li><code>buffer_set_params()</code> : save/restore — quand
+      <code>preserve_channels</code> est set, sauvegarde
+      <code>channels</code> avant <code>audio_stream_set_params()</code>
+      et restore après. La FORCE update upstream ne réécrit plus la
+      valeur per-buffer.</li>
+  <li><code>pipeline_complete()</code> walk #2 : détecte les comps
+      avec &gt; 1 source ou &gt; 1 sink (deinterleave_8, interleave_8) et
+      propage <code>channels=1 + preserve_channels=true</code> via les
+      sous-chaînes linéaires jusqu'à hitter une autre comp branchée.</li>
+</ol>
+
+<h4>Pourquoi</h4>
+<p>Sans ce patch, dès qu'on insère un split (deinterleave_8 produit
+8 buffers mono à partir d'un buffer 8ch) à l'intérieur d'une pipeline
+SOF, <code>pipeline_comp_params_neg + comp_verify_params</code> force
+<code>channels = PIPELINE_CHANNELS = 8</code> sur chaque buffer mono
+via <code>BUFFER_UPDATE_FORCE</code>. Résultat : <code>sink_period_bytes</code>
+est calculé pour 8 channels alors que l'allocation est 1 channel →
+<code>-ENOMEM</code> à <code>volume_prepare</code> / <code>eq_iir_prepare</code> /
+<code>drc_prepare</code>. L'Option F++ (validée empiriquement) préserve
+les channels sur les buffers branchés — minimal-intrusif, back-compat,
+unblock toute l'architecture V5.4.1.</p>
+
+<h3>9.5 <span class="commit-hash">9cf6fa257</span> · 1-comp-8ch pivot architecture</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> Topology 1 strip IN ch1 (eq_iir + drc + pga × 2)<br>
+<span class="label">Phase</span> V5.4.1-E5.e.2 — pivot architecture<br>
+<span class="label">Fichiers</span> 2 .m4 topology
+</div>
+
+<h4>Ce que le commit fait</h4>
+<p>Pivot : abandonne l'approche "8 instances mono" (qui retournait
+<code>-EIO</code> sur PCM read après deploy à E5.e.1 multi-comp) au
+profit d'une architecture <strong>1 comp 8ch native</strong> :</p>
+<pre><code>SAI7 RX 8ch
+  → eq_iir(8ch, multi-response blob)
+  → drc(8ch, multi-config blob)
+  → pga(8ch, channel-mapped 8 vols)
+  → host PCM 0</code></pre>
+<ul>
+  <li><code>eq_iir</code> multi-response : un seul comp 8ch avec
+      <code>channels_in_config=8</code>, <code>number_of_responses=N</code>,
+      <code>assign_response[ch] → response_index</code> donne un filtrage
+      IIR indépendant par channel. Blob default ship
+      <code>assign_response={-1}*8</code> (all bypass) → bit-perfect identity
+      au boot.</li>
+  <li><code>pga</code> channel-map : 8 <code>C_CONTROLMIXER</code>
+      déclarations sur le même pga 8ch, chacune pointant vers une
+      position ALSA (FL/FR/RL/RR/FC/LFE/SL/SR) → 8 volumes "Strip[1-8]
+      Volume" indépendants sur un seul pga.</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>L'approche multi-comp 8 instances mono produit 8 buffers + 8 pipelines
+internes par strip → explosion de l'arbre, ressources DSP saturées,
+<code>-EIO</code> au PCM read. La SOF native 8ch comp existe pour ça :
+chaque comp est multi-channel-aware et SOF gère le routing channel-map
+côté pga. Pivot validé : "super son" 2026-05-01.</p>
+
+<h3>9.6 <span class="commit-hash">ea984a266</span> · drc multi-config per-channel D3</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> 8 DRC indépendants dans 1 comp 8ch<br>
+<span class="label">Phase</span> V5.4.1-E5.e.2 D3<br>
+<span class="label">Fichiers</span> <code>src/audio/drc/{drc.c,drc_math.c}</code>,
+  <code>src/audio/drc/drc_user.h</code>,
+  <code>src/include/ipc/components.h</code>
+</div>
+
+<h4>Ce que le commit fait</h4>
+<ul>
+  <li>Détection single- vs multi-config par inspection de la taille du
+      blob après le header :
+      <pre><code>N = (config-&gt;size - sizeof(struct sof_drc_config)) /
+    sizeof(struct sof_drc_params) + 1;</code></pre>
+      N == 1 : legacy (1 params partagé entre tous les channels) ;
+      N &gt; 1 : N consécutifs après le reserved → channel ch lit
+      <code>params[min(ch, N-1)]</code>.</li>
+  <li><code>drc_state</code> change : <code>detector_average</code> et
+      <code>compressor_gain</code> deviennent des tableaux indexés par
+      channel (étaient des scalars).</li>
+  <li><code>drc_process_pre()</code>, <code>_process_curve()</code>,
+      <code>_process_post()</code> : itèrent par channel et utilisent
+      <code>params[ch]</code> + <code>state[ch]</code>.</li>
+  <li>ABI strictement back-compat (struct layout inchangée) — blobs
+      pre-existants continuent à fonctionner.</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>Avant ce patch, le drc 8ch traçait un seul envelope <code>max(|x[ch]|)</code>
+across channels et appliquait le même gain à tous. Pour la console DAW
+(8 mics indépendants, chacun avec son threshold/ratio/attack/release),
+il faut 8 compresseurs indépendants. Patché en miroir de l'architecture
+1-comp-8ch (commit <code>9cf6fa257</code>) en gardant l'ABI back-compat
+pour préserver les topologies upstream. Validation utilisateur :
+"c'est ok" 2026-05-01.</p>
+
+<h3>9.7 <span class="commit-hash">0580b5f14</span> · pipeline_comp_copy re-entry guard</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> Fix DAI starvation matrix 16×8 (3840 fps)<br>
+<span class="label">Phase</span> V5.4.1-E6.a — matrix routing<br>
+<span class="label">Fichiers</span> <code>src/audio/pipeline/pipeline-graph.c</code>,
+  <code>src/audio/pipeline/pipeline-schedule.c</code>
+</div>
+
+<h4>Ce que le commit fait</h4>
+<p>Ajoute un guard de re-entrée par <em>component</em> (en plus du flag
+walking per-<em>buffer</em> existant) dans
+<code>pipeline_for_each_comp()</code> : chaque comp ne peut être visitée
+qu'une fois par tick, peu importe le nombre de buffers branchés qui y
+mènent.</p>
+
+<h4>Pourquoi</h4>
+<p>Bug E6.a : avec une topology matrix 16×8 dans une seule pipeline
+playback (deinterleave_8 → mixer16 → interleave_8 chainés intra-pipeline),
+le walk explose combinatoirement :</p>
+<pre><code>comp_copy(interleave_8)   x 1
+comp_copy(mixer16)        x 8   (un par buffer B10..B17)
+comp_copy(deinterleave_8) x 64  (8 × 8)
+comp_copy(PCM)            x 64
+Total                     = 137 calls / tick</code></pre>
+<p>À ~180 µs par <code>comp_copy</code> sur HiFi4, le budget tick playback
+(2 ms) est dépassé ×12.5. DSP traite 96 frames toutes les ~25 ms au lieu
+de toutes les 2 ms → 96/0.025 = 3840 fps au lieu de 48000, xrun_play
+croît linéairement. E5.e.1 cap n'a pas déclenché le bug parce que les
+sinks deinterleave_8 étaient cross-pipeline (le flag walking per-buffer
+existant suffisait). Validation board "le son est bon" 2026-05-02.</p>
+
+<h3>9.8 <span class="commit-hash">dfe9b2497</span> · V7.0-E1 simplify play pipeline</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> Pipeline play simplifié + custom 8ch passthrough macro<br>
+<span class="label">Phase</span> V7.0-E1 — architecture DSP indépendant<br>
+<span class="label">Fichiers</span> 2 .m4 topology
+</div>
+
+<h4>Ce que le commit fait</h4>
+<ul>
+  <li><strong>Nouveau fichier</strong>
+      <code>sof-imx8mp-tac5212-V7.0.m4</code>. PIPE 1 cap inchangé vs E6.a
+      (eq_iir + drc D3 + pga). PIPE 2 play <strong>simplifié</strong> :
+      host PCM 1 → B0 → SAI7 TX direct. Retire mixer16, deinterleave_8,
+      interleave_8 (routage déplacé vers Linux mixer-pro).</li>
+  <li><strong>Nouveau fichier</strong>
+      <code>sof/pipe-passthrough-8ch-playback.m4</code>. Variante 8ch du
+      standard SOF avec PCM_CAPABILITIES aligné stack Debix
+      <code>(192, 16384, 65536, 65536)</code> : period play 6 frames
+      (125 µs) à 512 frames (10.66 ms), alors que le standard SOF impose
+      768 frames (16 ms) min/max figé.</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>V7.0 sépare clairement : DSP = traitement effets indépendant par voie
+(E2/E3) ; Linux mixer-pro = routage matrix. Pas de mixer dans la
+topology = pas de bug pipeline_comp_copy combinatoire. Cap RTT &lt; 10 ms
+visé en E1.b nécessite la possibilité de descendre à period 192 frames
+(4 ms), ce que le standard SOF n'autorisait pas.</p>
+
+<h3>9.9 <span class="commit-hash">7440b3c21</span> · multiband_drc per-channel params</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> 8 multiband DRC indépendants dans 1 comp 8ch<br>
+<span class="label">Phase</span> V7.0-E2 — strips OUT play<br>
+<span class="label">Fichiers</span> <code>src/audio/multiband_drc/{multiband_drc.c,multiband_drc_generic.c}</code>,
+  <code>src/audio/multiband_drc/user/multiband_drc.h</code>
+</div>
+
+<h4>Ce que le commit fait</h4>
+<p>Miroir au stage multiband_drc du motif drc D3 (commit
+<code>ea984a266</code>). Détection single vs multi-config par layout :</p>
+<pre><code>trailing  = config-&gt;size - SOF_MULTIBAND_DRC_HEADER_FIXED_SIZE;
+per_band  = trailing / (num_bands * sizeof(struct sof_drc_params));</code></pre>
+<p>per_band == 1 : legacy (un params partagé tous channels). per_band &gt; 1
+(typically num_channels) : lit N consécutifs par band, channel ch utilise
+<code>entry[min(ch, per_band-1)]</code>. ABI back-compat strict, bump du
+max blob 1024→2048 (4 bands × 8 ch × ~40 B + header).</p>
+
+<h4>Pourquoi</h4>
+<p>Strips OUT play V7.0 = 8 voies indépendantes, chacune avec son
+multiband_drc (3 bandes × params par bande × 8 channels). Sans ce patch,
+les 8 channels partagent les mêmes params → mastering uniforme inutile
+pour la console.</p>
+
+<h3>9.10 <span class="commit-hash">5eafab230</span> · multiband_drc 8ch blob infra</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> Génération blob 8ch + macro topology<br>
+<span class="label">Phase</span> V7.0-E2.b — infra côté tooling<br>
+<span class="label">Fichiers</span> 3 fichiers tools/topology
+</div>
+
+<h4>Ce que le commit fait</h4>
+<ul>
+  <li>Nouveau tool Python
+      <code>tools/topology/topology1/m4/gen_multiband_drc_coef_8ch.py</code> :
+      parse le stock <code>multiband_drc_coef_default.m4</code> (struct
+      <code>sof_abi_hdr + sof_multiband_drc_config</code>), extrait per-band
+      <code>sof_drc_params</code> (88 B packed), réplique N fois par band
+      (default N = 8), update <code>abi_hdr.size + cfg.size</code>, émet
+      un <code>CONTROLBYTES_PRIV</code> macro.</li>
+  <li>Output blob généré
+      <code>multiband_drc_coef_default_8ch.m4</code> : payload 2436 B
+      (num_bands=3, 8 copies par band) + abi_hdr 32 B = 2468 B total.</li>
+  <li>Switch <code>pipe-multiband-drc-pga-8ch-capture.m4</code> vers la
+      nouvelle variante 8ch.</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>Le patch <code>7440b3c21</code> ouvre la possibilité multi-config mais
+n'a pas de blob qui l'exercerait. Ce commit fournit l'outil + le blob
+default pour valider en hardware que le path multi-config fonctionne.
+Différenciation per-channel (T2.5/T2.6) laissée à E2.c en tweakant
+les sof_drc_params à l'offset <code>(band*N + ch) * 88</code>.</p>
+
+<h3>9.11 <span class="commit-hash">a535405ca</span> · V7.0-E3 final strips OUT play</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> Retire drc final côté play, garde multiband + pga<br>
+<span class="label">Phase</span> V7.0-E3 — fix tic à l'attack<br>
+<span class="label">Fichiers</span> nouveau pipe macro
+  <code>pipe-multiband-pga-8ch-playback.m4</code>,
+  <code>sof-imx8mp-tac5212-V7.0.m4</code>
+</div>
+
+<h4>Ce que le commit fait</h4>
+<ul>
+  <li>Nouveau pipe macro
+      <code>pipe-multiband-pga-8ch-playback.m4</code> : multiband_drc 8ch
+      + pga 8 strips OUT, sans drc final, 3 buffers au lieu de 4.</li>
+  <li><code>sof-imx8mp-tac5212-V7.0.m4</code> PIPE 2 pointe vers le nouveau
+      pipe (sans drc terminal).</li>
+  <li><code>component.h</code> <code>comp_perf_avg_info()</code> reduce
+      à 4 params (cosmetic refactor lié).</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>Diag T3.9 : tic audible à l'attack sur la chaîne play multiband + pga
++ drc. Comparatif empirique trois variantes :</p>
 <table>
-<thead><tr><th>Commit</th><th>Sujet</th><th>Phase</th></tr></thead>
+<thead><tr><th>Chaîne</th><th>xrun_play stable</th><th>Audio</th></tr></thead>
 <tbody>
-<tr><td><span class="commit-hash">4bea8e59d</span></td><td>imx sai — V7.0-E7.2 TX FIFO alignment (prime N zeros)</td><td>V7</td></tr>
-<tr><td><span class="commit-hash">6ee842c67</span></td><td>audio/dai-legacy + npu_tap — V7.0-E4 NPU dual-tap firmware hook</td><td>V7</td></tr>
-<tr><td><span class="commit-hash">a535405ca</span></td><td>topology — V7.0-E3 final strips OUT play (multiband_drc + pga)</td><td>V7</td></tr>
-<tr><td><span class="commit-hash">5eafab230</span></td><td>audio/multiband_drc — V7.0-E2.b 8ch blob infrastructure</td><td>V7</td></tr>
-<tr><td><span class="commit-hash">7440b3c21</span></td><td>audio/multiband_drc — V7.0-E2 per-channel params back-compat ABI</td><td>V7</td></tr>
-<tr><td><span class="commit-hash">dfe9b2497</span></td><td>topology — V7.0-E1 simplify play pipeline + custom 8ch macro</td><td>V7</td></tr>
-<tr><td><span class="commit-hash">0580b5f14</span></td><td>audio — pipeline_comp_copy re-entry guard</td><td>V5.4.1</td></tr>
-<tr><td><span class="commit-hash">ea984a266</span></td><td>audio — drc multi-config per-channel D3</td><td>V5.4.1</td></tr>
-<tr><td><span class="commit-hash">9cf6fa257</span></td><td>topology — V5.4.1 E5.e.2 1-comp-8ch native pipe (architecture pivot)</td><td>V5.4.1</td></tr>
-<tr><td><span class="commit-hash">7499505ec</span></td><td>audio — preserve_channels pour branched mono buffers</td><td>V5.4.1</td></tr>
-<tr><td><span class="commit-hash">bf24053fd</span></td><td>imx sai — idempotence patch (flag configured + FRDE toggled)</td><td>V5.4.1</td></tr>
-<tr><td><span class="commit-hash">61fcb2e7d</span></td><td>audio/dai-legacy — V3.2.2 NPU tap hook (capture post-DRC vers DRAM)</td><td>P1a.2</td></tr>
-<tr><td><span class="commit-hash">9f6f70a21</span></td><td>audio/dai-legacy — guard defensive period_bytes==0 NPU tap init</td><td>P1a.2</td></tr>
+<tr><td>passthrough host → SAI direct</td><td>56</td><td>Propre</td></tr>
+<tr><td>multiband + pga + drc final</td><td>8</td><td>tic tic audible</td></tr>
+<tr><td>multiband + pga (drc retiré)</td><td>1</td><td>Propre</td></tr>
 </tbody>
 </table>
+<p>Le pattern (tic au début, voix propre, re-tic périodique) =
+compresseur dynamique qui claque à l'attack. Coeffs default
+<code>drc_coef_default_8ch.m4</code> (héritage musique : threshold ~-24
+dBFS, attack ~3 ms, hard knee) inadaptés voix temps réel, aggravés par
+la double compression multiband_drc + drc. Décision GO : retirer le drc
+final ; le multiband_drc seul suffit. Un vrai limiteur calibré voix
+pourra revenir en E3.b avec coeffs adaptés.</p>
+
+<h3>9.12 <span class="commit-hash">6ee842c67</span> · NPU dual-tap V7.0-E4</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> tap-in (cap raw) + tap-out (play post-FX)<br>
+<span class="label">Phase</span> V7.0-E4 — extension dual<br>
+<span class="label">Fichiers</span> <code>src/audio/dai-legacy.c</code>,
+  <code>src/include/sof/audio/npu_tap.h</code>
+</div>
+
+<h4>Ce que le commit fait</h4>
+<ul>
+  <li>Extend le hook de <code>dai_dma_cb()</code> à <strong>2 branches</strong> :
+    <ul>
+      <li><strong>cap</strong> : post-<code>dma_buffer_copy_from()</code>,
+          écrit le signal SAI7 RX brut dans tap-in via miroir inline de
+          <code>audio_stream_rewind_rptr_by_bytes</code> (cette API
+          n'existait pas symétrique côté rptr, donc inline mirror exact des
+          lignes 779-790 de <code>audio_stream_rewind_wptr_by_bytes</code>).</li>
+      <li><strong>play</strong> : préservée à l'identique V3.2.2, écrit
+          dans tap-out @<code>0x942B0000</code>.</li>
+    </ul>
+  </li>
+  <li><code>npu_tap_owner</code> splitté en
+      <code>npu_tap_in_owner</code> + <code>npu_tap_out_owner</code> :
+      sentinelles indépendantes, invariant V7.0 = PIPE 1 cap unique +
+      PIPE 2 play unique → 1 owner par direction.</li>
+  <li><code>dai_common_params()</code> choisit l'adresse tap et la
+      direction header selon <code>dev-&gt;direction</code>.</li>
+  <li><code>dai_common_reset()</code> nullifie inconditionnellement les
+      2 sentinelles.</li>
+  <li><code>npu_tap_hdr</code> gagne un champ <code>direction</code>
+      (0=play, 1=cap) pour permettre à l'A53 de distinguer post-mortem.</li>
+</ul>
+
+<h4>Pourquoi</h4>
+<p>Le NPU/A53 doit observer 2 signaux indépendamment : (a) le signal
+brut pré-effets (pour détecteurs ML basés voix naturelle) et (b) le
+signal post-effets pré-DAI TX (pour mastering ML loudness / supervision
+sortie). Extension naturelle de V3.2.2 mono-tap sans rien casser : la
+branche play V3.2.2 reste bit-exact identique, seule l'écriture cap
+est nouvelle.</p>
+
+<h3>9.13 <span class="commit-hash">4bea8e59d</span> · SAI TX FIFO alignment V7.0-E7.2</h3>
+
+<div class="callout info">
+<span class="label">Sujet</span> Prime N zeros au lieu de 1 avant TERE=1<br>
+<span class="label">Phase</span> V7.0-E7.2 — fix décalage TDM slot 1<br>
+<span class="label">Fichiers</span> <code>src/drivers/imx/sai.c</code>
+  (<code>sai_set_config</code> uniquement)
+</div>
+
+<h4>Ce que le commit fait</h4>
+<pre><code>// AVANT
+sai_write(sai, TX_FIFO_BASE, 0);     /* prime 1 zero */
+sai_set_bit(sai, TCSR, TCSR_TERE);   /* enable TX */
+
+// APRÈS
+for (i = 0; i &lt; tdm_slots; i++)
+    sai_write(sai, TX_FIFO_BASE, 0); /* prime 1 full TDM frame */
+sai_set_bit(sai, TCSR, TCSR_TERE);   /* enable TX */</code></pre>
+
+<h4>Pourquoi (long)</h4>
+<p>Cause racine du décalage TDM TX intermittent observé sur V7.0
+playback : slot 0 = ch0 OK, slot 1 = ch7 (WRONG), slots 2..7 silencieux
+sur TAC0 = seule la première paire stéréo sort correctement, les
+3 autres TACs sont muets.</p>
+
+<p>Mécanisme détaillé : avec un seul zéro primé dans la FIFO TX avant
+<code>TERE=1</code>, et BCLK/FSYNC continus à partir de ce moment
+(contrainte i.MX8MP async mode TAC PLL — voir mémoire
+<code>feedback_tx_master_drives_all.md</code>), la SAI clock-out le slot 0
+en lisant le zéro primé, puis underflow pour slots 1..7 de la première
+frame et toutes les suivantes jusqu'au premier <code>play_start</code>
+<code>FRDE=1</code> (typiquement des dizaines de ms plus tard).</p>
+
+<p>Pendant la fenêtre d'underflow, le slot counter SAI avance
+indépendamment du FIFO read pointer. Quand le DMA finit par pousser
+la première burst <code>[ch0..ch7]</code>, le read pointer atterrit à
+une phase arbitraire par rapport aux frames FSYNC.</p>
+
+<p>Fix : primer <code>tdm_slots</code> zéros (= 1 frame TDM complète, =
+8 sur TAC5212) <strong>AVANT TERE=1</strong>. La SAI émet alors une
+frame de silence avec read pointer aligné slot 0, puis underflow uniforme
+jusqu'à ce que le DMA fournisse data, mais avec phase slot-counter ↔
+read-pointer garantie déterministe au prochain edge slot 0.</p>
+
+<p>Side note : une tentative antérieure de fixer cela dans
+<code>sai_start</code> sur le path idempotence <code>configured=true</code>
+(TCSR.FR FIFO reset + re-prime) causait un side-effect sur l'alignement
+RX FIFO (RX shifté de 3 slots) — abandonnée. Le fix sur
+<code>sai_set_config</code> est sûr car il opère AVANT TERE=1 quand la
+machine est en idle.</p>
 </section>
 
 <!-- ====================== 10. DEAD ENDS ====================== -->
