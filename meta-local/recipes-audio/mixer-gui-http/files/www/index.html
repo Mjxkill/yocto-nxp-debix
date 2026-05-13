@@ -999,9 +999,14 @@ html, body {
     </div>
     <div class="strips-row">
       <template x-for="i in 8" :key="'ret'+i">
-        <div class="strip">
-          <div class="label" x-text="'R' + i"></div>
-          <div class="sublabel" x-text="'FX' + (Math.floor((i-1)/2) + 1) + (i%2 ? 'L' : 'R')"></div>
+        <div class="strip" :class="!selectedIsOutput && selectedStrip === i+17 ? 'selected' : ''"
+             @click.self="openStripDetail(i+17, 'R'+i, 'Return FX', false)"
+             @dblclick="openStripDetail(i+17, 'R'+i, 'Return FX', false)">
+          <div class="label" x-text="'R' + i"
+               @click="openStripDetail(i+17, 'R'+i, 'Return FX', false)"></div>
+          <div class="sublabel"
+               x-text="'FX' + (Math.floor((i-1)/2) + 1) + (i%2 ? 'L' : 'R')"
+               @click="openStripDetail(i+17, 'R'+i, 'Return FX', false)"></div>
           <div class="fader-meter-pair">
             <div class="fader-track">
               <input type="range" class="fader" min="-60" max="6" step="0.5"
