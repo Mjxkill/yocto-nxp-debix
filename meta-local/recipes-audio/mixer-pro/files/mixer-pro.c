@@ -258,6 +258,11 @@ static void *cap_uac2_thread(void *arg)
 		if (r < 0) {
 			atomic_fetch_add(&g_ring_uac2_cap.xruns, 1);
 			snd_pcm_recover(g_st.cap_uac2.pcm, r, 1);
+			/* Reset compteur drift : un xrun introduit un trou
+			 * dans le sample stream qui fausse la mesure de rate.
+			 * On redémarre la fenêtre proprement. */
+			clock_gettime(CLOCK_MONOTONIC, &drift_t0);
+			drift_samples = 0;
 			continue;
 		}
 		if (r == PERIOD_FRAMES) {
@@ -270,20 +275,31 @@ static void *cap_uac2_thread(void *arg)
 			uac2_ring_push_period(&g_ring_uac2_cap, buf);
 		}
 
-		/* Mesure drift toutes les ~1 sec wall-clock */
+		/* Mesure drift sur fenêtre 10 sec wall-clock.
+		 * Fenêtre courte = bruité par jitter USB iso (~400 ppm variance
+		 * sur 1 sec). Fenêtre 10 sec = bruit réduit ~30 ppm.
+		 * EMA alpha=0.1 (tau ~30 sec mesures = ~5 min) pour stabilité
+		 * d'affichage GUI sur signal physiquement constant. */
 		drift_samples += (uint64_t)r;
 		struct timespec now;
 		clock_gettime(CLOCK_MONOTONIC, &now);
 		double elapsed =
 		    (double)(now.tv_sec  - drift_t0.tv_sec)  +
 		    (double)(now.tv_nsec - drift_t0.tv_nsec) / 1e9;
-		if (elapsed >= 1.0) {
+		if (elapsed >= 10.0) {
 			double rate = (double)drift_samples / elapsed;
 			double ppm  = (rate - (double)SAMPLE_RATE)
 			              / (double)SAMPLE_RATE * 1e6;
-			/* EMA tau ~3 sec */
-			drift_ppm_ema = 0.7f * drift_ppm_ema +
-			                0.3f * (float)ppm;
+			/* EMA très lent : convergence vraie valeur en quelques minutes,
+			 * mais valeur affichée stable au ppm près en steady state.
+			 * Bootstrap : alpha=1 au premier sample valide pour ne pas
+			 * attendre 5 min avant d'avoir une mesure utile. */
+			if (atomic_load(&g_usb_drift_valid)) {
+				drift_ppm_ema = 0.9f * drift_ppm_ema +
+				                0.1f * (float)ppm;
+			} else {
+				drift_ppm_ema = (float)ppm;
+			}
 			atomic_store(&g_usb_drift_ppm_x100,
 			             (int)(drift_ppm_ema * 100.0f));
 			atomic_store(&g_usb_drift_valid, 1);
