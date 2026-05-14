@@ -1167,13 +1167,28 @@ int main(int argc, char **argv)
 	analyzer_taps_init(g_taps);
 	atomic_store(&g_running_flag_for_analyzer, 1);
 
-	/* Open ALSA streams (skip selon flags command-line) */
+	/* Open ALSA streams (skip selon flags command-line).
+	 * V8.0-E1 : UAC2 + Phone graceful-degrade. Si le PCM n'existe pas
+	 * (gadget pas bindé, câble USB absent au boot, recipe désactivé),
+	 * on log un warning et on bascule en mode skip — le DSP reste
+	 * opérationnel seul. DSP capture/playback restent fatal (board
+	 * inutilisable sans). */
 	if (pcm_open(&g_st.cap_dsp,   PCM_DSP_CAP,   N_INPUT_MICS,   SND_PCM_STREAM_CAPTURE)  < 0) goto err;
-	if (!g_skip_uac2)  { if (pcm_open(&g_st.cap_uac2,  PCM_UAC2_CAP,  N_INPUT_STEMS,  SND_PCM_STREAM_CAPTURE)  < 0) goto err; }
-	if (!g_skip_phone) { if (pcm_open(&g_st.cap_phone, PCM_PHONE_CAP, N_INPUT_PHONE,  SND_PCM_STREAM_CAPTURE)  < 0) goto err; }
 	if (pcm_open(&g_st.play_dsp,  PCM_DSP_PLAY,  N_OUTPUT_DSP,   SND_PCM_STREAM_PLAYBACK) < 0) goto err;
-	if (!g_skip_uac2)  { if (pcm_open(&g_st.play_uac2, PCM_UAC2_PLAY, N_OUTPUT_UAC2,  SND_PCM_STREAM_PLAYBACK) < 0) goto err; }
-	if (!g_skip_phone) { if (pcm_open(&g_st.play_phone,PCM_PHONE_PLAY,N_OUTPUT_PHONE, SND_PCM_STREAM_PLAYBACK) < 0) goto err; }
+	if (!g_skip_uac2) {
+		if (pcm_open(&g_st.cap_uac2,  PCM_UAC2_CAP,  N_INPUT_STEMS,  SND_PCM_STREAM_CAPTURE)  < 0 ||
+		    pcm_open(&g_st.play_uac2, PCM_UAC2_PLAY, N_OUTPUT_UAC2,  SND_PCM_STREAM_PLAYBACK) < 0) {
+			mlog("UAC2Gadget PCM unavailable (gadget not bound or USB unplugged) — running without UAC2");
+			g_skip_uac2 = 1;
+		}
+	}
+	if (!g_skip_phone) {
+		if (pcm_open(&g_st.cap_phone, PCM_PHONE_CAP, N_INPUT_PHONE,  SND_PCM_STREAM_CAPTURE)  < 0 ||
+		    pcm_open(&g_st.play_phone,PCM_PHONE_PLAY,N_OUTPUT_PHONE, SND_PCM_STREAM_PLAYBACK) < 0) {
+			mlog("Phone aloop PCM unavailable — running without Phone");
+			g_skip_phone = 1;
+		}
+	}
 
 	/* Lock memory for RT */
 	mlockall(MCL_CURRENT | MCL_FUTURE);

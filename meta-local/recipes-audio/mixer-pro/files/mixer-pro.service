@@ -1,12 +1,13 @@
 [Unit]
-Description=V7.0-E6.d mixer-pro daemon (console DAW SW, 26 in / 4 bus FX / 18 out)
+Description=V8.0-E1 mixer-pro daemon (console DAW SW, 26 in / 4 bus FX / 18 out)
 After=sound.target snd-aloop-phone.service usb-uac2-gadget.service
+Wants=usb-uac2-gadget.service
 Documentation=man:mixer-pro(8) file:///etc/alsa-route-bridge.conf
 
 [Service]
 Type=simple
 ExecStartPre=/usr/bin/tac-reset analog
-ExecStart=/usr/bin/mixer-pro --no-uac2 --no-phone
+ExecStart=/usr/bin/mixer-pro --no-phone
 TimeoutStartSec=30
 Restart=on-failure
 RestartSec=2
