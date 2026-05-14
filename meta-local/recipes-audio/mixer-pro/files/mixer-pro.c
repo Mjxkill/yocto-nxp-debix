@@ -132,6 +132,163 @@ _Static_assert(_Alignof(float) <= 4, "float alignment compatible with atomicity"
 
 static struct mixer_state g_st;
 
+/* Forward decl pour les threads UAC2 (mlog défini plus bas) */
+static void mlog(const char *fmt, ...);
+
+/* ============================== V8.1 UAC2 ISOLATION =================
+ *
+ * Ring SPSC dédié pour chaque direction UAC2 (cap + play), alimenté par
+ * 1 thread RT dédié qui own le PCM en BLOCKING. Découple totalement
+ * l'USB UAC2 du chemin DSP : un blocage USB (msleep tac5212_trigger
+ * sur cap, host PipeWire suspend sur play, unplug...) reste confiné
+ * dans son thread, n'affecte pas le DSP.
+ *
+ * Capacité : 8 periods × 96 frames × 8 ch × 4 B = 24 KB par direction,
+ * soit 16 ms de tolérance jitter avant drop. Indices SPSC atomic 32-bit,
+ * acquire/release ordering (pattern déjà éprouvé sur ring DSP).
+ *
+ * audio_thread voit le UAC2 comme une simple lecture "always latest period"
+ * (silence si pas de samples prêts) — il n'attend plus jamais sur USB.
+ * Idem pour play : push best-effort, drop si ring full.
+ */
+#define UAC2_RING_PERIODS  8
+#define UAC2_RING_FRAMES   (PERIOD_FRAMES * UAC2_RING_PERIODS)
+#define UAC2_CH            8   /* = N_INPUT_STEMS = N_OUTPUT_UAC2 */
+
+typedef struct {
+	int32_t      buf[UAC2_RING_FRAMES * UAC2_CH];
+	atomic_uint  wr;
+	atomic_uint  rd;
+	atomic_ulong drops;
+	atomic_ulong xruns;
+} uac2_ring_t;
+
+static uac2_ring_t g_ring_uac2_cap;
+static uac2_ring_t g_ring_uac2_play;
+
+/* Pop 1 period dans `out`. Renvoie 1 si succès, 0 si ring vide (out zeroed). */
+static int uac2_ring_pop_period(uac2_ring_t *r, int32_t *out)
+{
+	unsigned wi = atomic_load_explicit(&r->wr, memory_order_acquire);
+	unsigned ri = atomic_load_explicit(&r->rd, memory_order_relaxed);
+	unsigned avail = wi - ri;   /* unsigned wrap OK */
+
+	if (avail < PERIOD_FRAMES) {
+		memset(out, 0, PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
+		return 0;
+	}
+
+	for (unsigned f = 0; f < PERIOD_FRAMES; f++) {
+		unsigned slot = (ri + f) % UAC2_RING_FRAMES;
+		memcpy(&out[f * UAC2_CH], &r->buf[slot * UAC2_CH],
+		       UAC2_CH * sizeof(int32_t));
+	}
+	atomic_store_explicit(&r->rd, ri + PERIOD_FRAMES,
+			      memory_order_release);
+	return 1;
+}
+
+/* Push 1 period depuis `in`. Si ring full, advance rd (drop oldest). */
+static void uac2_ring_push_period(uac2_ring_t *r, const int32_t *in)
+{
+	unsigned wi = atomic_load_explicit(&r->wr, memory_order_relaxed);
+	unsigned ri = atomic_load_explicit(&r->rd, memory_order_acquire);
+	unsigned used = wi - ri;
+
+	if (used + PERIOD_FRAMES > UAC2_RING_FRAMES) {
+		unsigned drop = used + PERIOD_FRAMES - UAC2_RING_FRAMES;
+		atomic_store_explicit(&r->rd, ri + drop, memory_order_release);
+		atomic_fetch_add(&r->drops, drop);
+	}
+
+	for (unsigned f = 0; f < PERIOD_FRAMES; f++) {
+		unsigned slot = (wi + f) % UAC2_RING_FRAMES;
+		memcpy(&r->buf[slot * UAC2_CH], &in[f * UAC2_CH],
+		       UAC2_CH * sizeof(int32_t));
+	}
+	atomic_store_explicit(&r->wr, wi + PERIOD_FRAMES,
+			      memory_order_release);
+}
+
+/* Thread cap UAC2 : own le PCM, read BLOCKING, push ring. Retry sur erreur
+ * (USB unplug → -ENODEV → recover, ne propage rien). */
+static void *cap_uac2_thread(void *arg)
+{
+	(void)arg;
+	struct sched_param sp = { .sched_priority = RT_PRIO_AUDIO };
+	(void)pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+	mlog("cap_uac2_thread : SCHED_FIFO prio %d", RT_PRIO_AUDIO);
+
+	int32_t buf[PERIOD_FRAMES * UAC2_CH];
+
+	/* Le PCM est déjà ouvert par main() côté pcm_open(). Ici on
+	 * passe en BLOCKING (le thread est seul à utiliser ce PCM) et
+	 * on start. Si start échoue, on retry périodiquement. */
+	snd_pcm_nonblock(g_st.cap_uac2.pcm, 0);
+
+	while (atomic_load(&g_st.running)) {
+		int err = snd_pcm_start(g_st.cap_uac2.pcm);
+		if (err == 0 || err == -EBADFD) break;  /* started or already */
+		mlog("cap_uac2_thread: start retry: %s", snd_strerror(err));
+		snd_pcm_recover(g_st.cap_uac2.pcm, err, 1);
+		usleep(100000);
+	}
+
+	while (atomic_load(&g_st.running)) {
+		snd_pcm_sframes_t r = snd_pcm_readi(g_st.cap_uac2.pcm,
+						   buf, PERIOD_FRAMES);
+		if (r == PERIOD_FRAMES) {
+			uac2_ring_push_period(&g_ring_uac2_cap, buf);
+			continue;
+		}
+		if (r < 0) {
+			atomic_fetch_add(&g_ring_uac2_cap.xruns, 1);
+			snd_pcm_recover(g_st.cap_uac2.pcm, r, 1);
+			continue;
+		}
+		/* Partial read : pad zeros then push */
+		memset(&buf[r * UAC2_CH], 0,
+		       (PERIOD_FRAMES - r) * UAC2_CH * sizeof(int32_t));
+		uac2_ring_push_period(&g_ring_uac2_cap, buf);
+	}
+	mlog("cap_uac2_thread exiting");
+	return NULL;
+}
+
+/* Thread play UAC2 : own le PCM, pop ring, write BLOCKING. */
+static void *play_uac2_thread(void *arg)
+{
+	(void)arg;
+	struct sched_param sp = { .sched_priority = RT_PRIO_AUDIO };
+	(void)pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+	mlog("play_uac2_thread : SCHED_FIFO prio %d", RT_PRIO_AUDIO);
+
+	int32_t buf[PERIOD_FRAMES * UAC2_CH];
+
+	snd_pcm_nonblock(g_st.play_uac2.pcm, 0);
+
+	/* Prefill N_PERIODS - 1 periods de silence pour atteindre start_threshold */
+	memset(buf, 0, sizeof(buf));
+	for (int prime = 0; prime < N_PERIODS - 1; prime++) {
+		snd_pcm_sframes_t r = snd_pcm_writei(g_st.play_uac2.pcm,
+						     buf, PERIOD_FRAMES);
+		if (r < 0) snd_pcm_recover(g_st.play_uac2.pcm, r, 1);
+	}
+
+	while (atomic_load(&g_st.running)) {
+		(void)uac2_ring_pop_period(&g_ring_uac2_play, buf);
+		/* Toujours écrire — pop renvoie silence si ring vide */
+		snd_pcm_sframes_t r = snd_pcm_writei(g_st.play_uac2.pcm,
+						     buf, PERIOD_FRAMES);
+		if (r < 0) {
+			atomic_fetch_add(&g_ring_uac2_play.xruns, 1);
+			snd_pcm_recover(g_st.play_uac2.pcm, r, 1);
+		}
+	}
+	mlog("play_uac2_thread exiting");
+	return NULL;
+}
+
 /* E7.5 — analyzer taps. Visibility :
  *   - mixer-pro.c owns the storage (g_taps).
  *   - analyzer.c reads via the extern'd pointer + run flag.
@@ -334,13 +491,10 @@ static void *audio_thread(void *arg)
 	int32_t play_uac2_buf [PERIOD_FRAMES * N_OUTPUT_UAC2];
 	int32_t play_phone_buf[PERIOD_FRAMES * N_OUTPUT_PHONE];
 
-	/* UAC2/Phone : NONBLOCK pour ne pas bloquer si l'host PC est absent ou
-	 * si l'aloop n'est pas encore alimenté. DSP = blocant (horloge maître).
+	/* V8.1 : UAC2 cap/play sont owned par cap_uac2_thread / play_uac2_thread
+	 * (BLOCKING dans ces threads, lus/écrits via rings SPSC). On NE touche
+	 * plus aux UAC2 PCMs ici. Phone reste NONBLOCK dans ce thread.
 	 */
-	if (!g_skip_uac2) {
-		snd_pcm_nonblock(g_st.cap_uac2.pcm,  1);
-		snd_pcm_nonblock(g_st.play_uac2.pcm, 1);
-	}
 	if (!g_skip_phone) {
 		snd_pcm_nonblock(g_st.cap_phone.pcm,  1);
 		snd_pcm_nonblock(g_st.play_phone.pcm, 1);
@@ -381,18 +535,14 @@ static void *audio_thread(void *arg)
 				      memory_order_release);
 	}
 
-	if (!g_skip_uac2)
-		for (int prime = 0; prime < N_PERIODS - 1; prime++)
-			snd_pcm_writei(g_st.play_uac2.pcm, play_uac2_buf, PERIOD_FRAMES);
+	/* V8.1 : UAC2 prefill + start sont faits par leurs threads dédiés
+	 * (cap_uac2_thread + play_uac2_thread). On ne start ici que le DSP
+	 * (horloge maître) + Phone (still NONBLOCK in this thread). */
 	if (!g_skip_phone)
 		for (int prime = 0; prime < N_PERIODS - 1; prime++)
 			snd_pcm_writei(g_st.play_phone.pcm, play_phone_buf, PERIOD_FRAMES);
 
-	/* Démarre cap DSP — via le link, play démarre aussi (ALSA fait le start
-	 * implicite quand le PLAY buffer atteint start_threshold).
-	 */
 	snd_pcm_start(g_st.cap_dsp.pcm);
-	if (!g_skip_uac2)  snd_pcm_start(g_st.cap_uac2.pcm);
 	if (!g_skip_phone) snd_pcm_start(g_st.cap_phone.pcm);
 
 	struct timespec t_iter_start, t_cap_done, t_mix_done, t_play_done;
@@ -406,17 +556,13 @@ static void *audio_thread(void *arg)
 		r = snd_pcm_readi(g_st.cap_dsp.pcm, cap_dsp_buf, PERIOD_FRAMES);
 		if (r < 0) { pcm_recover(g_st.cap_dsp.pcm, r); memset(cap_dsp_buf, 0, sizeof(cap_dsp_buf)); }
 
-		/* UAC2/Phone : tente NONBLOCK une période ; si EAGAIN ou < frames,
-		 * insère zero sans recover (EAGAIN n'est PAS un xrun).
-		 */
+		/* V8.1 : UAC2 cap = pop du ring SPSC alimenté par cap_uac2_thread.
+		 * Si ring vide (thread pas encore prêt, ou USB bloqué), silence
+		 * automatique. Pas de risque de propagation USB → DSP. */
 		if (g_skip_uac2) {
 			memset(cap_uac2_buf, 0, sizeof(cap_uac2_buf));
 		} else {
-			r = snd_pcm_readi(g_st.cap_uac2.pcm, cap_uac2_buf, PERIOD_FRAMES);
-			if (r != PERIOD_FRAMES) {
-				memset(cap_uac2_buf, 0, sizeof(cap_uac2_buf));
-				if (r < 0 && r != -EAGAIN) snd_pcm_recover(g_st.cap_uac2.pcm, r, 1);
-			}
+			uac2_ring_pop_period(&g_ring_uac2_cap, cap_uac2_buf);
 		}
 		if (g_skip_phone) {
 			memset(cap_phone_buf, 0, sizeof(cap_phone_buf));
@@ -586,10 +732,11 @@ static void *audio_thread(void *arg)
 		uint64_t one = 1;
 		(void)write(g_st.ring_event_fd, &one, sizeof(one));
 
-		/* UAC2/Phone restent dans le thread audio (NONBLOCK donc non bloquant) */
+		/* V8.1 : UAC2 play = push dans le ring SPSC consommé par
+		 * play_uac2_thread. Si ring full (thread USB trop lent / suspended),
+		 * drop oldest sample, pas de blocage du thread audio. */
 		if (!g_skip_uac2) {
-			r = snd_pcm_writei(g_st.play_uac2.pcm, play_uac2_buf, PERIOD_FRAMES);
-			if (r < 0 && r != -EAGAIN) snd_pcm_recover(g_st.play_uac2.pcm, r, 1);
+			uac2_ring_push_period(&g_ring_uac2_play, play_uac2_buf);
 		}
 		if (!g_skip_phone) {
 			r = snd_pcm_writei(g_st.play_phone.pcm, play_phone_buf, PERIOD_FRAMES);
@@ -1197,14 +1344,24 @@ int main(int argc, char **argv)
 	signal(SIGTERM, on_signal);
 
 	pthread_t th_audio, th_ctrl, th_play, th_analyzer;
+	pthread_t th_cap_uac2, th_play_uac2;
 	pthread_create(&th_ctrl, NULL, control_thread, NULL);
 	pthread_create(&th_play, NULL, play_thread, NULL);   /* E6.g Phase 2 */
 	pthread_create(&th_audio, NULL, audio_thread, NULL);
 	pthread_create(&th_analyzer, NULL, analyzer_thread, NULL);  /* E7.5 */
+	/* V8.1 : threads UAC2 dédiés (isolation USB ↔ DSP) */
+	if (!g_skip_uac2) {
+		pthread_create(&th_cap_uac2,  NULL, cap_uac2_thread,  NULL);
+		pthread_create(&th_play_uac2, NULL, play_uac2_thread, NULL);
+	}
 
 	pthread_join(th_audio, NULL);
 	pthread_join(th_play, NULL);
 	pthread_join(th_ctrl, NULL);
+	if (!g_skip_uac2) {
+		pthread_join(th_cap_uac2, NULL);
+		pthread_join(th_play_uac2, NULL);
+	}
 	atomic_store(&g_running_flag_for_analyzer, 0);
 	pthread_join(th_analyzer, NULL);
 	analyzer_taps_destroy(g_taps);
