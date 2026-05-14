@@ -16,6 +16,8 @@ SRC_URI = " \
     file://effects.h \
     file://analyzer.c \
     file://analyzer.h \
+    file://asrc.c \
+    file://asrc.h \
     file://mixerctl.c \
     file://Makefile \
     file://mixer-pro.service \
