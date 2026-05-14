@@ -864,6 +864,13 @@ html, body {
   </div>
   <div class="app-stat">lat <span class="v" x-text="state.latency_us_one_way"></span> µs</div>
   <div class="app-stat">iter <span class="v" x-text="state.prof_iter_us"></span> µs</div>
+  <!-- V8.1.b — Drift USB↔DSP indicator (passive measurement, single value
+       for both cap & play since same host clock) -->
+  <div class="app-stat"
+       :class="driftStatusClass()"
+       :title="'Drift USB host clock vs DSP TAC5212 board clock — measured passively from UAC2 capture sample rate.\\nVert: <50 ppm (excellent). Ambre: 50-200 ppm (normal). Rouge: >200 ppm (drift important).'">
+    drift <span class="v" x-text="driftDisplay()"></span> ppm
+  </div>
   <div class="spacer"></div>
   <button class="btn-header"
           :class="tacResetBusy ? 'busy' : ''"
@@ -1652,6 +1659,7 @@ html, body {
 function mixerApp() {
   return {
     state: { version:'?', frames:0, xrun:0, xrun_delta:0, latency_us_one_way:0, prof_iter_us:0 },
+    drift: { ppm: 0, valid: 0 },
     connected: false,
     streaming: false,
     tacResetBusy: false,
@@ -1746,6 +1754,36 @@ function mixerApp() {
       this.initBiquadParams();
       await this.fetchFxStates();
       await this.fetchAllReturnsRouting();
+      /* V8.1.b — poll drift USB↔DSP toutes les 2 sec (mesure lente, pas SSE) */
+      this.fetchDrift();
+      setInterval(() => this.fetchDrift(), 2000);
+    },
+
+    async fetchDrift() {
+      try {
+        const r = await fetch('/api/drift');
+        if (!r.ok) return;
+        const d = await r.json();
+        if (typeof d.drift_ppm === 'number') {
+          this.drift.ppm = d.drift_ppm;
+          this.drift.valid = d.valid || 0;
+        }
+      } catch(e) {}
+    },
+
+    driftDisplay() {
+      if (!this.drift.valid) return '— ';
+      const v = this.drift.ppm;
+      const sign = v > 0 ? '+' : '';
+      return sign + v.toFixed(1);
+    },
+
+    driftStatusClass() {
+      if (!this.drift.valid) return '';
+      const a = Math.abs(this.drift.ppm);
+      if (a > 200) return 'warn';  /* style WARN existant = ambre/rouge */
+      if (a > 50)  return '';      /* normal */
+      return 'ok';                 /* style OK existant = vert si défini */
     },
 
     initStream() {

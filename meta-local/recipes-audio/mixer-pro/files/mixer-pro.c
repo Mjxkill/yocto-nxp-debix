@@ -41,7 +41,6 @@
 #include "mixer-pro.h"
 #include "effects.h"
 #include "analyzer.h"
-#include "asrc.h"
 
 /* ============================== State ============================== */
 
@@ -133,10 +132,17 @@ _Static_assert(_Alignof(float) <= 4, "float alignment compatible with atomicity"
 
 static struct mixer_state g_st;
 
-/* Forward decl pour les threads UAC2 (mlog + helpers conv définis plus bas) */
+/* Forward decl pour les threads UAC2 (mlog défini plus bas) */
 static void mlog(const char *fmt, ...);
-static inline float    s32_to_f(int32_t s);
-static inline int32_t  f_to_s32(float f);
+
+/* V8.1.b — Mesure passive du drift USB ↔ DSP (un seul drift, car même
+ * horloge USB host pour cap et play). Le thread cap_uac2_thread compte
+ * combien de samples il reçoit par seconde de wall-clock (monotonic),
+ * compare à 48000 Hz nominal, déduit le drift en ppm.
+ * Smoothed via EMA pour stabilité d'affichage.
+ * Pas de correction algorithmique — purement informationnel pour le user. */
+static _Atomic int    g_usb_drift_ppm_x100 = 0; /* drift_ppm × 100 = 0.01 ppm precision */
+static _Atomic int    g_usb_drift_valid = 0;    /* 0 = pas encore mesuré */
 
 /* ============================== V8.1 UAC2 ISOLATION =================
  *
@@ -168,85 +174,6 @@ typedef struct {
 
 static uac2_ring_t g_ring_uac2_cap;
 static uac2_ring_t g_ring_uac2_play;
-
-/* V8.2 — ASRC instances (drift correction USB ↔ DSP).
- *   asrc_uac2_cap  : convertit ring USB-rate → audio_thread DSP-rate
- *   asrc_uac2_play : convertit audio_thread DSP-rate → ring USB-rate
- * Both updated every audio_thread iteration with ring fill measurement.
- */
-static asrc_t g_asrc_uac2_cap;
-static asrc_t g_asrc_uac2_play;
-
-/* Fill (frames disponibles à la lecture) — utilisé par PID ASRC. */
-static int uac2_ring_fill(uac2_ring_t *r)
-{
-	unsigned wi = atomic_load_explicit(&r->wr, memory_order_acquire);
-	unsigned ri = atomic_load_explicit(&r->rd, memory_order_relaxed);
-	return (int)(wi - ri);   /* unsigned wrap OK */
-}
-
-/* Peek jusqu'à `max_n` frames sans avancer le read pointer.
- * Retourne le nombre effectivement copié (≤ max_n). */
-static int uac2_ring_peek(uac2_ring_t *r, int32_t *out, int max_n)
-{
-	unsigned wi = atomic_load_explicit(&r->wr, memory_order_acquire);
-	unsigned ri = atomic_load_explicit(&r->rd, memory_order_relaxed);
-	unsigned avail = wi - ri;
-	int n = (int)avail < max_n ? (int)avail : max_n;
-	for (int f = 0; f < n; f++) {
-		unsigned slot = (ri + f) % UAC2_RING_FRAMES;
-		memcpy(&out[f * UAC2_CH], &r->buf[slot * UAC2_CH],
-		       UAC2_CH * sizeof(int32_t));
-	}
-	return n;
-}
-
-/* Avance le read pointer de `n` frames (commit après asrc_run). */
-static void uac2_ring_advance(uac2_ring_t *r, int n)
-{
-	unsigned ri = atomic_load_explicit(&r->rd, memory_order_relaxed);
-	atomic_store_explicit(&r->rd, ri + (unsigned)n, memory_order_release);
-}
-
-/* Pop N frames dans `out`. Si pas assez disponibles, complète zeros et
- * retourne le nombre effectivement extrait. Avance le rd. */
-static int uac2_ring_pop_n(uac2_ring_t *r, int32_t *out, int n)
-{
-	int got = uac2_ring_peek(r, out, n);
-	if (got > 0) uac2_ring_advance(r, got);
-	if (got < n) {
-		memset(&out[got * UAC2_CH], 0,
-		       (n - got) * UAC2_CH * sizeof(int32_t));
-	}
-	return got;
-}
-
-/* Push N frames depuis `in`. Si ring n'a pas la place pour les N, ne push
- * QUE ce qui rentre (skip-new policy). Pas de drop oldest qui crée des
- * discontinuités audibles à chaque push saturé. Le PID a la responsabilité
- * de drainer le ring via le ratio ASRC ; en attendant, l'audio en cours
- * de lecture reste continu et les nouveaux samples sont sacrifiés. */
-static void uac2_ring_push_n(uac2_ring_t *r, const int32_t *in, int n)
-{
-	unsigned wi = atomic_load_explicit(&r->wr, memory_order_relaxed);
-	unsigned ri = atomic_load_explicit(&r->rd, memory_order_acquire);
-	unsigned used = wi - ri;
-	int can_push = (int)(UAC2_RING_FRAMES - used);
-	if (can_push <= 0) {
-		atomic_fetch_add(&r->drops, (unsigned long)n);
-		return;
-	}
-	if (n > can_push) {
-		atomic_fetch_add(&r->drops, (unsigned long)(n - can_push));
-		n = can_push;
-	}
-	for (int f = 0; f < n; f++) {
-		unsigned slot = (wi + f) % UAC2_RING_FRAMES;
-		memcpy(&r->buf[slot * UAC2_CH], &in[f * UAC2_CH],
-		       UAC2_CH * sizeof(int32_t));
-	}
-	atomic_store_explicit(&r->wr, wi + (unsigned)n, memory_order_release);
-}
 
 /* Pop 1 period dans `out`. Renvoie 1 si succès, 0 si ring vide (out zeroed). */
 static int uac2_ring_pop_period(uac2_ring_t *r, int32_t *out)
@@ -292,90 +219,8 @@ static void uac2_ring_push_period(uac2_ring_t *r, const int32_t *in)
 			      memory_order_release);
 }
 
-/* V8.2.c — Drop/insert drift correction PRÉDICTIF (anticipation).
- *
- * Principe (validé utilisateur) : les paquets USB et le ring mixer sont
- * TOUJOURS 96 samples fixed. Le drift host_rate ↔ dsp_rate est absorbé
- * par drop ou insert d'1 échantillon isolé quand nécessaire, AVANT que
- * le buffer local USB ne se remplisse ou se vide.
- *
- * Anticipation :
- *   - on mesure en continu l'écart `local_fill - setpoint` lissé en EMA
- *   - on accumule cette dérive dans un accumulateur fractional
- *   - quand acc franchit ±1, on planifie un drop ou un insert sur le
- *     prochain paquet de 96 (correction = ±1 sample par packet)
- *   - le drop = skip 1 sample en milieu de packet (= consomme 97 du
- *     local_buf pour produire 96 output)
- *   - l'insert = moyenne de 2 voisins en milieu de packet (= consomme
- *     95 du local_buf pour produire 96 output)
- *
- * À 100 ppm de drift : 1 correction toutes les ~200 ms = inaudible. */
-#define USB_LOCAL_BUF_FRAMES   (PERIOD_FRAMES * 4)   /* = 384 = 8 ms */
-#define USB_LOCAL_SETPOINT     (PERIOD_FRAMES * 1.0f)/* 1 period cible */
-#define DRIFT_EMA_ALPHA        0.002f  /* tau ~1 sec @ 500 Hz */
-#define DRIFT_GAIN             0.01f   /* correction_per_packet = drift * GAIN */
-
-/* V8.2.c — Helper drop/insert : produit EXACTEMENT PERIOD_FRAMES output
- * depuis (PERIOD_FRAMES + correction) input. correction ∈ {-1, 0, +1}.
- *   correction = +1 : drop  (consomme 97 input, skip 1 sample au milieu)
- *   correction =  0 : direct (copy 96 → 96)
- *   correction = -1 : insert (consomme 95 input, moyenne 2 voisins au milieu)
- */
-static void produce_96_drop_insert(const int32_t *in, int32_t *out, int correction)
-{
-	const int M = PERIOD_FRAMES / 2;     /* drop/insert position au milieu */
-	if (correction == 0) {
-		memcpy(out, in, PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
-	} else if (correction == +1) {
-		/* consume 97, produce 96 : copy in[0..M-1] → out[0..M-1],
-		 * skip in[M], copy in[M+1..96] → out[M..95] */
-		memcpy(out, in, M * UAC2_CH * sizeof(int32_t));
-		memcpy(&out[M * UAC2_CH], &in[(M + 1) * UAC2_CH],
-		       (PERIOD_FRAMES - M) * UAC2_CH * sizeof(int32_t));
-	} else {  /* correction == -1 */
-		/* consume 95, produce 96 : copy in[0..M-1] → out[0..M-1],
-		 * out[M] = avg(in[M-1], in[M]), copy in[M..94] → out[M+1..95] */
-		memcpy(out, in, M * UAC2_CH * sizeof(int32_t));
-		for (int ch = 0; ch < UAC2_CH; ch++) {
-			int64_t a = in[(M - 1) * UAC2_CH + ch];
-			int64_t b = in[M * UAC2_CH + ch];
-			out[M * UAC2_CH + ch] = (int32_t)((a + b) / 2);
-		}
-		memcpy(&out[(M + 1) * UAC2_CH], &in[M * UAC2_CH],
-		       (PERIOD_FRAMES - M - 1) * UAC2_CH * sizeof(int32_t));
-	}
-}
-
-/* Décide la correction à appliquer au prochain paquet.
- * Entrée : `ring_fill` = nombre de frames présents dans le ring mixer
- * (entre cap_uac2_thread et audio_thread, ou entre audio_thread et
- * play_uac2_thread). C'est l'indicateur réel du drift : si cap_uac2
- * pousse plus vite que audio_thread pop → ring fill monte → drop.
- * Setpoint = UAC2_RING_FRAMES / 2 = 384 (50% fill cible). */
-static int next_correction(int ring_fill, float *fill_ema, float *corr_acc)
-{
-	const float setpoint = (float)(UAC2_RING_FRAMES / 2);
-	float err = (float)ring_fill - setpoint;
-	*fill_ema += DRIFT_EMA_ALPHA * (err - *fill_ema);
-	*corr_acc += (*fill_ema) * DRIFT_GAIN;
-	int correction = 0;
-	if (*corr_acc >= 1.0f) {
-		correction = +1;
-		*corr_acc -= 1.0f;
-	} else if (*corr_acc <= -1.0f) {
-		correction = -1;
-		*corr_acc += 1.0f;
-	}
-	return correction;
-}
-
-/* Thread cap UAC2 (V8.2.c) :
- *   1. snd_pcm_readi(BLOCKING) 96 frames @ host_rate dans local_buf
- *   2. décide correction = drop/insert/none selon fill_ema
- *   3. produce 96 output via produce_96_drop_insert (consomme 95/96/97)
- *   4. push 96 fixed au ring mixer
- * Paquets USB ET ring mixer : TOUJOURS 96 fixed. Drift compensé par
- * drop/insert d'1 sample isolé, anticipé sur fill_ema. */
+/* Thread cap UAC2 : own le PCM, read BLOCKING, push ring. Retry sur erreur
+ * (USB unplug → -ENODEV → recover, ne propage rien). */
 static void *cap_uac2_thread(void *arg)
 {
 	(void)arg;
@@ -383,83 +228,74 @@ static void *cap_uac2_thread(void *arg)
 	(void)pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
 	mlog("cap_uac2_thread : SCHED_FIFO prio %d", RT_PRIO_AUDIO);
 
-	int32_t local_buf[USB_LOCAL_BUF_FRAMES * UAC2_CH];
-	int     local_fill = 0;
-	float   fill_ema = 0.0f;
-	float   corr_acc = 0.0f;
+	int32_t buf[PERIOD_FRAMES * UAC2_CH];
 
+	/* Le PCM est déjà ouvert par main() côté pcm_open(). Ici on
+	 * passe en BLOCKING (le thread est seul à utiliser ce PCM) et
+	 * on start. Si start échoue, on retry périodiquement. */
 	snd_pcm_nonblock(g_st.cap_uac2.pcm, 0);
+
 	while (atomic_load(&g_st.running)) {
 		int err = snd_pcm_start(g_st.cap_uac2.pcm);
-		if (err == 0 || err == -EBADFD) break;
+		if (err == 0 || err == -EBADFD) break;  /* started or already */
+		mlog("cap_uac2_thread: start retry: %s", snd_strerror(err));
 		snd_pcm_recover(g_st.cap_uac2.pcm, err, 1);
 		usleep(100000);
 	}
 
+	/* V8.1.b — Mesure passive du drift USB host vs DSP TAC5212.
+	 * Compte le nombre de samples lus de USB sur une fenêtre de
+	 * wall-clock monotonic, déduit le sample_rate effectif, compare
+	 * à 48000 Hz nominal, EMA pour stabilité. */
+	struct timespec drift_t0;
+	clock_gettime(CLOCK_MONOTONIC, &drift_t0);
+	uint64_t drift_samples = 0;
+	float drift_ppm_ema = 0.0f;
+
 	while (atomic_load(&g_st.running)) {
-		/* 1. Read 96 du USB dans la suite du local_buf */
-		if (local_fill + PERIOD_FRAMES > USB_LOCAL_BUF_FRAMES) {
-			/* Local plein : skip 1 paquet (sera drop_drop_drop par
-			 * EMA croissant → corrections rapides) */
-			atomic_fetch_add(&g_ring_uac2_cap.drops, PERIOD_FRAMES);
-			/* Sliding window : oublier les 96 plus vieux */
-			memmove(local_buf,
-			        &local_buf[PERIOD_FRAMES * UAC2_CH],
-			        (local_fill - PERIOD_FRAMES) * UAC2_CH
-			            * sizeof(int32_t));
-			local_fill -= PERIOD_FRAMES;
-		}
 		snd_pcm_sframes_t r = snd_pcm_readi(g_st.cap_uac2.pcm,
-		                                    &local_buf[local_fill * UAC2_CH],
-		                                    PERIOD_FRAMES);
+						   buf, PERIOD_FRAMES);
 		if (r < 0) {
 			atomic_fetch_add(&g_ring_uac2_cap.xruns, 1);
 			snd_pcm_recover(g_st.cap_uac2.pcm, r, 1);
-			fill_ema = 0.0f;
-			corr_acc = 0.0f;
 			continue;
 		}
-		local_fill += r;
+		if (r == PERIOD_FRAMES) {
+			uac2_ring_push_period(&g_ring_uac2_cap, buf);
+		} else {
+			/* Partial : pad zeros et push (le drift compte les
+			 * frames effectivement lues, donc on additionne r). */
+			memset(&buf[r * UAC2_CH], 0,
+			       (PERIOD_FRAMES - r) * UAC2_CH * sizeof(int32_t));
+			uac2_ring_push_period(&g_ring_uac2_cap, buf);
+		}
 
-		/* 2. Décide correction selon le ring mixer fill (drift réel) */
-		int ring_fill = uac2_ring_fill(&g_ring_uac2_cap);
-		int correction = next_correction(ring_fill, &fill_ema, &corr_acc);
-
-		/* 3. Si pas assez de samples pour la correction, attendre prochaine */
-		int needed = PERIOD_FRAMES + correction;  /* 95 ou 96 ou 97 */
-		if (local_fill < needed) continue;
-
-		/* 4. Produire 96 fixed + push au ring */
-		int32_t out_pkt[PERIOD_FRAMES * UAC2_CH];
-		produce_96_drop_insert(local_buf, out_pkt, correction);
-		uac2_ring_push_n(&g_ring_uac2_cap, out_pkt, PERIOD_FRAMES);
-
-		/* 5. Shift local_buf left by `needed` frames */
-		int leftover = local_fill - needed;
-		if (leftover > 0)
-			memmove(local_buf,
-			        &local_buf[needed * UAC2_CH],
-			        leftover * UAC2_CH * sizeof(int32_t));
-		local_fill = leftover;
-
-		/* 6. Expose drift dans status via asrc_t.
-		 * fill_ema en frames, converti en ppm relativement à la fréquence
-		 * d'échantillonnage (1 sample = 1/48000 sec d'écart).
-		 * Direction : ring_fill > setpoint = host plus rapide que DSP. */
-		g_asrc_uac2_cap.ratio_ema = 1.0f + fill_ema / 48000.0f;
-		atomic_store(&g_asrc_uac2_cap.status,
-		             fabsf(fill_ema) > 50.0f ? 1 : 0);
+		/* Mesure drift toutes les ~1 sec wall-clock */
+		drift_samples += (uint64_t)r;
+		struct timespec now;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		double elapsed =
+		    (double)(now.tv_sec  - drift_t0.tv_sec)  +
+		    (double)(now.tv_nsec - drift_t0.tv_nsec) / 1e9;
+		if (elapsed >= 1.0) {
+			double rate = (double)drift_samples / elapsed;
+			double ppm  = (rate - (double)SAMPLE_RATE)
+			              / (double)SAMPLE_RATE * 1e6;
+			/* EMA tau ~3 sec */
+			drift_ppm_ema = 0.7f * drift_ppm_ema +
+			                0.3f * (float)ppm;
+			atomic_store(&g_usb_drift_ppm_x100,
+			             (int)(drift_ppm_ema * 100.0f));
+			atomic_store(&g_usb_drift_valid, 1);
+			drift_t0 = now;
+			drift_samples = 0;
+		}
 	}
 	mlog("cap_uac2_thread exiting");
 	return NULL;
 }
 
-/* Thread play UAC2 (V8.2.c) :
- *   1. pop 96 fixed depuis ring mixer
- *   2. décide correction = drop/insert/none selon fill_ema du local_buf
- *   3. produce 96 output via produce_96_drop_insert (consomme 95/96/97)
- *   4. snd_pcm_writei(BLOCKING) 96 fixed @ host_rate
- * Paquets mixer ring ET USB write : TOUJOURS 96 fixed. */
+/* Thread play UAC2 : own le PCM, pop ring, write BLOCKING. */
 static void *play_uac2_thread(void *arg)
 {
 	(void)arg;
@@ -467,84 +303,27 @@ static void *play_uac2_thread(void *arg)
 	(void)pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
 	mlog("play_uac2_thread : SCHED_FIFO prio %d", RT_PRIO_AUDIO);
 
-	int32_t local_buf[USB_LOCAL_BUF_FRAMES * UAC2_CH];
-	int     local_fill = 0;
-	float   fill_ema = 0.0f;
-	float   corr_acc = 0.0f;
+	int32_t buf[PERIOD_FRAMES * UAC2_CH];
 
 	snd_pcm_nonblock(g_st.play_uac2.pcm, 0);
 
-	/* Prefill ALSA + local_buf avec 1 period de silence */
-	int32_t silence[PERIOD_FRAMES * UAC2_CH];
-	memset(silence, 0, sizeof(silence));
+	/* Prefill N_PERIODS - 1 periods de silence pour atteindre start_threshold */
+	memset(buf, 0, sizeof(buf));
 	for (int prime = 0; prime < N_PERIODS - 1; prime++) {
 		snd_pcm_sframes_t r = snd_pcm_writei(g_st.play_uac2.pcm,
-		                                     silence, PERIOD_FRAMES);
+						     buf, PERIOD_FRAMES);
 		if (r < 0) snd_pcm_recover(g_st.play_uac2.pcm, r, 1);
 	}
 
 	while (atomic_load(&g_st.running)) {
-		/* 1. Pop 96 du ring mixer dans la suite du local_buf */
-		if (local_fill + PERIOD_FRAMES > USB_LOCAL_BUF_FRAMES) {
-			/* Local plein : skip 1 period (l'EMA va monter →
-			 * corrections drop rapides) */
-			atomic_fetch_add(&g_ring_uac2_play.drops, PERIOD_FRAMES);
-			memmove(local_buf,
-			        &local_buf[PERIOD_FRAMES * UAC2_CH],
-			        (local_fill - PERIOD_FRAMES) * UAC2_CH
-			            * sizeof(int32_t));
-			local_fill -= PERIOD_FRAMES;
-		}
-		/* IMPORTANT : on échantillonne le ring fill AVANT le pop pour
-		 * mesurer le drift mixer-side (audio_thread push vs play_uac2 pop).
-		 * Pour le play, fill_ring élevé = mixer pousse plus vite que USB
-		 * draine = host plus lent = besoin de DROP samples. */
-		int ring_fill = uac2_ring_fill(&g_ring_uac2_play);
-		uac2_ring_pop_period(&g_ring_uac2_play,
-		                     &local_buf[local_fill * UAC2_CH]);
-		local_fill += PERIOD_FRAMES;
-
-		/* 2. V8.2.c : DISABLE play-side correction.
-		 * Le drop/insert côté play_uac2_thread ne peut PAS drainer le
-		 * ring mixer car le pop rate est bound by writei BLOCKING à
-		 * host_rate fixe (96/cycle). Forcer correction = 0 = pass-through
-		 * comme V8.1 côté play. Le drift play sera audible mais le cap
-		 * (où drop/insert FONCTIONNE) restera propre. */
-		(void)ring_fill;
-		fill_ema = 0.0f;
-		corr_acc = 0.0f;
-		int correction = 0;
-
-		/* 3. Si pas assez d'input, attendre */
-		int needed = PERIOD_FRAMES + correction;
-		if (local_fill < needed) continue;
-
-		/* 4. Produire 96 fixed pour l'USB write */
-		int32_t out_pkt[PERIOD_FRAMES * UAC2_CH];
-		produce_96_drop_insert(local_buf, out_pkt, correction);
-
-		/* 5. Shift local_buf left by `needed` */
-		int leftover = local_fill - needed;
-		if (leftover > 0)
-			memmove(local_buf,
-			        &local_buf[needed * UAC2_CH],
-			        leftover * UAC2_CH * sizeof(int32_t));
-		local_fill = leftover;
-
-		/* 6. Write USB BLOCKING 96 fixed (PipeWire content) */
-		snd_pcm_sframes_t wr = snd_pcm_writei(g_st.play_uac2.pcm,
-		                                      out_pkt, PERIOD_FRAMES);
-		if (wr < 0) {
+		(void)uac2_ring_pop_period(&g_ring_uac2_play, buf);
+		/* Toujours écrire — pop renvoie silence si ring vide */
+		snd_pcm_sframes_t r = snd_pcm_writei(g_st.play_uac2.pcm,
+						     buf, PERIOD_FRAMES);
+		if (r < 0) {
 			atomic_fetch_add(&g_ring_uac2_play.xruns, 1);
-			snd_pcm_recover(g_st.play_uac2.pcm, wr, 1);
-			fill_ema = 0.0f;
-			corr_acc = 0.0f;
+			snd_pcm_recover(g_st.play_uac2.pcm, r, 1);
 		}
-
-		/* 7. Expose pour debugging via op:get_drift */
-		g_asrc_uac2_play.ratio_ema = 1.0f + fill_ema / 48000.0f;
-		atomic_store(&g_asrc_uac2_play.status,
-		             fabsf(fill_ema) > 50.0f ? 1 : 0);
 	}
 	mlog("play_uac2_thread exiting");
 	return NULL;
@@ -817,10 +596,9 @@ static void *audio_thread(void *arg)
 		r = snd_pcm_readi(g_st.cap_dsp.pcm, cap_dsp_buf, PERIOD_FRAMES);
 		if (r < 0) { pcm_recover(g_st.cap_dsp.pcm, r); memset(cap_dsp_buf, 0, sizeof(cap_dsp_buf)); }
 
-		/* V8.2.b : UAC2 cap path = pop 96 fixed du ring mixer.
-		 * Le ring est alimenté par cap_uac2_thread qui fait l'ASRC
-		 * AVANT de push : le ring véhicule TOUJOURS du 96-fixed @ DSP rate.
-		 * Pas de drift visible côté audio_thread (== DSP chain inchangée). */
+		/* V8.1 : UAC2 cap = pop du ring SPSC alimenté par cap_uac2_thread.
+		 * Si ring vide (thread pas encore prêt, ou USB bloqué), silence
+		 * automatique. Pas de risque de propagation USB → DSP. */
 		if (g_skip_uac2) {
 			memset(cap_uac2_buf, 0, sizeof(cap_uac2_buf));
 		} else {
@@ -994,13 +772,11 @@ static void *audio_thread(void *arg)
 		uint64_t one = 1;
 		(void)write(g_st.ring_event_fd, &one, sizeof(one));
 
-		/* V8.2.b : UAC2 play path = push 96 fixed au ring mixer.
-		 * play_uac2_thread fait l'ASRC APRÈS pop : le ring véhicule
-		 * TOUJOURS du 96-fixed @ DSP rate. Pas de drift visible côté
-		 * audio_thread. */
+		/* V8.1 : UAC2 play = push dans le ring SPSC consommé par
+		 * play_uac2_thread. Si ring full (thread USB trop lent / suspended),
+		 * drop oldest sample, pas de blocage du thread audio. */
 		if (!g_skip_uac2) {
-			uac2_ring_push_n(&g_ring_uac2_play, play_uac2_buf,
-			                 PERIOD_FRAMES);
+			uac2_ring_push_period(&g_ring_uac2_play, play_uac2_buf);
 		}
 		if (!g_skip_phone) {
 			r = snd_pcm_writei(g_st.play_phone.pcm, play_phone_buf, PERIOD_FRAMES);
@@ -1423,29 +1199,14 @@ static void handle_cmd(int fd, const char *line)
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "get_drift")) {
-		/* V8.2 — indicateur synchro horloges (drift en ppm + status). */
-		char reply[512];
-		int sc = atomic_load(&g_asrc_uac2_cap.status);
-		int sp = atomic_load(&g_asrc_uac2_play.status);
+		/* V8.1.b — drift USB↔DSP mesuré passivement par cap_uac2_thread.
+		 * Un seul drift partagé play/cap (même horloge USB host). */
+		int x100 = atomic_load(&g_usb_drift_ppm_x100);
+		int valid = atomic_load(&g_usb_drift_valid);
+		char reply[160];
 		snprintf(reply, sizeof(reply),
-			"{\"ok\":true,\"drift\":{"
-			"\"uac2_cap\":{\"ppm\":%.2f,\"ratio\":%.7f,"
-				"\"fill\":%d,\"status\":%d},"
-			"\"uac2_play\":{\"ppm\":%.2f,\"ratio\":%.7f,"
-				"\"fill\":%d,\"status\":%d},"
-			"\"drops_uac2_cap\":%lu,\"drops_uac2_play\":%lu,"
-			"\"xruns_uac2_cap\":%lu,\"xruns_uac2_play\":%lu"
-			"}}\n",
-			asrc_drift_ppm(&g_asrc_uac2_cap),
-			asrc_ratio(&g_asrc_uac2_cap),
-			uac2_ring_fill(&g_ring_uac2_cap), sc,
-			asrc_drift_ppm(&g_asrc_uac2_play),
-			asrc_ratio(&g_asrc_uac2_play),
-			uac2_ring_fill(&g_ring_uac2_play), sp,
-			atomic_load(&g_ring_uac2_cap.drops),
-			atomic_load(&g_ring_uac2_play.drops),
-			atomic_load(&g_ring_uac2_cap.xruns),
-			atomic_load(&g_ring_uac2_play.xruns));
+		         "{\"ok\":true,\"drift_ppm\":%.2f,\"valid\":%d}\n",
+		         (double)x100 / 100.0, valid);
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "reset_fx")) {
@@ -1626,12 +1387,6 @@ int main(int argc, char **argv)
 			g_skip_phone = 1;
 		}
 	}
-
-	/* V8.2.b — Init ASRC pour drift correction UAC2.
-	 * Setpoint = USB_LOCAL_SETPOINT = 1 period (96 frames) du buffer local
-	 * USB ↔ ASRC interne aux threads cap_uac2_thread / play_uac2_thread. */
-	asrc_init(&g_asrc_uac2_cap,  UAC2_CH, USB_LOCAL_SETPOINT);
-	asrc_init(&g_asrc_uac2_play, UAC2_CH, USB_LOCAL_SETPOINT);
 
 	/* Lock memory for RT */
 	mlockall(MCL_CURRENT | MCL_FUTURE);

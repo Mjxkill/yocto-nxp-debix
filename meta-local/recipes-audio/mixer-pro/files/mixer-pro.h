@@ -26,7 +26,7 @@
 
 #include <stdint.h>
 
-#define MIXER_VERSION  "v8.2c-drop-insert-anticipated"
+#define MIXER_VERSION  "v8.1b-drift-meter"
 
 /* E6.g Phase 2 + E6.h tuning : ring buffer SPSC entre thread audio (cap+mix)
  * et thread play DSP. Taille = N_RING_PERIODS périodes × 18 ch × 4 B.

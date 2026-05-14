@@ -39,7 +39,7 @@
 #include <microhttpd.h>
 #include <alsa/asoundlib.h>
 
-#define GUI_VERSION       "v7.0-e7.7b"
+#define GUI_VERSION       "v8.1b-drift-meter"
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
@@ -603,6 +603,14 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			/* E7.1 : REST polling fallback / debug curl */
 			char reply[2048];
 			int n = mixer_request("{\"op\":\"get_meters\"}\n", reply, sizeof(reply));
+			return send_json(conn, n > 0 ? 200 : 503, reply);
+		}
+
+		if (!strcmp(url, "/api/drift")) {
+			/* V8.1.b : drift USB↔DSP mesuré passivement par mixer-pro.
+			 * Renvoie {"ok":true,"drift_ppm":X.YZ,"valid":1}. */
+			char reply[256];
+			int n = mixer_request("{\"op\":\"get_drift\"}\n", reply, sizeof(reply));
 			return send_json(conn, n > 0 ? 200 : 503, reply);
 		}
 
