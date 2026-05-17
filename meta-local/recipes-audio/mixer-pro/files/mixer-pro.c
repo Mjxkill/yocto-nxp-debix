@@ -374,45 +374,6 @@ typedef struct {
 static uac2_ring_t g_ring_uac2_cap;
 static uac2_ring_t g_ring_uac2_play;
 
-/* V8.34 — Packet Loss Concealment (PLC) côté cap ring.
- * Quand le ring USB est starved (avail < 96), au lieu de memset zéros
- * (click audible), on répète la dernière period valide pop'ée avec un
- * fade-out progressif. Inaudible si glitch isolé < 8 reps (16 ms max).
- * Ramp : 3 reps full volume → 5 reps fade linéaire → silence. */
-static int32_t g_plc_last_period[PERIOD_FRAMES * UAC2_CH];
-static int     g_plc_valid;         /* 1 dès qu'une period valide a été pop'ée */
-static int     g_plc_repeat_count;  /* nb de reps consécutives (reset sur pop OK) */
-static atomic_ulong g_plc_events;   /* compteur d'événements PLC déclenchés */
-
-static const int g_plc_gain_q8[] = {
-	256, 256, 256,      /* reps 0..2 : full volume */
-	192, 128,  64, 32, 16,   /* reps 3..7 : fade linéaire */
-	  0                 /* reps ≥ 8 : silence */
-};
-#define PLC_FADE_FULL 8
-
-static void plc_fill(int32_t *out)
-{
-	if (!g_plc_valid) {
-		memset(out, 0, PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
-		return;
-	}
-	int idx = g_plc_repeat_count < PLC_FADE_FULL
-	          ? g_plc_repeat_count : PLC_FADE_FULL;
-	int gain = g_plc_gain_q8[idx];
-	if (gain == 0) {
-		memset(out, 0, PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
-	} else if (gain == 256) {
-		memcpy(out, g_plc_last_period,
-		       PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
-	} else {
-		for (int i = 0; i < PERIOD_FRAMES * UAC2_CH; i++)
-			out[i] = (int32_t)(((int64_t)g_plc_last_period[i] * gain) >> 8);
-	}
-	g_plc_repeat_count++;
-	atomic_fetch_add(&g_plc_events, 1);
-}
-
 /* Pop N frames du ring, ou silence si moins disponibles. Retourne nb pop. */
 static int uac2_ring_pop_n(uac2_ring_t *r, int32_t *out, int n)
 {
@@ -456,7 +417,6 @@ static int uac2_ring_pop_period(uac2_ring_t *r, int32_t *out)
 	    !atomic_load_explicit(&g_uac2_cap_warm, memory_order_relaxed)) {
 		if (avail < UAC2_FILL_TARGET) {
 			atomic_fetch_add(&r->empty_evt, 1);
-			/* Warm-up : pas de PLC (jamais eu de period valide) → zéros. */
 			memset(out, 0, PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
 			return 0;
 		}
@@ -465,12 +425,7 @@ static int uac2_ring_pop_period(uac2_ring_t *r, int32_t *out)
 
 	if (avail < PERIOD_FRAMES) {
 		atomic_fetch_add(&r->empty_evt, 1);   /* event pop-empty */
-		/* V8.34 — PLC sur cap ring : répète last valide avec fade au lieu
-		 * de memset zéros (click). Play ring conserve l'ancien comportement. */
-		if (r == &g_ring_uac2_cap)
-			plc_fill(out);
-		else
-			memset(out, 0, PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
+		memset(out, 0, PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
 		return 0;
 	}
 
@@ -478,13 +433,6 @@ static int uac2_ring_pop_period(uac2_ring_t *r, int32_t *out)
 		unsigned slot = (ri + f) % UAC2_RING_FRAMES;
 		memcpy(&out[f * UAC2_CH], &r->buf[slot * UAC2_CH],
 		       UAC2_CH * sizeof(int32_t));
-	}
-	/* V8.34 — pop OK : on garde cette period pour PLC (cap uniquement). */
-	if (r == &g_ring_uac2_cap) {
-		memcpy(g_plc_last_period, out,
-		       PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
-		g_plc_valid = 1;
-		g_plc_repeat_count = 0;
 	}
 	/* V8.32 — bucket courant + min/max global persistants */
 	if (r == &g_ring_uac2_cap) {
@@ -2117,8 +2065,7 @@ static void handle_cmd(int fd, const char *line)
 		         "\"uac2_cap_mode\":%d,\"uac2_play_mode\":%d,"
 		         "\"uac2_cap_warm\":%d,\"uac2_play_warm\":%d,"
 		         "\"wr_us_min\":%u,\"wr_us_max\":%u,\"wr_us_avg\":%u,"
-		         "\"rd_us_min\":%u,\"rd_us_max\":%u,\"rd_us_avg\":%u,"
-		         "\"plc_events\":%lu}\n",
+		         "\"rd_us_min\":%u,\"rd_us_max\":%u,\"rd_us_avg\":%u}\n",
 		         (double)x100 / 100.0, valid, shift,
 		         xc, xp, dp, cfe, cee, pfe, pee,
 		         ri, ai, rd, ad, n1, n2, n3, n4,
@@ -2132,8 +2079,7 @@ static void handle_cmd(int fd, const char *line)
 		         atomic_load(&g_uac2_cap_warm),
 		         atomic_load(&g_uac2_play_warm),
 		         wr_min, wr_max, wr_avg,
-		         rd_min, rd_max, rd_avg,
-		         atomic_load(&g_plc_events));
+		         rd_min, rd_max, rd_avg);
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "apply_drift_as_shift")) {
@@ -2177,9 +2123,6 @@ static void handle_cmd(int fd, const char *line)
 			atomic_store(&g_rd_bucket_cnt[k], 0);
 			atomic_store(&g_rd_bucket_epoch[k], 0);
 		}
-		/* V8.34 — reset compteur PLC (g_plc_last_period gardé pour ne pas
-		 * perdre le contexte audio, juste le compteur d'événements). */
-		atomic_store(&g_plc_events, 0);
 		dprintf(fd, "{\"ok\":true,\"op\":\"reset_drift_stats\"}\n");
 
 	} else if (json_has_op(line, "reset_fx")) {

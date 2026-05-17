@@ -899,12 +899,6 @@ html, body {
        :title="'Erreurs USB play : snd_pcm_avail_update / snd_pcm_writei retours négatifs (-EPIPE etc).'">
     errPlay <span class="v" x-text="drift.xruns_play || 0"></span>
   </div>
-  <!-- V8.34 — Compteur PLC (Packet Loss Concealment). Indique combien de fois on a répété la dernière period valide au lieu de jouer du silence sur un cap_empty. > 0 = glitchs masqués. -->
-  <div class="app-stat"
-       :class="(drift.plc_events > 0) ? 'warn' : ''"
-       :title="'V8.34 PLC : nb d événements où on a répété la dernière period valide au lieu de memset zéros (cap ring vide). > 0 = glitchs masqués par PLC. Reset par Reset Stats.'">
-    PLC <span class="v" x-text="drift.plc_events || 0"></span>
-  </div>
   <div class="spacer"></div>
   <button class="btn-header"
           :class="tacResetBusy ? 'busy' : ''"
@@ -1704,8 +1698,7 @@ function mixerApp() {
              cap_full_evt: 0, cap_empty_evt: 0,
              play_full_evt: 0, play_empty_evt: 0,
              wr_us_min: 0, wr_us_max: 0, wr_us_avg: 0,
-             rd_us_min: 0, rd_us_max: 0, rd_us_avg: 0,
-             plc_events: 0 },
+             rd_us_min: 0, rd_us_max: 0, rd_us_avg: 0 },
     connected: false,
     streaming: false,
     tacResetBusy: false,
@@ -1829,7 +1822,6 @@ function mixerApp() {
           this.drift.rd_us_min      = d.rd_us_min || 0;
           this.drift.rd_us_max      = d.rd_us_max || 0;
           this.drift.rd_us_avg      = d.rd_us_avg || 0;
-          this.drift.plc_events     = d.plc_events || 0;
         }
       } catch(e) {}
     },
