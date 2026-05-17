@@ -144,6 +144,205 @@ static void mlog(const char *fmt, ...);
 static _Atomic int    g_usb_drift_ppm_x100 = 0; /* drift_ppm × 100 = 0.01 ppm precision */
 static _Atomic int    g_usb_drift_valid = 0;    /* 0 = pas encore mesuré */
 
+/* V8.2 — Asservissement drift par feedback xrun.
+ * shift_ppm = correction courante en ppm, init 0, ajusté ±1 par xrun détecté.
+ * Convergence : shift_ppm → drift réel au fur et à mesure des xruns.
+ * Application : un drop (lire 97 → moyenner 2 → produire 96) ou insert
+ * (lire 95 → moyenner 2 voisins → insérer 1 → produire 96) tous les
+ * (1_000_000 / |shift_ppm|) samples. Étalé dans le temps = inaudible.
+ *
+ * Direction selon thread (un seul shift physique, application opposée) :
+ *   cap_uac2 :  shift>0 → drop (read 97), shift<0 → insert (read 95)
+ *   play_uac2 : shift>0 → insert (pop 95), shift<0 → drop (pop 97)
+ *
+ * Détection xrun → shift++ :
+ *   cap_uac2 snd_pcm_readi -EPIPE  (overrun ALSA cap, host fast)
+ *   play_uac2 snd_pcm_writei -EPIPE (underrun ALSA play, host fast)
+ * Détection drop ring play → shift-- :
+ *   audio_thread push_n: ring_uac2_play full → drops, host slow
+ */
+/* V8.6 — un seul g_shift_ppm partagé entre cap et play, mais piloté
+ * UNIQUEMENT par les events du ring cap (full ou empty), car le play USB
+ * n'est pas toujours consommé par le host (Bitwig ouvre parfois cap seul).
+ * Convention :
+ *   ring_cap full  ↑ → shift +1 (host fast : cap drops, play inserts)
+ *   ring_cap empty ↑ → shift -1 (host slow : cap inserts, play drops)
+ * compute_correction inverse le sens pour is_play=1. */
+static _Atomic int g_shift_ppm = 0;
+/* V8.8 — bypass ASRC complet (test isolement, --no-asrc) */
+static _Atomic int g_no_asrc = 0;
+/* V8.18 — mode test : si !=0, shift_controller_thread n'écrit plus dans
+ * g_shift_ppm. Permet de figer shift à une valeur arbitraire via --fixed-shift
+ * pour caractériser la correction expérimentalement. */
+static _Atomic int g_shift_fixed = 0;
+
+/* V8.19 — diag ASRC : compte les corrections demandées vs réellement appliquées,
+ * ainsi que la distribution des n retournés par readi (pour repérer les
+ * mini-bursts qui font no-op smooth_*_middle si n < ASRC_K+2). */
+static _Atomic unsigned long g_dbg_corr_req_insert = 0;
+static _Atomic unsigned long g_dbg_corr_req_drop   = 0;
+static _Atomic unsigned long g_dbg_corr_app_insert = 0;
+static _Atomic unsigned long g_dbg_corr_app_drop   = 0;
+static _Atomic unsigned long g_dbg_readi_lt10   = 0;
+static _Atomic unsigned long g_dbg_readi_10_50  = 0;
+static _Atomic unsigned long g_dbg_readi_50_100 = 0;
+static _Atomic unsigned long g_dbg_readi_ge100  = 0;
+/* V8.21 — debug call de compute_correction depuis cap_uac2_thread */
+static _Atomic unsigned long g_dbg_cc_called   = 0;
+static _Atomic unsigned long g_dbg_cc_nonzero  = 0;
+static _Atomic int           g_dbg_corr_acc_max = 0;
+/* V8.22 — régulation fill-based par ring (mode = UAC2_MODE_IDLE défini plus bas) */
+static _Atomic int g_uac2_cap_warm   = 0;   /* 1 quand fill cap atteint TARGET */
+static _Atomic int g_uac2_play_warm  = 0;   /* 1 quand fill play atteint TARGET */
+static _Atomic int g_uac2_cap_mode   = 0;
+static _Atomic int g_uac2_play_mode  = 0;
+
+/* V8.32 — Timing avec moyenne glissante 10 sec (10 buckets de 1 sec).
+ * Min/max globaux persistants, reset uniquement par reset_drift_stats. */
+#define TIMING_WINDOW_SEC 10
+static _Atomic uint64_t g_wr_bucket_sum[TIMING_WINDOW_SEC] = {0};
+static _Atomic uint32_t g_wr_bucket_cnt[TIMING_WINDOW_SEC] = {0};
+static _Atomic uint64_t g_wr_bucket_epoch[TIMING_WINDOW_SEC] = {0};
+static _Atomic uint64_t g_rd_bucket_sum[TIMING_WINDOW_SEC] = {0};
+static _Atomic uint32_t g_rd_bucket_cnt[TIMING_WINDOW_SEC] = {0};
+static _Atomic uint64_t g_rd_bucket_epoch[TIMING_WINDOW_SEC] = {0};
+static _Atomic uint32_t g_wr_min_us = UINT32_MAX;
+static _Atomic uint32_t g_wr_max_us = 0;
+static _Atomic uint32_t g_rd_min_us = UINT32_MAX;
+static _Atomic uint32_t g_rd_max_us = 0;
+static struct timespec  g_last_wr_ts = {0};
+static struct timespec  g_last_rd_ts = {0};
+/* V8.15 — dump raw USB cap data après readi, avant tout traitement.
+ * Permet de voir ce que l'USB livre exactement. */
+static FILE *g_usb_cap_dump = NULL;
+/* V8.16 — dump play_dsp_buf après matrix mix, juste avant writei vers DSP play. */
+static FILE *g_dsp_play_dump = NULL;
+
+/* Forward defines pour helpers ci-dessous (vraies définitions plus bas) */
+#ifndef UAC2_CH
+#define UAC2_CH            8   /* = N_INPUT_STEMS = N_OUTPUT_UAC2 */
+#define UAC2_RING_PERIODS  4
+#define UAC2_RING_FRAMES   (PERIOD_FRAMES * UAC2_RING_PERIODS)
+/* V8.22 — Régulation par niveau (fill-based) du ring USB
+ * V8.24 — 4 paliers proportionnels (sans machine d'états) :
+ *   fill ≤ 0       → +6 inserts (input_n = 90)
+ *   fill ≤ 96      → +2 inserts (input_n = 94)
+ *   96 < f < 288   → no correction (input_n = 96)
+ *   fill ≥ 288     → -2 drops    (input_n = 98)
+ *   fill ≥ 384     → -6 drops    (input_n = 102)
+ */
+#define UAC2_FILL_LOW_HARD  0                              /* +6 inserts */
+#define UAC2_FILL_LOW       (1 * PERIOD_FRAMES)            /* 96  +2 inserts */
+#define UAC2_FILL_HIGH      (3 * PERIOD_FRAMES)            /* 288 -2 drops */
+#define UAC2_FILL_HIGH_HARD (4 * PERIOD_FRAMES)            /* 384 -6 drops */
+#define UAC2_FILL_TARGET    (2 * PERIOD_FRAMES)            /* 192 pre-fill */
+enum {
+	UAC2_MODE_IDLE = 0,
+	UAC2_MODE_CORRECT_LOW,   /* cap=insert, play=slow */
+	UAC2_MODE_CORRECT_HIGH,  /* cap=drop, play=speed */
+};
+#endif
+
+/* V8.7 — Helpers drop/insert avec crossfade linéaire sur K=8 samples.
+ * Au lieu de modifier 1 sample isolé, on time-compresse (drop) ou time-
+ * stretche (insert) une zone de K samples au milieu du buffer via
+ * interpolation linéaire. La correction de 1 sample est étalée sur
+ * ~170 µs (8 frames à 48 kHz) → bien moins audible que la modif d'un
+ * unique sample.
+ *
+ * DROP : K=8 input samples → K-1=7 output samples, même time-span.
+ *        Position dans input : pos_i = i × (K-1)/(K-2) = i × 7/6.
+ *        Boundaries préservés (i=0 et i=K-2 tombent sur entiers).
+ *
+ * INSERT : K=8 input samples → K+1=9 output samples, même time-span.
+ *          Position dans input : pos_i = i × (K-1)/K = i × 7/8.
+ *          Boundaries préservés. */
+#define ASRC_K  8
+
+static int smooth_drop_middle(int32_t *buf, int n)
+{
+	if (n < ASRC_K + 2) return n;   /* trop court : no-op */
+	int M = (n - ASRC_K) / 2;
+
+	/* Compute K-1=7 output samples via linear interp.
+	 * Formule : num = i × (K-1), den = K-2
+	 *           idx = num/den, frac = num % den
+	 *           out = ((den-frac)×in[idx] + frac×in[idx+1]) / den */
+	int32_t tmp[(ASRC_K - 1) * UAC2_CH];
+	const int den = ASRC_K - 2;     /* 6 */
+	for (int i = 0; i < ASRC_K - 1; i++) {
+		int num  = i * (ASRC_K - 1);   /* i × 7 */
+		int idx  = num / den;
+		int frac = num - idx * den;
+		for (int ch = 0; ch < UAC2_CH; ch++) {
+			int64_t a = buf[(M + idx)     * UAC2_CH + ch];
+			int64_t b = buf[(M + idx + 1) * UAC2_CH + ch];
+			tmp[i * UAC2_CH + ch] =
+			    (int32_t)(((den - frac) * a + frac * b) / den);
+		}
+	}
+
+	/* Shift le tail à gauche (suppression d'1 frame entre M+K-1 et M+K) */
+	if (n - M - ASRC_K > 0) {
+		memmove(&buf[(M + ASRC_K - 1) * UAC2_CH],
+		        &buf[(M + ASRC_K)     * UAC2_CH],
+		        (n - M - ASRC_K) * UAC2_CH * sizeof(int32_t));
+	}
+	/* Écrit tmp à la position M */
+	memcpy(&buf[M * UAC2_CH], tmp,
+	       (ASRC_K - 1) * UAC2_CH * sizeof(int32_t));
+	return n - 1;
+}
+
+static int smooth_insert_middle(int32_t *buf, int n)
+{
+	if (n < ASRC_K + 2) return n;
+	int M = (n - ASRC_K) / 2;
+
+	/* Compute K+1=9 output samples via linear interp.
+	 * num = i × (K-1), den = K  →  pos = i × 7/8 */
+	int32_t tmp[(ASRC_K + 1) * UAC2_CH];
+	const int den = ASRC_K;         /* 8 */
+	for (int i = 0; i <= ASRC_K; i++) {
+		int num  = i * (ASRC_K - 1);   /* i × 7 */
+		int idx  = num / den;
+		int frac = num - idx * den;
+		for (int ch = 0; ch < UAC2_CH; ch++) {
+			int64_t a = buf[(M + idx)     * UAC2_CH + ch];
+			/* protection OOB sur le dernier i où frac=0 */
+			int64_t b = (frac == 0) ? a
+			          : (int64_t)buf[(M + idx + 1) * UAC2_CH + ch];
+			tmp[i * UAC2_CH + ch] =
+			    (int32_t)(((den - frac) * a + frac * b) / den);
+		}
+	}
+
+	/* Shift le tail à droite (insertion d'1 frame entre M+K-1 et M+K) */
+	memmove(&buf[(M + ASRC_K + 1) * UAC2_CH],
+	        &buf[(M + ASRC_K)     * UAC2_CH],
+	        (n - M - ASRC_K) * UAC2_CH * sizeof(int32_t));
+	/* Écrit tmp à la position M */
+	memcpy(&buf[M * UAC2_CH], tmp,
+	       (ASRC_K + 1) * UAC2_CH * sizeof(int32_t));
+	return n + 1;
+}
+
+/* V8.6 — Un seul shift_ppm partagé (piloté par cap events seulement).
+ * Sign inversé pour play : si shift>0 (host fast) → cap drop, play insert. */
+static int compute_correction(int *samples_acc, int is_play)
+{
+	if (atomic_load(&g_no_asrc)) return 0;   /* V8.8 — bypass complet */
+	int shift = atomic_load(&g_shift_ppm);
+	if (shift == 0) return 0;
+	int interval = 1000000 / (shift > 0 ? shift : -shift);
+	if (*samples_acc < interval) return 0;
+	*samples_acc -= interval;
+	if (is_play)
+		return (shift > 0) ? -1 : +1;   /* play : insert si shift>0 */
+	else
+		return (shift > 0) ? +1 : -1;   /* cap  : drop   si shift>0 */
+}
+
 /* ============================== V8.1 UAC2 ISOLATION =================
  *
  * Ring SPSC dédié pour chaque direction UAC2 (cap + play), alimenté par
@@ -160,29 +359,72 @@ static _Atomic int    g_usb_drift_valid = 0;    /* 0 = pas encore mesuré */
  * (silence si pas de samples prêts) — il n'attend plus jamais sur USB.
  * Idem pour play : push best-effort, drop si ring full.
  */
-#define UAC2_RING_PERIODS  8
-#define UAC2_RING_FRAMES   (PERIOD_FRAMES * UAC2_RING_PERIODS)
 #define UAC2_CH            8   /* = N_INPUT_STEMS = N_OUTPUT_UAC2 */
 
 typedef struct {
 	int32_t      buf[UAC2_RING_FRAMES * UAC2_CH];
 	atomic_uint  wr;
 	atomic_uint  rd;
-	atomic_ulong drops;
+	atomic_ulong drops;       /* nb de FRAMES droppées (cumul) */
+	atomic_ulong drops_evt;   /* nb d'ÉVÉNEMENTS push-full (cumul) */
+	atomic_ulong empty_evt;   /* nb d'ÉVÉNEMENTS pop-empty (avail<requested) */
 	atomic_ulong xruns;
 } uac2_ring_t;
 
 static uac2_ring_t g_ring_uac2_cap;
 static uac2_ring_t g_ring_uac2_play;
 
-/* Pop 1 period dans `out`. Renvoie 1 si succès, 0 si ring vide (out zeroed). */
+/* Pop N frames du ring, ou silence si moins disponibles. Retourne nb pop. */
+static int uac2_ring_pop_n(uac2_ring_t *r, int32_t *out, int n)
+{
+	unsigned wi = atomic_load_explicit(&r->wr, memory_order_acquire);
+	unsigned ri = atomic_load_explicit(&r->rd, memory_order_relaxed);
+	unsigned avail = wi - ri;
+	if ((int)avail < n) {
+		atomic_fetch_add(&r->empty_evt, 1);   /* event pop-empty */
+		/* Sous-flow : silence pour combler */
+		memset(out, 0, n * UAC2_CH * sizeof(int32_t));
+		if (avail == 0) return 0;
+		/* Copie ce qu'on a, pad le reste avec zeros */
+		for (unsigned f = 0; f < avail; f++) {
+			unsigned slot = (ri + f) % UAC2_RING_FRAMES;
+			memcpy(&out[f * UAC2_CH], &r->buf[slot * UAC2_CH],
+			       UAC2_CH * sizeof(int32_t));
+		}
+		atomic_store_explicit(&r->rd, ri + avail, memory_order_release);
+		return (int)avail;
+	}
+	for (int f = 0; f < n; f++) {
+		unsigned slot = (ri + f) % UAC2_RING_FRAMES;
+		memcpy(&out[f * UAC2_CH], &r->buf[slot * UAC2_CH],
+		       UAC2_CH * sizeof(int32_t));
+	}
+	atomic_store_explicit(&r->rd, ri + (unsigned)n, memory_order_release);
+	return n;
+}
+
+/* Pop 1 period dans `out`. Renvoie 1 si succès, 0 si ring vide (out zeroed).
+ * V8.22 : pre-fill — au démarrage, on retourne des zéros tant que le ring
+ * n'a pas atteint UAC2_FILL_TARGET (192). Une fois armé, on pop normalement. */
 static int uac2_ring_pop_period(uac2_ring_t *r, int32_t *out)
 {
 	unsigned wi = atomic_load_explicit(&r->wr, memory_order_acquire);
 	unsigned ri = atomic_load_explicit(&r->rd, memory_order_relaxed);
 	unsigned avail = wi - ri;   /* unsigned wrap OK */
 
+	/* V8.22 — pre-fill : si ring CAP, attendre fill ≥ TARGET avant de pop. */
+	if (r == &g_ring_uac2_cap &&
+	    !atomic_load_explicit(&g_uac2_cap_warm, memory_order_relaxed)) {
+		if (avail < UAC2_FILL_TARGET) {
+			atomic_fetch_add(&r->empty_evt, 1);
+			memset(out, 0, PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
+			return 0;
+		}
+		atomic_store_explicit(&g_uac2_cap_warm, 1, memory_order_relaxed);
+	}
+
 	if (avail < PERIOD_FRAMES) {
+		atomic_fetch_add(&r->empty_evt, 1);   /* event pop-empty */
 		memset(out, 0, PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
 		return 0;
 	}
@@ -192,153 +434,660 @@ static int uac2_ring_pop_period(uac2_ring_t *r, int32_t *out)
 		memcpy(&out[f * UAC2_CH], &r->buf[slot * UAC2_CH],
 		       UAC2_CH * sizeof(int32_t));
 	}
+	/* V8.32 — bucket courant + min/max global persistants */
+	if (r == &g_ring_uac2_cap) {
+		struct timespec now;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		if (g_last_rd_ts.tv_sec != 0) {
+			uint64_t dt_us =
+			    (uint64_t)(now.tv_sec - g_last_rd_ts.tv_sec) * 1000000ULL +
+			    (uint64_t)(now.tv_nsec - g_last_rd_ts.tv_nsec) / 1000ULL;
+			if (dt_us > 0 && dt_us <= 100000) {
+				uint64_t sec = (uint64_t)now.tv_sec;
+				int b = (int)(sec % TIMING_WINDOW_SEC);
+				if (atomic_load_explicit(&g_rd_bucket_epoch[b],
+				    memory_order_relaxed) != sec) {
+					atomic_store_explicit(&g_rd_bucket_sum[b], 0, memory_order_relaxed);
+					atomic_store_explicit(&g_rd_bucket_cnt[b], 0, memory_order_relaxed);
+					atomic_store_explicit(&g_rd_bucket_epoch[b], sec, memory_order_relaxed);
+				}
+				atomic_fetch_add_explicit(&g_rd_bucket_sum[b], dt_us, memory_order_relaxed);
+				atomic_fetch_add_explicit(&g_rd_bucket_cnt[b], 1, memory_order_relaxed);
+				uint32_t cur_min = atomic_load_explicit(&g_rd_min_us, memory_order_relaxed);
+				if ((uint32_t)dt_us < cur_min)
+					atomic_store_explicit(&g_rd_min_us, (uint32_t)dt_us, memory_order_relaxed);
+				uint32_t cur_max = atomic_load_explicit(&g_rd_max_us, memory_order_relaxed);
+				if ((uint32_t)dt_us > cur_max)
+					atomic_store_explicit(&g_rd_max_us, (uint32_t)dt_us, memory_order_relaxed);
+			}
+		}
+		g_last_rd_ts = now;
+	}
 	atomic_store_explicit(&r->rd, ri + PERIOD_FRAMES,
 			      memory_order_release);
 	return 1;
 }
 
-/* Push 1 period depuis `in`. Si ring full, advance rd (drop oldest). */
-static void uac2_ring_push_period(uac2_ring_t *r, const int32_t *in)
+/* Push n frames depuis `in`. Si ring full, drop les NOUVEAUX samples qui
+ * ne tiennent pas (au lieu d'avancer rd côté producteur, ce qui violait
+ * le contrat SPSC et causait des race conditions avec le consumer).
+ * V8.9 : producer NE TOUCHE PLUS rd.
+ * V8.29 : NON-UTILISÉE pour cap (cf uac2_ring_push_period_atomic). */
+static void uac2_ring_push_n(uac2_ring_t *r, const int32_t *in, int n)
 {
 	unsigned wi = atomic_load_explicit(&r->wr, memory_order_relaxed);
 	unsigned ri = atomic_load_explicit(&r->rd, memory_order_acquire);
 	unsigned used = wi - ri;
+	unsigned un = (unsigned)n;
+	unsigned free_space = UAC2_RING_FRAMES - used;
 
-	if (used + PERIOD_FRAMES > UAC2_RING_FRAMES) {
-		unsigned drop = used + PERIOD_FRAMES - UAC2_RING_FRAMES;
-		atomic_store_explicit(&r->rd, ri + drop, memory_order_release);
-		atomic_fetch_add(&r->drops, drop);
+	if (un > free_space) {
+		/* Ring full → on jette les nouveaux samples qui débordent.
+		 * Le consumer reste protégé : il continue de lire les anciens. */
+		atomic_fetch_add(&r->drops, un - free_space);
+		atomic_fetch_add(&r->drops_evt, 1);
+		un = free_space;
 	}
+	if (un == 0)
+		return;
 
+	for (unsigned f = 0; f < un; f++) {
+		unsigned slot = (wi + f) % UAC2_RING_FRAMES;
+		memcpy(&r->buf[slot * UAC2_CH], &in[f * UAC2_CH],
+		       UAC2_CH * sizeof(int32_t));
+	}
+	atomic_store_explicit(&r->wr, wi + un, memory_order_release);
+}
+
+/* Push 1 period (96 frames). Wrapper sur uac2_ring_push_n pour audio_thread. */
+static void uac2_ring_push_period(uac2_ring_t *r, const int32_t *in)
+{
+	uac2_ring_push_n(r, in, PERIOD_FRAMES);
+}
+
+/* V8.29 — Push ATOMIQUE de 1 period (96 frames). Retourne 1 si push OK,
+ * 0 si ring plein (free_space < 96). Dans ce cas, RIEN n'est écrit, wr
+ * ne bouge pas, et drops_evt s'incrémente pour comptage. Le caller doit
+ * réessayer plus tard avec les MÊMES samples (pas de troncature). */
+static int uac2_ring_try_push_period(uac2_ring_t *r, const int32_t *in)
+{
+	unsigned wi = atomic_load_explicit(&r->wr, memory_order_relaxed);
+	unsigned ri = atomic_load_explicit(&r->rd, memory_order_acquire);
+	unsigned used = wi - ri;
+	unsigned free_space = UAC2_RING_FRAMES - used;
+
+	if (free_space < PERIOD_FRAMES) {
+		atomic_fetch_add(&r->drops_evt, 1);
+		return 0;
+	}
 	for (unsigned f = 0; f < PERIOD_FRAMES; f++) {
 		unsigned slot = (wi + f) % UAC2_RING_FRAMES;
 		memcpy(&r->buf[slot * UAC2_CH], &in[f * UAC2_CH],
 		       UAC2_CH * sizeof(int32_t));
 	}
-	atomic_store_explicit(&r->wr, wi + PERIOD_FRAMES,
-			      memory_order_release);
+	/* V8.32 — Timing : bucket courant (mod TIMING_WINDOW_SEC), update sum+cnt.
+	 * Skip si dt > 100 ms (recover anormal). Min/max globaux persistants. */
+	if (r == &g_ring_uac2_cap) {
+		struct timespec now;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		if (g_last_wr_ts.tv_sec != 0) {
+			uint64_t dt_us =
+			    (uint64_t)(now.tv_sec - g_last_wr_ts.tv_sec) * 1000000ULL +
+			    (uint64_t)(now.tv_nsec - g_last_wr_ts.tv_nsec) / 1000ULL;
+			if (dt_us > 0 && dt_us <= 100000) {
+				uint64_t sec = (uint64_t)now.tv_sec;
+				int b = (int)(sec % TIMING_WINDOW_SEC);
+				if (atomic_load_explicit(&g_wr_bucket_epoch[b],
+				    memory_order_relaxed) != sec) {
+					atomic_store_explicit(&g_wr_bucket_sum[b], 0, memory_order_relaxed);
+					atomic_store_explicit(&g_wr_bucket_cnt[b], 0, memory_order_relaxed);
+					atomic_store_explicit(&g_wr_bucket_epoch[b], sec, memory_order_relaxed);
+				}
+				atomic_fetch_add_explicit(&g_wr_bucket_sum[b], dt_us, memory_order_relaxed);
+				atomic_fetch_add_explicit(&g_wr_bucket_cnt[b], 1, memory_order_relaxed);
+				uint32_t cur_min = atomic_load_explicit(&g_wr_min_us, memory_order_relaxed);
+				if ((uint32_t)dt_us < cur_min)
+					atomic_store_explicit(&g_wr_min_us, (uint32_t)dt_us, memory_order_relaxed);
+				uint32_t cur_max = atomic_load_explicit(&g_wr_max_us, memory_order_relaxed);
+				if ((uint32_t)dt_us > cur_max)
+					atomic_store_explicit(&g_wr_max_us, (uint32_t)dt_us, memory_order_relaxed);
+			}
+		}
+		g_last_wr_ts = now;
+	}
+	atomic_store_explicit(&r->wr, wi + PERIOD_FRAMES, memory_order_release);
+	return 1;
 }
 
-/* Thread cap UAC2 : own le PCM, read BLOCKING, push ring. Retry sur erreur
- * (USB unplug → -ENODEV → recover, ne propage rien). */
+/* Renvoie le nb de frames actuellement dans le ring (utilisé pour
+ * backpressure côté producteur). Lecture relaxed des deux indices :
+ * le résultat est conservatif (un peu sous-estimé) ce qui est OK
+ * pour décider d'attendre. */
+static unsigned uac2_ring_fill(uac2_ring_t *r)
+{
+	unsigned wi = atomic_load_explicit(&r->wr, memory_order_relaxed);
+	unsigned ri = atomic_load_explicit(&r->rd, memory_order_relaxed);
+	return wi - ri;   /* unsigned wrap OK */
+}
+
+/* V8.6 — shift_ppm piloté uniquement par les events du ring CAP.
+ * play full/empty restent comptés mais n'affectent plus shift, car le play
+ * USB peut être non consommé (Bitwig ouvre cap sans ouvrir play). */
+static void *shift_controller_thread(void *arg)
+{
+	(void)arg;
+	unsigned long last_cap_full  = atomic_load(&g_ring_uac2_cap.drops_evt);
+	unsigned long last_cap_empty = atomic_load(&g_ring_uac2_cap.empty_evt);
+	mlog("shift_controller_thread : tick 100 ms, source = cap events only");
+
+	while (atomic_load(&g_st.running)) {
+		usleep(100000);   /* 100 ms */
+
+		/* V8.18 — mode test : shift figé par --fixed-shift, le contrôleur
+		 * ne touche plus à g_shift_ppm. */
+		if (atomic_load(&g_shift_fixed))
+			continue;
+
+		unsigned long cap_full  = atomic_load(&g_ring_uac2_cap.drops_evt);
+		unsigned long cap_empty = atomic_load(&g_ring_uac2_cap.empty_evt);
+
+		/* V8.11 — delta complet (pas boolean) pour capturer les trains
+		 * d'events. 50 empty en 100 ms = shift -= 50 (vs -1 avant).
+		 * V8.12 — si compteur a régressé (reset_drift_stats), on
+		 * resynchronise last_* sans appliquer de delta. */
+		int delta = 0;
+		if (cap_full  >= last_cap_full)
+			delta += (int)(cap_full  - last_cap_full);
+		if (cap_empty >= last_cap_empty)
+			delta -= (int)(cap_empty - last_cap_empty);
+
+		last_cap_full  = cap_full;
+		last_cap_empty = cap_empty;
+
+		if (delta != 0) {
+			int cur = atomic_load(&g_shift_ppm);
+			atomic_store(&g_shift_ppm, cur + delta);
+		}
+	}
+	mlog("shift_controller_thread exiting");
+	return NULL;
+}
+
+/* V8.13 — Thread cap UAC2 : NONBLOCK, lit ce qui est dispo, push variable
+ * N au ring avec correction ASRC quand besoin. Plus de readi(96) imposé
+ * — on suit le pace naturel des bursts USB iso. */
 static void *cap_uac2_thread(void *arg)
 {
 	(void)arg;
 	struct sched_param sp = { .sched_priority = RT_PRIO_AUDIO };
 	(void)pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
-	mlog("cap_uac2_thread : SCHED_FIFO prio %d", RT_PRIO_AUDIO);
+	mlog("cap_uac2_thread : SCHED_FIFO prio %d (NONBLOCK)", RT_PRIO_AUDIO);
 
-	int32_t buf[PERIOD_FRAMES * UAC2_CH];
+	/* V8.20 — Buffer accumulateur : on push TOUJOURS par bloc EXACT de
+	 * PERIOD_FRAMES (96). readi peut retourner N variable (typique 50-100) ;
+	 * on accumule jusqu'à pouvoir push 1 period entière. Capacité = 4 periods
+	 * + 1 frame de marge pour insert. */
+	int32_t buf_acc[(BUFFER_FRAMES + 1) * UAC2_CH];
+	int acc_n = 0;
 
-	/* Le PCM est déjà ouvert par main() côté pcm_open(). Ici on
-	 * passe en BLOCKING (le thread est seul à utiliser ce PCM) et
-	 * on start. Si start échoue, on retry périodiquement. */
+	/* Start en BLOCKING (sync initiale), puis passe en NONBLOCK */
 	snd_pcm_nonblock(g_st.cap_uac2.pcm, 0);
-
 	while (atomic_load(&g_st.running)) {
 		int err = snd_pcm_start(g_st.cap_uac2.pcm);
-		if (err == 0 || err == -EBADFD) break;  /* started or already */
+		if (err == 0 || err == -EBADFD) break;
 		mlog("cap_uac2_thread: start retry: %s", snd_strerror(err));
 		snd_pcm_recover(g_st.cap_uac2.pcm, err, 1);
 		usleep(100000);
 	}
 
-	/* V8.1.b — Mesure passive du drift USB host vs DSP TAC5212.
-	 * Compte le nombre de samples lus de USB sur une fenêtre de
-	 * wall-clock monotonic, déduit le sample_rate effectif, compare
-	 * à 48000 Hz nominal, EMA pour stabilité. */
-	struct timespec drift_t0;
-	clock_gettime(CLOCK_MONOTONIC, &drift_t0);
+	/* V8.26 — Mesure drift précise via HW htstamp.
+	 *   drift_samples = appl_ptr cumulé (somme des r returned par readi)
+	 *   drift_hw_pos_0 = hw_pos au dernier snapshot
+	 *   drift_t0 = htstamp au dernier snapshot (audio clock)
+	 * Init drift_t0.tv_sec=0 → premier snapshot servira de référence. */
+	struct timespec drift_t0 = { 0 };
 	uint64_t drift_samples = 0;
+	uint64_t drift_hw_pos_0 = 0;
 	float drift_ppm_ema = 0.0f;
+	int corr_samples_acc = 0;
+	/* V8.30 — log periodic des stats timing */
+	struct timespec last_log_ts = { 0 };
+
+	snd_pcm_nonblock(g_st.cap_uac2.pcm, 1);
 
 	while (atomic_load(&g_st.running)) {
-		snd_pcm_sframes_t r = snd_pcm_readi(g_st.cap_uac2.pcm,
-						   buf, PERIOD_FRAMES);
-		if (r < 0) {
+		snd_pcm_sframes_t avail = snd_pcm_avail_update(g_st.cap_uac2.pcm);
+		if (avail < 0 && avail != -EAGAIN) {
 			atomic_fetch_add(&g_ring_uac2_cap.xruns, 1);
-			snd_pcm_recover(g_st.cap_uac2.pcm, r, 1);
-			/* Reset compteur drift : un xrun introduit un trou
-			 * dans le sample stream qui fausse la mesure de rate.
-			 * On redémarre la fenêtre proprement. */
-			clock_gettime(CLOCK_MONOTONIC, &drift_t0);
+			snd_pcm_recover(g_st.cap_uac2.pcm, (int)avail, 1);
+			snd_pcm_start(g_st.cap_uac2.pcm);
+			drift_t0.tv_sec = 0; drift_t0.tv_nsec = 0; drift_hw_pos_0 = 0; g_last_wr_ts.tv_sec = 0;
 			drift_samples = 0;
+			acc_n = 0;
+			usleep(200);
 			continue;
 		}
-		if (r == PERIOD_FRAMES) {
-			uac2_ring_push_period(&g_ring_uac2_cap, buf);
-		} else {
-			/* Partial : pad zeros et push (le drift compte les
-			 * frames effectivement lues, donc on additionne r). */
-			memset(&buf[r * UAC2_CH], 0,
-			       (PERIOD_FRAMES - r) * UAC2_CH * sizeof(int32_t));
-			uac2_ring_push_period(&g_ring_uac2_cap, buf);
+		if (avail <= 0) {
+			usleep(200);
+			goto cap_drift_calc;
 		}
 
-		/* Mesure drift sur fenêtre 10 sec wall-clock.
-		 * Fenêtre courte = bruité par jitter USB iso (~400 ppm variance
-		 * sur 1 sec). Fenêtre 10 sec = bruit réduit ~30 ppm.
-		 * EMA alpha=0.1 (tau ~30 sec mesures = ~5 min) pour stabilité
-		 * d'affichage GUI sur signal physiquement constant. */
-		drift_samples += (uint64_t)r;
-		struct timespec now;
-		clock_gettime(CLOCK_MONOTONIC, &now);
-		double elapsed =
-		    (double)(now.tv_sec  - drift_t0.tv_sec)  +
-		    (double)(now.tv_nsec - drift_t0.tv_nsec) / 1e9;
-		if (elapsed >= 10.0) {
-			double rate = (double)drift_samples / elapsed;
-			double ppm  = (rate - (double)SAMPLE_RATE)
-			              / (double)SAMPLE_RATE * 1e6;
-			/* EMA très lent : convergence vraie valeur en quelques minutes,
-			 * mais valeur affichée stable au ppm près en steady state.
-			 * Bootstrap : alpha=1 au premier sample valide pour ne pas
-			 * attendre 5 min avant d'avoir une mesure utile. */
-			if (atomic_load(&g_usb_drift_valid)) {
-				drift_ppm_ema = 0.9f * drift_ppm_ema +
-				                0.1f * (float)ppm;
-			} else {
-				drift_ppm_ema = (float)ppm;
-			}
-			atomic_store(&g_usb_drift_ppm_x100,
-			             (int)(drift_ppm_ema * 100.0f));
-			atomic_store(&g_usb_drift_valid, 1);
-			drift_t0 = now;
+		/* Lire dans le slot libre du buffer accumulateur */
+		int space = BUFFER_FRAMES - acc_n;
+		int n_to_read = (int)avail < space ? (int)avail : space;
+		if (n_to_read <= 0) goto cap_drift_calc; /* acc plein, attendre push */
+
+		snd_pcm_sframes_t r = snd_pcm_readi(g_st.cap_uac2.pcm,
+		    buf_acc + acc_n * UAC2_CH, n_to_read);
+		if (r < 0 && r != -EAGAIN) {
+			atomic_fetch_add(&g_ring_uac2_cap.xruns, 1);
+			snd_pcm_recover(g_st.cap_uac2.pcm, r, 1);
+			snd_pcm_start(g_st.cap_uac2.pcm);
+			drift_t0.tv_sec = 0; drift_t0.tv_nsec = 0; drift_hw_pos_0 = 0; g_last_wr_ts.tv_sec = 0;
 			drift_samples = 0;
+			acc_n = 0;
+			continue;
+		}
+		if (r <= 0) goto cap_drift_calc;
+		acc_n += (int)r;
+		drift_samples += (uint64_t)r;
+
+		/* V8.26 — ASRC piloté par drift mesuré via htstamp. Correction ±2
+		 * samples par push quand shift_ppm requiert. Push par bloc 96. */
+		while (acc_n >= PERIOD_FRAMES + 2) {
+			int correction = compute_correction(&corr_samples_acc, 0);
+			int input_n = PERIOD_FRAMES + (correction * 2); /* 94, 96 ou 98 */
+			corr_samples_acc += input_n;
+			int diff = input_n - PERIOD_FRAMES;
+			int32_t period_buf[PERIOD_FRAMES * UAC2_CH];
+			atomic_store_explicit(&g_uac2_cap_mode,
+			                      (correction == -1) ? 1 :
+			                      (correction == +1) ? 2 : 0,
+			                      memory_order_relaxed);
+
+			if (diff < 0) {
+				/* Insert |diff| samples (1 toutes les N positions) :
+				 *   |diff|=2 → 1 insert toutes 48 outputs, pos 23, 71? Non : on
+				 *     prend l'algo manuel à pos 92/94 (= raccord clean V8.22).
+				 *   |diff|=6 → 1 insert tous les 16 outputs.
+				 *
+				 * Pour rester cohérent avec V8.22 (raccord clean), on traite
+				 * les 2 cas séparément. */
+				if (diff == -2) {
+					/* Insert 94 → 96 (raccord clean : out[95] = in[93]) */
+					memcpy(period_buf, buf_acc,
+					       92 * UAC2_CH * sizeof(int32_t));
+					for (int ch = 0; ch < UAC2_CH; ch++) {
+						int64_t a = buf_acc[91 * UAC2_CH + ch];
+						int64_t b = buf_acc[92 * UAC2_CH + ch];
+						period_buf[92 * UAC2_CH + ch] = (int32_t)((a + b) / 2);
+					}
+					memcpy(period_buf + 93 * UAC2_CH,
+					       buf_acc + 92 * UAC2_CH,
+					       UAC2_CH * sizeof(int32_t));
+					for (int ch = 0; ch < UAC2_CH; ch++) {
+						int64_t a = buf_acc[92 * UAC2_CH + ch];
+						int64_t b = buf_acc[93 * UAC2_CH + ch];
+						period_buf[94 * UAC2_CH + ch] = (int32_t)((a + b) / 2);
+					}
+					memcpy(period_buf + 95 * UAC2_CH,
+					       buf_acc + 93 * UAC2_CH,
+					       UAC2_CH * sizeof(int32_t));
+				} else {
+					/* diff = -6 : Insert 90 → 96. 6 inserts répartis aux
+					 * positions output 14, 29, 44, 59, 74, 89 (espacement 15).
+					 * out[95] = in[89] = raccord clean. */
+					int in_idx = 0;
+					int inserted = 0;
+					int insert_positions[6] = {14, 29, 44, 59, 74, 89};
+					int next_ip = 0;
+					for (int out_idx = 0; out_idx < PERIOD_FRAMES; out_idx++) {
+						if (next_ip < 6 && out_idx == insert_positions[next_ip]) {
+							for (int ch = 0; ch < UAC2_CH; ch++) {
+								int64_t a = buf_acc[(in_idx - 1) * UAC2_CH + ch];
+								int64_t b = buf_acc[in_idx * UAC2_CH + ch];
+								period_buf[out_idx * UAC2_CH + ch] =
+								    (int32_t)((a + b) / 2);
+							}
+							inserted++;
+							next_ip++;
+						} else {
+							memcpy(period_buf + out_idx * UAC2_CH,
+							       buf_acc + in_idx * UAC2_CH,
+							       UAC2_CH * sizeof(int32_t));
+							in_idx++;
+						}
+					}
+				}
+				atomic_fetch_add(&g_dbg_corr_req_insert, 1);
+				atomic_fetch_add(&g_dbg_corr_app_insert, 1);
+			} else if (diff > 0) {
+				if (diff == +2) {
+					/* Drop 98 → 96 (fusion 3-en-1, raccord clean) */
+					memcpy(period_buf, buf_acc,
+					       92 * UAC2_CH * sizeof(int32_t));
+					for (int ch = 0; ch < UAC2_CH; ch++) {
+						int64_t a = buf_acc[92 * UAC2_CH + ch];
+						int64_t b = buf_acc[93 * UAC2_CH + ch];
+						int64_t c = buf_acc[94 * UAC2_CH + ch];
+						period_buf[92 * UAC2_CH + ch] = (int32_t)((a + b + c) / 3);
+					}
+					memcpy(period_buf + 93 * UAC2_CH,
+					       buf_acc + 95 * UAC2_CH,
+					       3 * UAC2_CH * sizeof(int32_t));
+				} else {
+					/* diff = +6 : Drop 102 → 96. 6 fusions 2-en-1 aux positions
+					 * output 14, 30, 46, 62, 78, 94 (espacement 16). */
+					int in_idx = 0;
+					int drop_positions[6] = {14, 30, 46, 62, 78, 94};
+					int next_dp = 0;
+					for (int out_idx = 0; out_idx < PERIOD_FRAMES; out_idx++) {
+						if (next_dp < 6 && out_idx == drop_positions[next_dp]) {
+							for (int ch = 0; ch < UAC2_CH; ch++) {
+								int64_t a = buf_acc[in_idx * UAC2_CH + ch];
+								int64_t b = buf_acc[(in_idx + 1) * UAC2_CH + ch];
+								period_buf[out_idx * UAC2_CH + ch] =
+								    (int32_t)((a + b) / 2);
+							}
+							in_idx += 2;
+							next_dp++;
+						} else {
+							memcpy(period_buf + out_idx * UAC2_CH,
+							       buf_acc + in_idx * UAC2_CH,
+							       UAC2_CH * sizeof(int32_t));
+							in_idx++;
+						}
+					}
+				}
+				atomic_fetch_add(&g_dbg_corr_req_drop, 1);
+				atomic_fetch_add(&g_dbg_corr_app_drop, 1);
+			} else {
+				memcpy(period_buf, buf_acc,
+				       PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
+			}
+
+			/* Histo input_n consommé */
+			if (input_n < 10) atomic_fetch_add(&g_dbg_readi_lt10, 1);
+			else if (input_n < 50) atomic_fetch_add(&g_dbg_readi_10_50, 1);
+			else if (input_n < 100) atomic_fetch_add(&g_dbg_readi_50_100, 1);
+			else atomic_fetch_add(&g_dbg_readi_ge100, 1);
+
+			/* V8.29 — Push atomique de 96 frames. Si ring plein, on
+			 * SORT du while interne SANS shift acc, et on retentera au
+			 * prochain readi. Pas de troncature, pas de perte. */
+			if (!uac2_ring_try_push_period(&g_ring_uac2_cap,
+			                               period_buf))
+				break;
+			atomic_fetch_add(&g_dbg_cc_called, 1);
+
+			/* Shift acc : on a consommé input_n frames */
+			if (acc_n - input_n > 0) {
+				memmove(buf_acc,
+				        buf_acc + input_n * UAC2_CH,
+				        (acc_n - input_n) * UAC2_CH *
+				        sizeof(int32_t));
+			}
+			acc_n -= input_n;
+		}
+
+	cap_drift_calc:
+		/* V8.26 — Mesure drift via CLOCK_MONOTONIC + appl_ptr + avail.
+		 *   hw_pos = drift_samples (appl_ptr cumulé) + avail courant
+		 *          = total frames livrés par USB host depuis start
+		 * (f_uac2 gadget ne supporte pas audio_htstamp HW.) */
+		{
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			snd_pcm_sframes_t avail_now = snd_pcm_avail(g_st.cap_uac2.pcm);
+			if (avail_now < 0) avail_now = 0;
+			uint64_t hw_pos_now = drift_samples + (uint64_t)avail_now;
+
+			if (drift_t0.tv_sec == 0) {
+				drift_t0 = now;
+				drift_hw_pos_0 = hw_pos_now;
+			} else {
+				double dt_sec =
+				    (double)(now.tv_sec  - drift_t0.tv_sec) +
+				    (double)(now.tv_nsec - drift_t0.tv_nsec) / 1e9;
+				if (dt_sec >= 10.0) {
+					uint64_t df = hw_pos_now - drift_hw_pos_0;
+					double rate = (double)df / dt_sec;
+					double ppm  = (rate - (double)SAMPLE_RATE)
+					              / (double)SAMPLE_RATE * 1e6;
+					/* V8.27 — Garde-fou rate dans ±1%. */
+					int rate_ok = (rate > SAMPLE_RATE * 0.99 &&
+					               rate < SAMPLE_RATE * 1.01);
+					/* V8.28 — clamp drift mesuré à ±500 ppm (drift physique
+					 * 2 quartz commerciaux ≤ 200 ppm en pratique). */
+					int ppm_ok = (ppm > -500.0 && ppm < 500.0);
+					if (rate_ok && ppm_ok) {
+						if (atomic_load(&g_usb_drift_valid)) {
+							drift_ppm_ema = 0.9f * drift_ppm_ema +
+							                0.1f * (float)ppm;
+						} else {
+							drift_ppm_ema = (float)ppm;
+						}
+						atomic_store(&g_usb_drift_ppm_x100,
+						             (int)(drift_ppm_ema * 100.0f));
+						atomic_store(&g_usb_drift_valid, 1);
+						if (!atomic_load(&g_shift_fixed)) {
+							int new_shift = (int)(drift_ppm_ema +
+							    (drift_ppm_ema >= 0 ? 0.5f : -0.5f));
+							/* Clamp final à ±500 ppm */
+							if (new_shift > 500) new_shift = 500;
+							if (new_shift < -500) new_shift = -500;
+							atomic_store(&g_shift_ppm, new_shift);
+						}
+					} else {
+						/* Mesure aberrante : ne pas update EMA, garder shift
+						 * à sa valeur actuelle (ne pas reset à 0 pour ne pas
+						 * faire osciller l'ASRC). */
+						atomic_store(&g_usb_drift_valid, 0);
+					}
+					drift_t0 = now;
+					drift_hw_pos_0 = hw_pos_now;
+				}
+			}
+		}
+		/* V8.32 — log periodic toutes les 5 sec : min/max globaux + avg 10s */
+		{
+			struct timespec n2;
+			clock_gettime(CLOCK_MONOTONIC, &n2);
+			if (n2.tv_sec - last_log_ts.tv_sec >= 5) {
+				uint64_t sec = (uint64_t)n2.tv_sec;
+				uint64_t wr_sm = 0, rd_sm = 0;
+				uint32_t wr_n2 = 0, rd_n2 = 0;
+				for (int k = 0; k < TIMING_WINDOW_SEC; k++) {
+					uint64_t e = atomic_load_explicit(&g_wr_bucket_epoch[k], memory_order_relaxed);
+					if (e != 0 && sec - e < TIMING_WINDOW_SEC) {
+						wr_sm += atomic_load_explicit(&g_wr_bucket_sum[k], memory_order_relaxed);
+						wr_n2 += atomic_load_explicit(&g_wr_bucket_cnt[k], memory_order_relaxed);
+					}
+					e = atomic_load_explicit(&g_rd_bucket_epoch[k], memory_order_relaxed);
+					if (e != 0 && sec - e < TIMING_WINDOW_SEC) {
+						rd_sm += atomic_load_explicit(&g_rd_bucket_sum[k], memory_order_relaxed);
+						rd_n2 += atomic_load_explicit(&g_rd_bucket_cnt[k], memory_order_relaxed);
+					}
+				}
+				uint32_t wr_mn = atomic_load(&g_wr_min_us);
+				uint32_t wr_mx = atomic_load(&g_wr_max_us);
+				uint32_t rd_mn = atomic_load(&g_rd_min_us);
+				uint32_t rd_mx = atomic_load(&g_rd_max_us);
+				if (wr_mn == UINT32_MAX) wr_mn = 0;
+				if (rd_mn == UINT32_MAX) rd_mn = 0;
+				unsigned fill = uac2_ring_fill(&g_ring_uac2_cap);
+				unsigned long cee = atomic_load(&g_ring_uac2_cap.empty_evt);
+				unsigned long cfe = atomic_load(&g_ring_uac2_cap.drops_evt);
+				mlog("TIMING wr[push] min=%u max=%u avg10s=%u us | rd[pop] min=%u max=%u avg10s=%u us | fill=%u cap_empty=%lu cap_full=%lu",
+				     wr_mn, wr_mx, wr_n2 ? (uint32_t)(wr_sm/wr_n2) : 0,
+				     rd_mn, rd_mx, rd_n2 ? (uint32_t)(rd_sm/rd_n2) : 0,
+				     fill, cee, cfe);
+				last_log_ts = n2;
+			}
 		}
 	}
 	mlog("cap_uac2_thread exiting");
 	return NULL;
 }
 
-/* Thread play UAC2 : own le PCM, pop ring, write BLOCKING. */
+/* V8.22 — Thread play UAC2 : régulation symétrique par fill du ring play.
+ * Producer = audio_thread (push 96 fixe). Consumer = ce thread (pop input_n
+ * variable du ring, writei 96 fixe à USB).
+ *   - fill ≤ 0   → SLOWING (pop 94, write 96 avec 2 inserts) → ring vide moins
+ *   - fill ≥ 384 → SPEEDING (pop 98, write 96 avec 2 drops)  → ring vide plus
+ *   - sortie à fill = 192 (TARGET)
+ * Pre-fill : tant que ring play < TARGET (192), on writei zéros à USB
+ * (sinon underrun USB côté host). */
 static void *play_uac2_thread(void *arg)
 {
 	(void)arg;
 	struct sched_param sp = { .sched_priority = RT_PRIO_AUDIO };
 	(void)pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
-	mlog("play_uac2_thread : SCHED_FIFO prio %d", RT_PRIO_AUDIO);
+	mlog("play_uac2_thread : SCHED_FIFO prio %d (V8.22 fill-based)", RT_PRIO_AUDIO);
 
-	int32_t buf[PERIOD_FRAMES * UAC2_CH];
+	int32_t pop_buf[(PERIOD_FRAMES + 6) * UAC2_CH]; /* V8.24 max input_n = 102 */
+	int32_t period_buf[PERIOD_FRAMES * UAC2_CH];
 
+	/* Prefill USB output : 3 periods de silence (BLOCKING). */
 	snd_pcm_nonblock(g_st.play_uac2.pcm, 0);
-
-	/* Prefill N_PERIODS - 1 periods de silence pour atteindre start_threshold */
-	memset(buf, 0, sizeof(buf));
+	memset(period_buf, 0, sizeof(period_buf));
 	for (int prime = 0; prime < N_PERIODS - 1; prime++) {
 		snd_pcm_sframes_t r = snd_pcm_writei(g_st.play_uac2.pcm,
-						     buf, PERIOD_FRAMES);
+						     period_buf, PERIOD_FRAMES);
 		if (r < 0) snd_pcm_recover(g_st.play_uac2.pcm, r, 1);
 	}
+	snd_pcm_nonblock(g_st.play_uac2.pcm, 1);
 
 	while (atomic_load(&g_st.running)) {
-		(void)uac2_ring_pop_period(&g_ring_uac2_play, buf);
-		/* Toujours écrire — pop renvoie silence si ring vide */
-		snd_pcm_sframes_t r = snd_pcm_writei(g_st.play_uac2.pcm,
-						     buf, PERIOD_FRAMES);
-		if (r < 0) {
+		snd_pcm_sframes_t pavail =
+		    snd_pcm_avail_update(g_st.play_uac2.pcm);
+		if (pavail < 0) {
 			atomic_fetch_add(&g_ring_uac2_play.xruns, 1);
-			snd_pcm_recover(g_st.play_uac2.pcm, r, 1);
+			snd_pcm_recover(g_st.play_uac2.pcm,
+			                (int)pavail, 1);
+			usleep(200);
+			continue;
+		}
+		if (pavail < PERIOD_FRAMES) {
+			usleep(200);
+			continue;
+		}
+
+		unsigned fill = uac2_ring_fill(&g_ring_uac2_play);
+
+		/* Pre-fill : tant que ring play n'a pas atteint TARGET,
+		 * on writei zéros à USB pour ne pas underrun le host. */
+		if (!atomic_load_explicit(&g_uac2_play_warm,
+		                          memory_order_relaxed)) {
+			if (fill < UAC2_FILL_TARGET) {
+				memset(period_buf, 0, sizeof(period_buf));
+				snd_pcm_writei(g_st.play_uac2.pcm,
+				               period_buf, PERIOD_FRAMES);
+				atomic_fetch_add(&g_ring_uac2_play.empty_evt, 1);
+				continue;
+			}
+			atomic_store_explicit(&g_uac2_play_warm, 1,
+			                      memory_order_relaxed);
+		}
+
+		/* V8.25 — Sans correction. pop/write 96 fixe. */
+		int input_n = PERIOD_FRAMES;
+		atomic_store_explicit(&g_uac2_play_mode, 0,
+		                      memory_order_relaxed);
+
+		/* Si ring contient moins que input_n demandé, pop ce qu'il y a,
+		 * pad zéros le reste. */
+		int n = uac2_ring_pop_n(&g_ring_uac2_play, pop_buf, input_n);
+		if (n < input_n) {
+			memset(pop_buf + n * UAC2_CH, 0,
+			       (input_n - n) * UAC2_CH * sizeof(int32_t));
+		}
+
+		/* V8.24 — Build period_buf 96 frames depuis input_n (5 cas) */
+		int diff = input_n - PERIOD_FRAMES;
+		if (diff == -2) {
+			/* Insert 94 → 96 (raccord clean) */
+			memcpy(period_buf, pop_buf,
+			       92 * UAC2_CH * sizeof(int32_t));
+			for (int ch = 0; ch < UAC2_CH; ch++) {
+				int64_t a = pop_buf[91 * UAC2_CH + ch];
+				int64_t b = pop_buf[92 * UAC2_CH + ch];
+				period_buf[92 * UAC2_CH + ch] = (int32_t)((a + b) / 2);
+			}
+			memcpy(period_buf + 93 * UAC2_CH, pop_buf + 92 * UAC2_CH,
+			       UAC2_CH * sizeof(int32_t));
+			for (int ch = 0; ch < UAC2_CH; ch++) {
+				int64_t a = pop_buf[92 * UAC2_CH + ch];
+				int64_t b = pop_buf[93 * UAC2_CH + ch];
+				period_buf[94 * UAC2_CH + ch] = (int32_t)((a + b) / 2);
+			}
+			memcpy(period_buf + 95 * UAC2_CH, pop_buf + 93 * UAC2_CH,
+			       UAC2_CH * sizeof(int32_t));
+		} else if (diff == -6) {
+			/* Insert 90 → 96 : 6 inserts aux positions 14, 29, 44, 59, 74, 89 */
+			int in_idx = 0;
+			int insert_positions[6] = {14, 29, 44, 59, 74, 89};
+			int next_ip = 0;
+			for (int out_idx = 0; out_idx < PERIOD_FRAMES; out_idx++) {
+				if (next_ip < 6 && out_idx == insert_positions[next_ip]) {
+					for (int ch = 0; ch < UAC2_CH; ch++) {
+						int64_t a = pop_buf[(in_idx - 1) * UAC2_CH + ch];
+						int64_t b = pop_buf[in_idx * UAC2_CH + ch];
+						period_buf[out_idx * UAC2_CH + ch] =
+						    (int32_t)((a + b) / 2);
+					}
+					next_ip++;
+				} else {
+					memcpy(period_buf + out_idx * UAC2_CH,
+					       pop_buf + in_idx * UAC2_CH,
+					       UAC2_CH * sizeof(int32_t));
+					in_idx++;
+				}
+			}
+		} else if (diff == +2) {
+			/* Drop 98 → 96 (fusion 3-en-1) */
+			memcpy(period_buf, pop_buf,
+			       92 * UAC2_CH * sizeof(int32_t));
+			for (int ch = 0; ch < UAC2_CH; ch++) {
+				int64_t a = pop_buf[92 * UAC2_CH + ch];
+				int64_t b = pop_buf[93 * UAC2_CH + ch];
+				int64_t c = pop_buf[94 * UAC2_CH + ch];
+				period_buf[92 * UAC2_CH + ch] = (int32_t)((a + b + c) / 3);
+			}
+			memcpy(period_buf + 93 * UAC2_CH, pop_buf + 95 * UAC2_CH,
+			       3 * UAC2_CH * sizeof(int32_t));
+		} else if (diff == +6) {
+			/* Drop 102 → 96 : 6 fusions 2-en-1 aux positions 14, 30, 46, 62, 78, 94 */
+			int in_idx = 0;
+			int drop_positions[6] = {14, 30, 46, 62, 78, 94};
+			int next_dp = 0;
+			for (int out_idx = 0; out_idx < PERIOD_FRAMES; out_idx++) {
+				if (next_dp < 6 && out_idx == drop_positions[next_dp]) {
+					for (int ch = 0; ch < UAC2_CH; ch++) {
+						int64_t a = pop_buf[in_idx * UAC2_CH + ch];
+						int64_t b = pop_buf[(in_idx + 1) * UAC2_CH + ch];
+						period_buf[out_idx * UAC2_CH + ch] =
+						    (int32_t)((a + b) / 2);
+					}
+					in_idx += 2;
+					next_dp++;
+				} else {
+					memcpy(period_buf + out_idx * UAC2_CH,
+					       pop_buf + in_idx * UAC2_CH,
+					       UAC2_CH * sizeof(int32_t));
+					in_idx++;
+				}
+			}
+		} else {
+			memcpy(period_buf, pop_buf,
+			       PERIOD_FRAMES * UAC2_CH * sizeof(int32_t));
+		}
+
+		snd_pcm_sframes_t w = snd_pcm_writei(g_st.play_uac2.pcm,
+		                                     period_buf, PERIOD_FRAMES);
+		if (w < 0 && w != -EAGAIN) {
+			atomic_fetch_add(&g_ring_uac2_play.xruns, 1);
+			snd_pcm_recover(g_st.play_uac2.pcm, w, 1);
 		}
 	}
 	mlog("play_uac2_thread exiting");
@@ -363,6 +1112,7 @@ atomic_int   g_running_flag_for_analyzer;
  */
 static int g_skip_uac2  = 0;
 static int g_skip_phone = 0;
+/* g_no_asrc déclaré plus haut près de g_shift_ppm */
 
 /* ============================== Logging ============================ */
 
@@ -420,6 +1170,10 @@ static int pcm_open(struct alsa_pcm *p, const char *name, int channels,
 	snd_pcm_sw_params_set_start_threshold(p->pcm, sw,
 		p->is_capture ? 1 : (snd_pcm_uframes_t)period);
 	snd_pcm_sw_params_set_avail_min(p->pcm, sw, (snd_pcm_uframes_t)period);
+	/* V8.26 — activer le HW timestamping pour mesurer drift précis
+	 * via snd_pcm_status_get_audio_htstamp(). */
+	snd_pcm_sw_params_set_tstamp_mode(p->pcm, sw, SND_PCM_TSTAMP_ENABLE);
+	snd_pcm_sw_params_set_tstamp_type(p->pcm, sw, SND_PCM_TSTAMP_TYPE_MONOTONIC);
 	err = snd_pcm_sw_params(p->pcm, sw);
 	if (err < 0) {
 		mlog("sw_params(%s): %s", name, snd_strerror(err));
@@ -602,9 +1356,25 @@ static void *audio_thread(void *arg)
 	if (!g_skip_phone) snd_pcm_start(g_st.cap_phone.pcm);
 
 	struct timespec t_iter_start, t_cap_done, t_mix_done, t_play_done;
+	/* V8.33 — Anti-burst : self-paced à 500 Hz via clock_nanosleep absolu.
+	 * Si le DSP cap a un backlog (preempt momentané), on ne le rattrape pas
+	 * en burst → pas de cap_empty massif. snd_pcm_readi reste blocking : si
+	 * DSP en retard, il bloquera ; si DSP en avance, le nanosleep cap. */
+	struct timespec t_next;
+	clock_gettime(CLOCK_MONOTONIC, &t_next);
+	/* PERIOD_FRAMES = 96 @ 48 kHz = 2 ms = 2_000_000 ns */
+	const long PERIOD_NS = 2000000L;
 
 	while (atomic_load(&g_st.running)) {
 		snd_pcm_sframes_t r;
+
+		/* Wait jusqu'à l'heure cible (= précédent iter + 2 ms) */
+		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t_next, NULL);
+		t_next.tv_nsec += PERIOD_NS;
+		while (t_next.tv_nsec >= 1000000000L) {
+			t_next.tv_nsec -= 1000000000L;
+			t_next.tv_sec  += 1;
+		}
 
 		clock_gettime(CLOCK_MONOTONIC, &t_iter_start);
 
@@ -619,6 +1389,10 @@ static void *audio_thread(void *arg)
 			memset(cap_uac2_buf, 0, sizeof(cap_uac2_buf));
 		} else {
 			uac2_ring_pop_period(&g_ring_uac2_cap, cap_uac2_buf);
+			/* V8.15 — dump raw pop, ce que le matrix mix verra */
+			if (g_usb_cap_dump)
+				fwrite(cap_uac2_buf, sizeof(int32_t),
+				       PERIOD_FRAMES * UAC2_CH, g_usb_cap_dump);
 		}
 		if (g_skip_phone) {
 			memset(cap_phone_buf, 0, sizeof(cap_phone_buf));
@@ -757,6 +1531,11 @@ static void *audio_thread(void *arg)
 
 		atomic_fetch_add(&g_st.frames_processed, PERIOD_FRAMES);
 
+		/* V8.17 — dump play_dsp_buf après matrix mix, avant push au ring play */
+		if (g_dsp_play_dump)
+			fwrite(play_dsp_buf, sizeof(int32_t),
+			       PERIOD_FRAMES * N_OUTPUT_DSP, g_dsp_play_dump);
+
 		/* 3. E6.g Phase 2 : DSP play traité par thread séparé via ring SPSC.
 		 *    Le thread audio ne fait QUE push dans le ring (rapide, atomic).
 		 *    Si ring full → on écrase le plus vieux (drop policy) pour ne
@@ -765,34 +1544,40 @@ static void *audio_thread(void *arg)
 		unsigned wi = atomic_load_explicit(&g_st.ring_write_idx, memory_order_relaxed);
 		unsigned ri = atomic_load_explicit(&g_st.ring_read_idx,  memory_order_acquire);
 		unsigned avail = wi - ri;   /* unsigned arithmetic wraps OK */
+		/* V8.16 — fix race SPSC : si ring full, on ne touche PAS read_idx
+		 * (ce qui causait data corruption avec le play_thread consumer en
+		 * cours de lecture). On drop simplement cette période entière. */
 		if (avail + PERIOD_FRAMES > RING_FRAMES) {
-			/* Drop policy : avance read_idx pour faire de la place */
-			unsigned drop = avail + PERIOD_FRAMES - RING_FRAMES;
-			atomic_store_explicit(&g_st.ring_read_idx, ri + drop,
+			atomic_fetch_add(&g_st.ring_drops, PERIOD_FRAMES);
+			/* skip ce push : data perdue, mais consumer pas corrompu */
+		} else {
+			/* Copy 96 frames × 8 ch dans le ring (avec wrap modulo RING_FRAMES) */
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				unsigned slot = (wi + f) % RING_FRAMES;
+				memcpy(&g_st.ring_buf[slot * N_OUTPUT_DSP],
+				       &play_dsp_buf[f * N_OUTPUT_DSP],
+				       N_OUTPUT_DSP * sizeof(int32_t));
+			}
+			atomic_store_explicit(&g_st.ring_write_idx, wi + PERIOD_FRAMES,
 					      memory_order_release);
-			atomic_fetch_add(&g_st.ring_drops, drop);
-		}
-		/* Copy 96 frames × 8 ch dans le ring (avec wrap modulo RING_FRAMES) */
-		for (int f = 0; f < PERIOD_FRAMES; f++) {
-			unsigned slot = (wi + f) % RING_FRAMES;
-			memcpy(&g_st.ring_buf[slot * N_OUTPUT_DSP],
-			       &play_dsp_buf[f * N_OUTPUT_DSP],
-			       N_OUTPUT_DSP * sizeof(int32_t));
-		}
-		atomic_store_explicit(&g_st.ring_write_idx, wi + PERIOD_FRAMES,
-				      memory_order_release);
 
-		/* E6.h : signal play_thread (eventfd compteur, write 1 = 1 nouvelle
-		 * période dispo). play_thread bloque sur read(eventfd) jusqu'au signal.
-		 */
-		uint64_t one = 1;
-		(void)write(g_st.ring_event_fd, &one, sizeof(one));
+			/* E6.h : signal play_thread (eventfd compteur). On NE signale
+			 * QUE quand on a effectivement publié une nouvelle période,
+			 * sinon play_thread se déclenche pour rien et lit le slot
+			 * actuel à nouveau. */
+			uint64_t one = 1;
+			(void)write(g_st.ring_event_fd, &one, sizeof(one));
+		}
 
 		/* V8.1 : UAC2 play = push dans le ring SPSC consommé par
 		 * play_uac2_thread. Si ring full (thread USB trop lent / suspended),
-		 * drop oldest sample, pas de blocage du thread audio. */
+		 * drop oldest sample, pas de blocage du thread audio.
+		 * V8.3d : drop event tracké par compteur atomique du ring, le
+		 * shift_controller_thread le lit périodiquement et ajuste shift_ppm. */
 		if (!g_skip_uac2) {
-			uac2_ring_push_period(&g_ring_uac2_play, play_uac2_buf);
+			/* V8.29 — Push atomique 96 frames. Si ring play plein,
+			 * la frame est DROP entière (drops_evt++) plutôt que tronquée. */
+			(void)uac2_ring_try_push_period(&g_ring_uac2_play, play_uac2_buf);
 		}
 		if (!g_skip_phone) {
 			r = snd_pcm_writei(g_st.play_phone.pcm, play_phone_buf, PERIOD_FRAMES);
@@ -1216,14 +2001,129 @@ static void handle_cmd(int fd, const char *line)
 
 	} else if (json_has_op(line, "get_drift")) {
 		/* V8.1.b — drift USB↔DSP mesuré passivement par cap_uac2_thread.
+		 * V8.2 — shift_ppm = correction adaptative par feedback xrun.
 		 * Un seul drift partagé play/cap (même horloge USB host). */
 		int x100 = atomic_load(&g_usb_drift_ppm_x100);
 		int valid = atomic_load(&g_usb_drift_valid);
-		char reply[160];
+		int shift = atomic_load(&g_shift_ppm);
+		unsigned long xc = atomic_load(&g_ring_uac2_cap.xruns);
+		unsigned long xp = atomic_load(&g_ring_uac2_play.xruns);
+		unsigned long dp = atomic_load(&g_ring_uac2_play.drops);
+		/* V8.6 — 4 compteurs d'events ring (diag) : full+empty cap+play. */
+		unsigned long cfe = atomic_load(&g_ring_uac2_cap.drops_evt);
+		unsigned long cee = atomic_load(&g_ring_uac2_cap.empty_evt);
+		unsigned long pfe = atomic_load(&g_ring_uac2_play.drops_evt);
+		unsigned long pee = atomic_load(&g_ring_uac2_play.empty_evt);
+		unsigned long ri = atomic_load(&g_dbg_corr_req_insert);
+		unsigned long rd = atomic_load(&g_dbg_corr_req_drop);
+		unsigned long ai = atomic_load(&g_dbg_corr_app_insert);
+		unsigned long ad = atomic_load(&g_dbg_corr_app_drop);
+		/* V8.32 — Stats timing : min/max globaux persistants,
+		 * moyenne sur fenêtre glissante de TIMING_WINDOW_SEC buckets. */
+		struct timespec n_now;
+		clock_gettime(CLOCK_MONOTONIC, &n_now);
+		uint64_t now_sec = (uint64_t)n_now.tv_sec;
+		uint64_t wr_sum = 0, rd_sum = 0;
+		uint32_t wr_n = 0, rd_n = 0;
+		for (int k = 0; k < TIMING_WINDOW_SEC; k++) {
+			uint64_t e = atomic_load_explicit(&g_wr_bucket_epoch[k], memory_order_relaxed);
+			if (e != 0 && now_sec - e < TIMING_WINDOW_SEC) {
+				wr_sum += atomic_load_explicit(&g_wr_bucket_sum[k], memory_order_relaxed);
+				wr_n   += atomic_load_explicit(&g_wr_bucket_cnt[k], memory_order_relaxed);
+			}
+			e = atomic_load_explicit(&g_rd_bucket_epoch[k], memory_order_relaxed);
+			if (e != 0 && now_sec - e < TIMING_WINDOW_SEC) {
+				rd_sum += atomic_load_explicit(&g_rd_bucket_sum[k], memory_order_relaxed);
+				rd_n   += atomic_load_explicit(&g_rd_bucket_cnt[k], memory_order_relaxed);
+			}
+		}
+		uint32_t wr_avg = wr_n ? (uint32_t)(wr_sum / wr_n) : 0;
+		uint32_t rd_avg = rd_n ? (uint32_t)(rd_sum / rd_n) : 0;
+		uint32_t wr_min = atomic_load_explicit(&g_wr_min_us, memory_order_relaxed);
+		uint32_t wr_max = atomic_load_explicit(&g_wr_max_us, memory_order_relaxed);
+		uint32_t rd_min = atomic_load_explicit(&g_rd_min_us, memory_order_relaxed);
+		uint32_t rd_max = atomic_load_explicit(&g_rd_max_us, memory_order_relaxed);
+		if (wr_min == UINT32_MAX) wr_min = 0;
+		if (rd_min == UINT32_MAX) rd_min = 0;
+		unsigned long n1 = atomic_load(&g_dbg_readi_lt10);
+		unsigned long n2 = atomic_load(&g_dbg_readi_10_50);
+		unsigned long n3 = atomic_load(&g_dbg_readi_50_100);
+		unsigned long n4 = atomic_load(&g_dbg_readi_ge100);
+		char reply[900];
 		snprintf(reply, sizeof(reply),
-		         "{\"ok\":true,\"drift_ppm\":%.2f,\"valid\":%d}\n",
-		         (double)x100 / 100.0, valid);
+		         "{\"ok\":true,\"drift_ppm\":%.2f,\"valid\":%d,"
+		         "\"shift_ppm\":%d,"
+		         "\"xruns_cap\":%lu,\"xruns_play\":%lu,\"drops_play\":%lu,"
+		         "\"cap_full_evt\":%lu,\"cap_empty_evt\":%lu,"
+		         "\"play_full_evt\":%lu,\"play_empty_evt\":%lu,"
+		         "\"corr_req_insert\":%lu,\"corr_app_insert\":%lu,"
+		         "\"corr_req_drop\":%lu,\"corr_app_drop\":%lu,"
+		         "\"readi_lt10\":%lu,\"readi_10_50\":%lu,"
+		         "\"readi_50_100\":%lu,\"readi_ge100\":%lu,"
+		         "\"cc_called\":%lu,\"cc_nonzero\":%lu,\"corr_acc_max\":%d,"
+		         "\"uac2_cap_fill\":%u,\"uac2_play_fill\":%u,"
+		         "\"uac2_cap_mode\":%d,\"uac2_play_mode\":%d,"
+		         "\"uac2_cap_warm\":%d,\"uac2_play_warm\":%d,"
+		         "\"wr_us_min\":%u,\"wr_us_max\":%u,\"wr_us_avg\":%u,"
+		         "\"rd_us_min\":%u,\"rd_us_max\":%u,\"rd_us_avg\":%u}\n",
+		         (double)x100 / 100.0, valid, shift,
+		         xc, xp, dp, cfe, cee, pfe, pee,
+		         ri, ai, rd, ad, n1, n2, n3, n4,
+		         atomic_load(&g_dbg_cc_called),
+		         atomic_load(&g_dbg_cc_nonzero),
+		         atomic_load(&g_dbg_corr_acc_max),
+		         uac2_ring_fill(&g_ring_uac2_cap),
+		         uac2_ring_fill(&g_ring_uac2_play),
+		         atomic_load(&g_uac2_cap_mode),
+		         atomic_load(&g_uac2_play_mode),
+		         atomic_load(&g_uac2_cap_warm),
+		         atomic_load(&g_uac2_play_warm),
+		         wr_min, wr_max, wr_avg,
+		         rd_min, rd_max, rd_avg);
 		write(fd, reply, strlen(reply));
+
+	} else if (json_has_op(line, "apply_drift_as_shift")) {
+		/* V8.14 — force shift_ppm = round(drift_ppm) en un coup,
+		 * sans attendre que shift_controller_thread accumule. */
+		int x100 = atomic_load(&g_usb_drift_ppm_x100);
+		int shift_target = (x100 >= 0) ? (x100 + 50) / 100
+		                               : (x100 - 50) / 100;
+		atomic_store(&g_shift_ppm, shift_target);
+		dprintf(fd,
+		        "{\"ok\":true,\"op\":\"apply_drift_as_shift\","
+		        "\"shift_ppm\":%d,\"drift_ppm_x100\":%d}\n",
+		        shift_target, x100);
+
+	} else if (json_has_op(line, "reset_drift_stats")) {
+		/* V8.12 — Reset complet des stats drift/ring : remet à zéro
+		 * shift, drift mesuré, et TOUS les compteurs (xruns/drops/events)
+		 * sur cap et play. Utile pour repartir d'une base propre après
+		 * un démarrage transient, sans redémarrer mixer-pro. */
+		atomic_store(&g_shift_ppm, 0);
+		atomic_store(&g_usb_drift_ppm_x100, 0);
+		atomic_store(&g_usb_drift_valid, 0);
+		atomic_store(&g_ring_uac2_cap.xruns,      0);
+		atomic_store(&g_ring_uac2_cap.drops,      0);
+		atomic_store(&g_ring_uac2_cap.drops_evt,  0);
+		atomic_store(&g_ring_uac2_cap.empty_evt,  0);
+		atomic_store(&g_ring_uac2_play.xruns,     0);
+		atomic_store(&g_ring_uac2_play.drops,     0);
+		atomic_store(&g_ring_uac2_play.drops_evt, 0);
+		atomic_store(&g_ring_uac2_play.empty_evt, 0);
+		/* V8.32 — reset stats timing wr/rd (min/max + buckets) */
+		atomic_store(&g_wr_min_us, UINT32_MAX);
+		atomic_store(&g_wr_max_us, 0);
+		atomic_store(&g_rd_min_us, UINT32_MAX);
+		atomic_store(&g_rd_max_us, 0);
+		for (int k = 0; k < TIMING_WINDOW_SEC; k++) {
+			atomic_store(&g_wr_bucket_sum[k], 0);
+			atomic_store(&g_wr_bucket_cnt[k], 0);
+			atomic_store(&g_wr_bucket_epoch[k], 0);
+			atomic_store(&g_rd_bucket_sum[k], 0);
+			atomic_store(&g_rd_bucket_cnt[k], 0);
+			atomic_store(&g_rd_bucket_epoch[k], 0);
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"reset_drift_stats\"}\n");
 
 	} else if (json_has_op(line, "reset_fx")) {
 		int bus;
@@ -1327,11 +2227,32 @@ int main(int argc, char **argv)
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--no-uac2"))  g_skip_uac2  = 1;
 		else if (!strcmp(argv[i], "--no-phone")) g_skip_phone = 1;
+		else if (!strcmp(argv[i], "--no-asrc"))  atomic_store(&g_no_asrc, 1);
+		else if (!strcmp(argv[i], "--fixed-shift") && i+1 < argc) {
+			int v = atoi(argv[++i]);
+			atomic_store(&g_shift_ppm, v);
+			atomic_store(&g_shift_fixed, 1);
+		}
+		else if (!strcmp(argv[i], "--dump-usb-cap") && i+1 < argc) {
+			g_usb_cap_dump = fopen(argv[++i], "wb");
+			if (g_usb_cap_dump)
+				setvbuf(g_usb_cap_dump, NULL, _IOFBF, 1024*1024);
+			else perror("dump-usb-cap fopen");
+		}
+		else if (!strcmp(argv[i], "--dump-dsp-play") && i+1 < argc) {
+			g_dsp_play_dump = fopen(argv[++i], "wb");
+			if (g_dsp_play_dump)
+				setvbuf(g_dsp_play_dump, NULL, _IOFBF, 1024*1024);
+			else perror("dump-dsp-play fopen");
+		}
 		else if (!strcmp(argv[i], "--help")) {
 			fprintf(stderr,
-				"usage: %s [--no-uac2] [--no-phone]\n"
-				"  --no-uac2  : skip UAC2Gadget PCMs (host PC absent)\n"
-				"  --no-phone : skip Phone aloop PCMs\n", argv[0]);
+				"usage: %s [--no-uac2] [--no-phone] [--no-asrc] [--dump-usb-cap PATH]\n"
+				"  --no-uac2       : skip UAC2Gadget PCMs (host PC absent)\n"
+				"  --no-phone      : skip Phone aloop PCMs\n"
+				"  --no-asrc       : disable ASRC (compute_correction returns 0)\n"
+				"  --dump-usb-cap  : dump raw S32_LE 8ch frames popped from ring_uac2_cap\n",
+				argv[0]);
 			return 0;
 		}
 	}
@@ -1411,7 +2332,7 @@ int main(int argc, char **argv)
 	signal(SIGTERM, on_signal);
 
 	pthread_t th_audio, th_ctrl, th_play, th_analyzer;
-	pthread_t th_cap_uac2, th_play_uac2;
+	pthread_t th_cap_uac2, th_play_uac2, th_shift_ctl;
 	pthread_create(&th_ctrl, NULL, control_thread, NULL);
 	pthread_create(&th_play, NULL, play_thread, NULL);   /* E6.g Phase 2 */
 	pthread_create(&th_audio, NULL, audio_thread, NULL);
@@ -1421,10 +2342,15 @@ int main(int argc, char **argv)
 		pthread_create(&th_cap_uac2,  NULL, cap_uac2_thread,  NULL);
 		pthread_create(&th_play_uac2, NULL, play_uac2_thread, NULL);
 	}
+	/* V8.26 — shift_controller_thread DÉSACTIVÉ : shift_ppm est piloté par
+	 * cap_uac2_thread via drift précis (HW htstamp). */
+	(void)th_shift_ctl;
+	/* pthread_create(&th_shift_ctl, NULL, shift_controller_thread, NULL); */
 
 	pthread_join(th_audio, NULL);
 	pthread_join(th_play, NULL);
 	pthread_join(th_ctrl, NULL);
+	/* V8.26 — shift_controller_thread désactivé (cf création) */
 	if (!g_skip_uac2) {
 		pthread_join(th_cap_uac2, NULL);
 		pthread_join(th_play_uac2, NULL);

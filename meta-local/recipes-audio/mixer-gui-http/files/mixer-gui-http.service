@@ -11,5 +11,8 @@ Restart=on-failure
 RestartSec=5
 User=root
 
+# V8.33 — Cores non isolés (0,1) pour ne pas polluer les cores audio (2,3)
+CPUAffinity=0 1
+
 [Install]
 WantedBy=multi-user.target

@@ -864,12 +864,40 @@ html, body {
   </div>
   <div class="app-stat">lat <span class="v" x-text="state.latency_us_one_way"></span> µs</div>
   <div class="app-stat">iter <span class="v" x-text="state.prof_iter_us"></span> µs</div>
-  <!-- V8.1.b — Drift USB↔DSP indicator (passive measurement, single value
-       for both cap & play since same host clock) -->
+  <!-- V8.1.b/V8.2 — Drift USB↔DSP : drift_ppm = mesuré passivement,
+       shift_ppm = correction adaptative actuelle (asservissement xrun feedback) -->
   <div class="app-stat"
        :class="driftStatusClass()"
        :title="'Drift USB host clock vs DSP TAC5212 board clock — measured passively from UAC2 capture sample rate.\\nVert: <50 ppm (excellent). Ambre: 50-200 ppm (normal). Rouge: >200 ppm (drift important).'">
     drift <span class="v" x-text="driftDisplay()"></span> ppm
+  </div>
+  <!-- V8.7 — shift, events ring, et erreurs ALSA PCM USB -->
+  <div class="app-stat"
+       :title="'shift_ppm = correction ASRC (partagé cap+play, piloté par events ring cap).'">
+    shift <span class="v" x-text="(drift.shift_ppm >= 0 ? '+' : '') + (drift.shift_ppm || 0)"></span>
+  </div>
+  <div class="app-stat" :title="'ring_cap full / empty events'">
+    rcap <span class="v" x-text="(drift.cap_full_evt||0) + '/' + (drift.cap_empty_evt||0)"></span>
+  </div>
+  <div class="app-stat" :title="'ring_play full / empty events'">
+    rplay <span class="v" x-text="(drift.play_full_evt||0) + '/' + (drift.play_empty_evt||0)"></span>
+  </div>
+  <!-- V8.30 — Stats timing wr/rd (intervalle entre 2 push/pop du ring USB cap, sur 16 valeurs glissantes) -->
+  <div class="app-stat" :title="'Intervalle entre 2 push wr du ring USB cap (producer). min/max/avg en µs sur 16 valeurs glissantes. Idéal: 2000 µs.'">
+    wr <span class="v" x-text="(drift.wr_us_min||0) + '/' + (drift.wr_us_avg||0) + '/' + (drift.wr_us_max||0)"></span> µs
+  </div>
+  <div class="app-stat" :title="'Intervalle entre 2 pop rd du ring USB cap (consumer audio_thread). min/max/avg en µs sur 16 valeurs glissantes. Idéal: 2000 µs.'">
+    rd <span class="v" x-text="(drift.rd_us_min||0) + '/' + (drift.rd_us_avg||0) + '/' + (drift.rd_us_max||0)"></span> µs
+  </div>
+  <div class="app-stat"
+       :class="(drift.xruns_cap > 0) ? 'warn' : ''"
+       :title="'Erreurs USB cap : snd_pcm_avail_update / snd_pcm_readi retours négatifs (-EPIPE etc).'">
+    errCap <span class="v" x-text="drift.xruns_cap || 0"></span>
+  </div>
+  <div class="app-stat"
+       :class="(drift.xruns_play > 0) ? 'warn' : ''"
+       :title="'Erreurs USB play : snd_pcm_avail_update / snd_pcm_writei retours négatifs (-EPIPE etc).'">
+    errPlay <span class="v" x-text="drift.xruns_play || 0"></span>
   </div>
   <div class="spacer"></div>
   <button class="btn-header"
@@ -878,6 +906,12 @@ html, body {
           @click="tacReset()"
           :title="tacResetBusy ? 'Reset in progress...' : 'Reinit 4× TAC5212 codecs (i2c)'"
           x-text="tacResetBusy ? 'Resetting...' : 'Reset TACs'">Reset TACs</button>
+  <button class="btn-header"
+          @click="resetDriftStats()"
+          title="V8.32 — Reset shift, drift, compteurs xruns/drops/events + min/max wr/rd timing">Reset Stats</button>
+  <button class="btn-header"
+          @click="applyDriftAsShift()"
+          title="V8.14 — Force shift_ppm = drift_ppm mesuré (round). Évite d'attendre que shift_controller_thread accumule.">Apply Drift</button>
   <span class="status-pill" :class="connected ? 'ok' : 'bad'">
     <span class="dot"></span><span x-text="connected ? 'Connected' : 'Offline'"></span>
   </span>
@@ -1659,7 +1693,12 @@ html, body {
 function mixerApp() {
   return {
     state: { version:'?', frames:0, xrun:0, xrun_delta:0, latency_us_one_way:0, prof_iter_us:0 },
-    drift: { ppm: 0, valid: 0 },
+    drift: { ppm: 0, valid: 0, shift_ppm: 0, shift_ppm_cap: 0, shift_ppm_play: 0,
+             xruns_cap: 0, xruns_play: 0, drops_play: 0,
+             cap_full_evt: 0, cap_empty_evt: 0,
+             play_full_evt: 0, play_empty_evt: 0,
+             wr_us_min: 0, wr_us_max: 0, wr_us_avg: 0,
+             rd_us_min: 0, rd_us_max: 0, rd_us_avg: 0 },
     connected: false,
     streaming: false,
     tacResetBusy: false,
@@ -1765,8 +1804,24 @@ function mixerApp() {
         if (!r.ok) return;
         const d = await r.json();
         if (typeof d.drift_ppm === 'number') {
-          this.drift.ppm = d.drift_ppm;
-          this.drift.valid = d.valid || 0;
+          this.drift.ppm           = d.drift_ppm;
+          this.drift.valid         = d.valid || 0;
+          this.drift.shift_ppm     = d.shift_ppm || 0;
+          this.drift.xruns_cap     = d.xruns_cap || 0;
+          this.drift.xruns_play    = d.xruns_play || 0;
+          this.drift.drops_play    = d.drops_play || 0;
+          this.drift.shift_ppm_cap  = d.shift_ppm_cap  || 0;
+          this.drift.shift_ppm_play = d.shift_ppm_play || 0;
+          this.drift.cap_full_evt   = d.cap_full_evt   || 0;
+          this.drift.cap_empty_evt  = d.cap_empty_evt  || 0;
+          this.drift.play_full_evt  = d.play_full_evt  || 0;
+          this.drift.play_empty_evt = d.play_empty_evt || 0;
+          this.drift.wr_us_min      = d.wr_us_min || 0;
+          this.drift.wr_us_max      = d.wr_us_max || 0;
+          this.drift.wr_us_avg      = d.wr_us_avg || 0;
+          this.drift.rd_us_min      = d.rd_us_min || 0;
+          this.drift.rd_us_max      = d.rd_us_max || 0;
+          this.drift.rd_us_avg      = d.rd_us_avg || 0;
         }
       } catch(e) {}
     },
@@ -1994,6 +2049,26 @@ function mixerApp() {
           body: JSON.stringify(obj)
         });
       } catch(e) {}
+    },
+
+    async resetDriftStats() {
+      try {
+        const r = await fetch('/api/reset_drift_stats');
+        const j = await r.json();
+        if (!j.ok) alert('Reset drift failed: ' + (j.err || 'unknown'));
+      } catch(e) {
+        alert('Reset drift request error: ' + e.message);
+      }
+    },
+
+    async applyDriftAsShift() {
+      try {
+        const r = await fetch('/api/apply_drift_as_shift');
+        const j = await r.json();
+        if (!j.ok) alert('Apply drift failed: ' + (j.err || 'unknown'));
+      } catch(e) {
+        alert('Apply drift request error: ' + e.message);
+      }
     },
 
     async tacReset(mode='analog') {

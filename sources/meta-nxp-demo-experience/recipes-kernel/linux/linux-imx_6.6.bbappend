@@ -30,5 +30,6 @@ do_apply_f_uac2_patch() {
 
 # Place cette tâche juste après do_patch pour que les sources soient prêtes,
 # mais avant la configuration/compilation
-addtask apply_f_uac2_patch after do_patch before do_configure
+# Désactivé : on veut le f_uac2.c upstream pour debug audio glitch USB
+#addtask apply_f_uac2_patch after do_patch before do_configure
 

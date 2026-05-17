@@ -608,9 +608,25 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 
 		if (!strcmp(url, "/api/drift")) {
 			/* V8.1.b : drift USB↔DSP mesuré passivement par mixer-pro.
-			 * Renvoie {"ok":true,"drift_ppm":X.YZ,"valid":1}. */
-			char reply[256];
+			 * V8.30 : grand buffer pour les stats timing wr/rd. */
+			char reply[1024];
 			int n = mixer_request("{\"op\":\"get_drift\"}\n", reply, sizeof(reply));
+			return send_json(conn, n > 0 ? 200 : 503, reply);
+		}
+
+		if (!strcmp(url, "/api/reset_drift_stats")) {
+			/* V8.12 : reset shift_ppm + drift + tous les compteurs ring */
+			char reply[128];
+			int n = mixer_request("{\"op\":\"reset_drift_stats\"}\n",
+			                      reply, sizeof(reply));
+			return send_json(conn, n > 0 ? 200 : 503, reply);
+		}
+
+		if (!strcmp(url, "/api/apply_drift_as_shift")) {
+			/* V8.14 : force shift_ppm = round(drift_ppm) */
+			char reply[160];
+			int n = mixer_request("{\"op\":\"apply_drift_as_shift\"}\n",
+			                      reply, sizeof(reply));
 			return send_json(conn, n > 0 ? 200 : 503, reply);
 		}
 

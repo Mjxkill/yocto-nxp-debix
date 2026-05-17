@@ -37,6 +37,10 @@ IMAGE_INSTALL:append = " mixer-pro"
 # V7.0-E7 — mixer-gui-http : GUI HTTP (libmicrohttpd + Alpine.js/Tailwind CDN)
 IMAGE_INSTALL:append = " mixer-gui-http"
 
+# V8.33 — boot.scr U-Boot avec isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3 :
+# isole les cores 2 et 3 pour les threads RT du mixer-pro (CPUAffinity=2 3).
+IMAGE_INSTALL:append = " boot-script-rt"
+
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 

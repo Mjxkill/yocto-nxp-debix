@@ -18,6 +18,10 @@ LimitMEMLOCK=infinity
 CPUSchedulingPolicy=fifo
 CPUSchedulingPriority=80
 
+# V8.33 — Affinité aux cores isolés (isolcpus=2,3 dans bootargs)
+# pour éviter le jitter scheduling sur les threads audio temps réel.
+CPUAffinity=2 3
+
 # Run as root (need SCHED_FIFO + mlockall + audio group)
 User=root
 
