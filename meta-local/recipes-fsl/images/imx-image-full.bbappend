@@ -17,7 +17,10 @@ IMAGE_INSTALL:append = " sof-zephyr sof-tools"
 IMAGE_INSTALL:append = " sof-firmware-custom"
 
 # V3.2.2 NPU audio tap — kernel module exposing /dev/imx-audio-tap (mmap shared mem)
-IMAGE_INSTALL:append = " kernel-module-imx-audio-tap"
+# Note : on liste le recipe `imx-audio-tap` (meta-package créé par `inherit module`
+# via KERNEL_MODULES_META_PACKAGE) qui RDEPENDS sur kernel-module-imx-audio-tap-${KV}.
+# Lister directement le nom de package versionné n'est pas résolu au task-graph.
+IMAGE_INSTALL:append = " imx-audio-tap"
 
 # TAC5212 boot-time init (tac-reset script + systemd service)
 IMAGE_INSTALL:append = " tac5212-service"
