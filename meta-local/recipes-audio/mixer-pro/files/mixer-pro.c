@@ -1968,6 +1968,59 @@ static void handle_cmd(int fd, const char *line)
 			 "{\"ok\":true,\"bus\":%d,%s}\n", bus, body);
 		write(fd, reply, strlen(reply));
 
+	} else if (json_has_op(line, "set_fx_engine")) {
+		/* V9.2 — Change l'engine d'un bus FX. Engines builtin (compressor,
+		 * reverb, delay, eq) OU LV2 plugin par URI.
+		 * Format : {"op":"set_fx_engine","bus":N,"engine":"lv2","uri":"..."}
+		 * Pour engines builtin : "engine":"compressor"|"reverb"|"delay"|"eq"
+		 */
+		int bus;
+		char engine[32];
+		char uri[256] = "";
+		if (json_get_int(line, "bus", &bus) < 0 ||
+		    json_get_str(line, "engine", engine, sizeof(engine)) < 0 ||
+		    bus < 0 || bus >= N_BUS_FX) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_fx_engine args\"}\n");
+			return;
+		}
+		int uri_set = (json_get_str(line, "uri", uri, sizeof(uri)) >= 0);
+
+		fx_engine_t new_eng = {0};
+		int ok = 0;
+		if (!strcmp(engine, "compressor")) ok = fx_init_compressor(&new_eng, (float)SAMPLE_RATE);
+		else if (!strcmp(engine, "reverb"))     ok = fx_init_reverb    (&new_eng, (float)SAMPLE_RATE);
+		else if (!strcmp(engine, "delay"))      ok = fx_init_delay     (&new_eng, (float)SAMPLE_RATE);
+		else if (!strcmp(engine, "eq"))         ok = fx_init_eq        (&new_eng, (float)SAMPLE_RATE);
+		else if (!strcmp(engine, "lv2") && uri_set)
+			ok = fx_init_lv2(&new_eng, (float)SAMPLE_RATE, uri);
+
+		if (!ok) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"engine init failed\","
+			        "\"engine\":\"%s\",\"uri\":\"%s\"}\n", engine, uri);
+			return;
+		}
+
+		/* Swap atomic sous mutex. fx_free de l'ancien APRÈS swap pour que
+		 * audio_thread voie toujours un engine valide. */
+		pthread_mutex_lock(&g_st.target_lock);
+		fx_engine_t old_eng = g_st.fx_engines[bus];
+		g_st.fx_engines[bus] = new_eng;
+		pthread_mutex_unlock(&g_st.target_lock);
+		fx_free(&old_eng);
+
+		snprintf(reply, sizeof(reply),
+			 "{\"ok\":true,\"op\":\"set_fx_engine\",\"bus\":%d,"
+			 "\"engine\":\"%s\",\"uri\":\"%s\"}\n",
+			 bus, engine, uri);
+		write(fd, reply, strlen(reply));
+
+	} else if (json_has_op(line, "list_lv2_plugins")) {
+		/* V9.2 — Énumère les plugins LV2 RT-safe disponibles. */
+		static char lv2_buf[16384];
+		int n = fx_lv2_list_uris(lv2_buf, sizeof(lv2_buf));
+		dprintf(fd, "{\"ok\":true,\"op\":\"list_lv2_plugins\",\"plugins\":%s}\n",
+		        n > 0 ? lv2_buf : "[]");
+
 	} else if (json_has_op(line, "get_meters")) {
 		/* E7.1 + E7.5 : retourne peaks + analyzer (spectrum + scope) en
 		 * un seul round-trip, consommé par mixer-gui-http /api/stream.

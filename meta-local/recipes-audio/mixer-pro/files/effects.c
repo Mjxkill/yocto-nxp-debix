@@ -510,6 +510,7 @@ int fx_init_eq(fx_engine_t *fx, float sample_rate)
  */
 #include <lilv/lilv.h>
 #include <lv2/core/lv2.h>
+#include <lv2/urid/urid.h>
 
 /* Global lilv world (shared par tous les bus LV2). Init lazy. */
 static LilvWorld *g_lv2_world           = NULL;
@@ -519,6 +520,38 @@ static LilvNode  *g_uri_control_port    = NULL;
 static LilvNode  *g_uri_input_port      = NULL;
 static LilvNode  *g_uri_output_port     = NULL;
 static LilvNode  *g_uri_hard_rt         = NULL;
+
+/* V9.2 — host feature `urid:map` : service basique de mapping URI → ID.
+ * Beaucoup de plugins LV2 modernes (scope, params, etc.) le require sinon
+ * instantiate fail. Implémentation simple linear search (suffisant pour
+ * < 100 URIs typique). */
+#define URID_MAP_MAX 256
+static char       *g_urid_uris[URID_MAP_MAX];
+static int         g_urid_count = 0;
+
+static LV2_URID urid_map_fn(LV2_URID_Map_Handle handle, const char *uri)
+{
+	(void)handle;
+	for (int i = 0; i < g_urid_count; i++) {
+		if (strcmp(g_urid_uris[i], uri) == 0) return (LV2_URID)(i + 1);
+	}
+	if (g_urid_count >= URID_MAP_MAX) return 0;
+	g_urid_uris[g_urid_count] = strdup(uri);
+	return (LV2_URID)(++g_urid_count);
+}
+
+static LV2_URID_Map g_urid_map_data = {
+	.handle = NULL,
+	.map = urid_map_fn,
+};
+static LV2_Feature g_feature_urid_map = {
+	.URI  = LV2_URID__map,
+	.data = &g_urid_map_data,
+};
+static const LV2_Feature *g_host_features[] = {
+	&g_feature_urid_map,
+	NULL
+};
 
 static int lv2_world_init(void)
 {
@@ -639,8 +672,8 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 	st->audio_in_idx[0]  = st->audio_in_idx[1]  = -1;
 	st->audio_out_idx[0] = st->audio_out_idx[1] = -1;
 
-	/* Instantiate */
-	st->instance = lilv_plugin_instantiate(plug, (double)sample_rate, NULL);
+	/* Instantiate avec host features (urid:map nécessaire pour plupart plugins) */
+	st->instance = lilv_plugin_instantiate(plug, (double)sample_rate, g_host_features);
 	if (!st->instance) {
 		fprintf(stderr, "LV2: instantiate failed for %s\n", uri);
 		free(st->uri); free(st);
