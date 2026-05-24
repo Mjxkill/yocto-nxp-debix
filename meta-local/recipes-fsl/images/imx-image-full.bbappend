@@ -49,6 +49,11 @@ IMAGE_INSTALL:append = " boot-script-rt"
 # qui run après boot avant mixer-pro.service.
 IMAGE_INSTALL:append = " irq-prio-rt"
 
+# V9.2 — LV2 plugin host stack (mixer-pro lien lilv via DEPENDS).
+# lilv + core LV2 spec runtime ; plugins externes (Calf, x42…) à installer
+# à part selon besoin utilisateur.
+IMAGE_INSTALL:append = " lilv lv2"
+
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 

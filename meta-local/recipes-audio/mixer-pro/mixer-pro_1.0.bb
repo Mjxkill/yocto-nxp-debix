@@ -25,8 +25,12 @@ S = "${WORKDIR}"
 
 inherit systemd
 
-DEPENDS = "alsa-lib"
-RDEPENDS:${PN} = "alsa-lib"
+DEPENDS = "alsa-lib lilv"
+# V9.2 — lilv = LV2 host library. RDEPENDS sur lilv + lv2 (core spec)
+# pour avoir libraries + core LV2 namespaces dispo au runtime. Plugins LV2
+# tiers (Calf, x42, …) optionnels — l'utilisateur installe via dpkg / Yocto
+# IMAGE_INSTALL selon ses besoins ; mixer-pro charge dynamiquement.
+RDEPENDS:${PN} = "alsa-lib lilv lv2"
 
 do_compile() {
     oe_runmake CC="${CC}" CFLAGS="${CFLAGS}" LDFLAGS="${LDFLAGS}"

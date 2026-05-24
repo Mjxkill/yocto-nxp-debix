@@ -1,7 +1,11 @@
 CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11
 LDFLAGS ?=
-LIBS     = -lasound -lpthread -lm -lrt
+# V9.2 — lilv pour LV2 plugin host (pkg-config résolu cross-compile par Yocto)
+LILV_CFLAGS := $(shell pkg-config --cflags lilv-0 2>/dev/null)
+LILV_LIBS   := $(shell pkg-config --libs   lilv-0 2>/dev/null)
+CFLAGS  += $(LILV_CFLAGS)
+LIBS     = -lasound -lpthread -lm -lrt $(LILV_LIBS)
 
 PREFIX  ?= /usr
 BINDIR  ?= $(PREFIX)/bin
