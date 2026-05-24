@@ -577,6 +577,8 @@ struct lv2_state {
 	float          sr;
 	char          *uri;
 	LilvInstance  *instance;
+	LilvInstance  *instance2;   /* V9.2 : 2e instance pour canal R en mode mono */
+	int            is_mono;     /* 1 si plugin 1in/1out (2 instances pour L+R) */
 	const LilvPlugin *plugin;
 
 	int            n_ports;
@@ -602,6 +604,8 @@ static void lv2_process(fx_engine_t *fx, float in_l, float in_r,
 	st->buf_in_l = in_l;
 	st->buf_in_r = in_r;
 	lilv_instance_run(st->instance, 1);
+	if (st->is_mono && st->instance2)
+		lilv_instance_run(st->instance2, 1);  /* canal R sur 2e instance */
 	*out_l = st->buf_out_l;
 	*out_r = st->buf_out_r;
 }
@@ -625,6 +629,10 @@ static void lv2_reset(fx_engine_t *fx)
 	if (st->instance) {
 		lilv_instance_deactivate(st->instance);
 		lilv_instance_activate(st->instance);
+	}
+	if (st->instance2) {
+		lilv_instance_deactivate(st->instance2);
+		lilv_instance_activate(st->instance2);
 	}
 }
 
@@ -719,8 +727,50 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 	}
 	free(defaults);
 
-	if (audio_in_n != 2 || audio_out_n != 2) {
-		fprintf(stderr, "LV2: %s I/O mismatch (in=%d out=%d, want 2/2)\n",
+	/* Stéréo natif (2/2) : OK direct.
+	 * Mono (1/1) : instancier une 2e fois pour le canal R, partageant
+	 *              les contrôles. Plugin doit être stateless ou
+	 *              indépendant par instance (typique : gain, biquad).
+	 * Autre : refus.
+	 */
+	if (audio_in_n == 2 && audio_out_n == 2) {
+		st->is_mono = 0;
+	} else if (audio_in_n == 1 && audio_out_n == 1) {
+		st->is_mono = 1;
+		st->instance2 = lilv_plugin_instantiate(plug, (double)sample_rate, g_host_features);
+		if (!st->instance2) {
+			fprintf(stderr, "LV2: %s 2nd instance failed for mono→stereo\n", uri);
+			lilv_instance_free(st->instance);
+			free(st->uri); free(st);
+			return 0;
+		}
+		/* Connect ports de l'instance 2 :
+		 *  - audio input (1) → buf_in_r
+		 *  - audio output (1) → buf_out_r
+		 *  - control inputs → MÊMES buffers que instance1 (params partagés)
+		 *  - control outputs → ctrl_out_dummy
+		 */
+		int ctrl_i = 0;
+		for (int i = 0; i < st->n_ports; i++) {
+			const LilvPort *port = lilv_plugin_get_port_by_index(plug, i);
+			int is_audio  = lilv_port_is_a(plug, port, g_uri_audio_port);
+			int is_ctrl   = lilv_port_is_a(plug, port, g_uri_control_port);
+			int is_input  = lilv_port_is_a(plug, port, g_uri_input_port);
+
+			if (is_audio && is_input)
+				lilv_instance_connect_port(st->instance2, i, &st->buf_in_r);
+			else if (is_audio && !is_input)
+				lilv_instance_connect_port(st->instance2, i, &st->buf_out_r);
+			else if (is_ctrl && is_input)
+				lilv_instance_connect_port(st->instance2, i, &st->ctrl_values[ctrl_i++]);
+			else if (is_ctrl)
+				lilv_instance_connect_port(st->instance2, i,
+					&st->ctrl_out_dummy[i % LV2_MAX_CTRL_PORTS]);
+		}
+		lilv_instance_activate(st->instance2);
+		fprintf(stderr, "LV2: %s mono→stereo (2 instances)\n", uri);
+	} else {
+		fprintf(stderr, "LV2: %s I/O mismatch (in=%d out=%d, want 2/2 or 1/1)\n",
 		        uri, audio_in_n, audio_out_n);
 		lilv_instance_free(st->instance);
 		free(st->uri); free(st);
@@ -774,6 +824,10 @@ void fx_free(fx_engine_t *fx)
 		if (st->instance) {
 			lilv_instance_deactivate(st->instance);
 			lilv_instance_free(st->instance);
+		}
+		if (st->instance2) {
+			lilv_instance_deactivate(st->instance2);
+			lilv_instance_free(st->instance2);
 		}
 		free(st->uri);
 	}
