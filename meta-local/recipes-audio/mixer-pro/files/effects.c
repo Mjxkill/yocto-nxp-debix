@@ -493,12 +493,257 @@ int fx_init_eq(fx_engine_t *fx, float sample_rate)
 	return 1;
 }
 
+/* ========================================================================
+ *   5. LV2 plugin host (V9.2) — lilv-0
+ * ======================================================================
+ *
+ * Charge un plugin LV2 RT-safe via lilv, expose un fx_engine_t wrapper.
+ *
+ * Per-sample processing : lilv_instance_run(N=1) à chaque sample. Pas
+ * optimal (overhead par call) mais cohérent avec l'architecture vtable
+ * frame-per-frame du mixer. Plugins simples (gain, biquad) tolèrent.
+ * Plugins avec buffers internes (reverb, delay lines) fonctionnent
+ * aussi car ils gardent leur state interne entre les runs.
+ *
+ * Sécurité RT : on filtre `lv2:hardRTCapable=true` au load time.
+ * Plugin sans cette propriété = refusé (peut allouer en process).
+ */
+#include <lilv/lilv.h>
+#include <lv2/core/lv2.h>
+
+/* Global lilv world (shared par tous les bus LV2). Init lazy. */
+static LilvWorld *g_lv2_world           = NULL;
+static const LilvPlugins *g_lv2_plugins = NULL;
+static LilvNode  *g_uri_audio_port      = NULL;
+static LilvNode  *g_uri_control_port    = NULL;
+static LilvNode  *g_uri_input_port      = NULL;
+static LilvNode  *g_uri_output_port     = NULL;
+static LilvNode  *g_uri_hard_rt         = NULL;
+
+static int lv2_world_init(void)
+{
+	if (g_lv2_world) return 1;
+	g_lv2_world = lilv_world_new();
+	if (!g_lv2_world) return 0;
+	lilv_world_load_all(g_lv2_world);
+
+	g_uri_audio_port    = lilv_new_uri(g_lv2_world, LV2_CORE__AudioPort);
+	g_uri_control_port  = lilv_new_uri(g_lv2_world, LV2_CORE__ControlPort);
+	g_uri_input_port    = lilv_new_uri(g_lv2_world, LV2_CORE__InputPort);
+	g_uri_output_port   = lilv_new_uri(g_lv2_world, LV2_CORE__OutputPort);
+	g_uri_hard_rt       = lilv_new_uri(g_lv2_world, LV2_CORE__hardRTCapable);
+
+	g_lv2_plugins = lilv_world_get_all_plugins(g_lv2_world);
+	return 1;
+}
+
+#define LV2_MAX_CTRL_PORTS 64
+#define LV2_MAX_NAME_LEN   32
+
+struct lv2_state {
+	float          sr;
+	char          *uri;
+	LilvInstance  *instance;
+	const LilvPlugin *plugin;
+
+	int            n_ports;
+	int            audio_in_idx[2];   /* L, R, -1 si pas dispo */
+	int            audio_out_idx[2];
+
+	int            n_ctrl_in;
+	int            ctrl_in_idx[LV2_MAX_CTRL_PORTS];
+	char           ctrl_in_name[LV2_MAX_CTRL_PORTS][LV2_MAX_NAME_LEN];
+	float          ctrl_values[LV2_MAX_CTRL_PORTS];   /* live values, connected */
+
+	/* Buffers I/O 1-sample (alloués pour audio L/R, in et out) */
+	float          buf_in_l, buf_in_r, buf_out_l, buf_out_r;
+
+	/* Dummy buffer pour control output (1 par port output, ignoré) */
+	float          ctrl_out_dummy[LV2_MAX_CTRL_PORTS];
+};
+
+static void lv2_process(fx_engine_t *fx, float in_l, float in_r,
+                        float *out_l, float *out_r)
+{
+	struct lv2_state *st = fx->state;
+	st->buf_in_l = in_l;
+	st->buf_in_r = in_r;
+	lilv_instance_run(st->instance, 1);
+	*out_l = st->buf_out_l;
+	*out_r = st->buf_out_r;
+}
+
+static int lv2_set_param(fx_engine_t *fx, const char *name, float value)
+{
+	struct lv2_state *st = fx->state;
+	for (int i = 0; i < st->n_ctrl_in; i++) {
+		if (strcmp(st->ctrl_in_name[i], name) == 0) {
+			st->ctrl_values[i] = value;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static void lv2_reset(fx_engine_t *fx)
+{
+	struct lv2_state *st = fx->state;
+	st->buf_in_l = st->buf_in_r = st->buf_out_l = st->buf_out_r = 0;
+	if (st->instance) {
+		lilv_instance_deactivate(st->instance);
+		lilv_instance_activate(st->instance);
+	}
+}
+
+static int lv2_get_state(fx_engine_t *fx, char *buf, int len)
+{
+	struct lv2_state *st = fx->state;
+	int n = snprintf(buf, len,
+		"\"type\":\"lv2\",\"uri\":\"%s\",\"params\":{",
+		st->uri ? st->uri : "");
+	for (int i = 0; i < st->n_ctrl_in && n < len - 32; i++) {
+		n += snprintf(buf + n, len - n, "%s\"%s\":%.4f",
+		              i == 0 ? "" : ",",
+		              st->ctrl_in_name[i],
+		              st->ctrl_values[i]);
+	}
+	if (n < len - 2) n += snprintf(buf + n, len - n, "}");
+	return n;
+}
+
+int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
+{
+	if (!uri || !*uri) return 0;
+	if (!lv2_world_init()) return 0;
+
+	LilvNode *plug_uri = lilv_new_uri(g_lv2_world, uri);
+	const LilvPlugin *plug = lilv_plugins_get_by_uri(g_lv2_plugins, plug_uri);
+	lilv_node_free(plug_uri);
+	if (!plug) {
+		fprintf(stderr, "LV2: plugin %s not found\n", uri);
+		return 0;
+	}
+
+	/* RT safety filter — refuse plugin sans hardRTCapable */
+	if (!lilv_plugin_has_feature(plug, g_uri_hard_rt)) {
+		fprintf(stderr, "LV2: %s NOT hardRTCapable — refused\n", uri);
+		return 0;
+	}
+
+	struct lv2_state *st = calloc(1, sizeof(*st));
+	if (!st) return 0;
+	st->sr  = sample_rate;
+	st->uri = strdup(uri);
+	st->plugin = plug;
+	st->n_ports = (int)lilv_plugin_get_num_ports(plug);
+	st->audio_in_idx[0]  = st->audio_in_idx[1]  = -1;
+	st->audio_out_idx[0] = st->audio_out_idx[1] = -1;
+
+	/* Instantiate */
+	st->instance = lilv_plugin_instantiate(plug, (double)sample_rate, NULL);
+	if (!st->instance) {
+		fprintf(stderr, "LV2: instantiate failed for %s\n", uri);
+		free(st->uri); free(st);
+		return 0;
+	}
+
+	/* Get default control values */
+	float *defaults = calloc(st->n_ports, sizeof(float));
+	lilv_plugin_get_port_ranges_float(plug, NULL, NULL, defaults);
+
+	/* Scan + connect ports */
+	int audio_in_n = 0, audio_out_n = 0;
+	for (int i = 0; i < st->n_ports; i++) {
+		const LilvPort *port = lilv_plugin_get_port_by_index(plug, i);
+		int is_audio  = lilv_port_is_a(plug, port, g_uri_audio_port);
+		int is_ctrl   = lilv_port_is_a(plug, port, g_uri_control_port);
+		int is_input  = lilv_port_is_a(plug, port, g_uri_input_port);
+
+		if (is_audio && is_input && audio_in_n < 2) {
+			st->audio_in_idx[audio_in_n] = i;
+			lilv_instance_connect_port(st->instance, i,
+				audio_in_n == 0 ? &st->buf_in_l : &st->buf_in_r);
+			audio_in_n++;
+		} else if (is_audio && !is_input && audio_out_n < 2) {
+			st->audio_out_idx[audio_out_n] = i;
+			lilv_instance_connect_port(st->instance, i,
+				audio_out_n == 0 ? &st->buf_out_l : &st->buf_out_r);
+			audio_out_n++;
+		} else if (is_ctrl && is_input && st->n_ctrl_in < LV2_MAX_CTRL_PORTS) {
+			int idx = st->n_ctrl_in++;
+			st->ctrl_in_idx[idx] = i;
+			st->ctrl_values[idx] = defaults[i];
+			LilvNode *sym = (LilvNode *)lilv_port_get_symbol(plug, port);
+			const char *sym_str = sym ? lilv_node_as_string(sym) : "?";
+			strncpy(st->ctrl_in_name[idx], sym_str, LV2_MAX_NAME_LEN - 1);
+			lilv_instance_connect_port(st->instance, i,
+				&st->ctrl_values[idx]);
+		} else if (is_ctrl) {
+			/* Control OUTPUT port — connect to dummy buffer */
+			lilv_instance_connect_port(st->instance, i,
+				&st->ctrl_out_dummy[i % LV2_MAX_CTRL_PORTS]);
+		}
+	}
+	free(defaults);
+
+	if (audio_in_n != 2 || audio_out_n != 2) {
+		fprintf(stderr, "LV2: %s I/O mismatch (in=%d out=%d, want 2/2)\n",
+		        uri, audio_in_n, audio_out_n);
+		lilv_instance_free(st->instance);
+		free(st->uri); free(st);
+		return 0;
+	}
+
+	lilv_instance_activate(st->instance);
+
+	fx->type_name = "lv2";
+	fx->state     = st;
+	fx->process   = lv2_process;
+	fx->set_param = lv2_set_param;
+	fx->reset     = lv2_reset;
+	fx->get_state = lv2_get_state;
+	return 1;
+}
+
+int fx_lv2_list_uris(char *buf, int len)
+{
+	if (!lv2_world_init()) return 0;
+	int n = snprintf(buf, len, "[");
+	int first = 1;
+	LILV_FOREACH(plugins, it, g_lv2_plugins) {
+		const LilvPlugin *plug = lilv_plugins_get(g_lv2_plugins, it);
+		if (!lilv_plugin_has_feature(plug, g_uri_hard_rt))
+			continue;   /* skip non-RT */
+		const LilvNode *uri  = lilv_plugin_get_uri(plug);
+		LilvNode *name       = lilv_plugin_get_name(plug);
+		if (!uri) continue;
+		if (n >= len - 128) break;
+		n += snprintf(buf + n, len - n, "%s{\"uri\":\"%s\",\"name\":\"%s\"}",
+		              first ? "" : ",",
+		              lilv_node_as_string(uri),
+		              name ? lilv_node_as_string(name) : "?");
+		lilv_node_free(name);
+		first = 0;
+	}
+	if (n < len - 2) n += snprintf(buf + n, len - n, "]");
+	return n;
+}
+
 /* ============================== Common ============================= */
 
 void fx_free(fx_engine_t *fx)
 {
-	if (fx && fx->state) {
-		free(fx->state);
-		fx->state = NULL;
+	if (!fx || !fx->state) return;
+	/* LV2 engine : cleanup lilv instance d'abord (différent du calloc).
+	 * Détection par type_name (pas idéal mais évite refactor vtable). */
+	if (fx->type_name && strcmp(fx->type_name, "lv2") == 0) {
+		struct lv2_state *st = fx->state;
+		if (st->instance) {
+			lilv_instance_deactivate(st->instance);
+			lilv_instance_free(st->instance);
+		}
+		free(st->uri);
 	}
+	free(fx->state);
+	fx->state = NULL;
 }

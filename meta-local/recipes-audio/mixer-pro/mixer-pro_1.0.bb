@@ -23,7 +23,7 @@ SRC_URI = " \
 
 S = "${WORKDIR}"
 
-inherit systemd
+inherit systemd pkgconfig
 
 DEPENDS = "alsa-lib lilv"
 # V9.2 — lilv = LV2 host library. RDEPENDS sur lilv + lv2 (core spec)

@@ -50,6 +50,18 @@ int fx_init_reverb    (fx_engine_t *fx, float sample_rate);
 int fx_init_delay     (fx_engine_t *fx, float sample_rate);
 int fx_init_eq        (fx_engine_t *fx, float sample_rate);
 
+/* V9.2 — LV2 plugin host (lilv-0).
+ * Charge dynamiquement un plugin LV2 par son URI, vérifie hardRTCapable,
+ * connecte les ports audio L/R + control ports avec valeurs default.
+ * Retourne 1 si OK, 0 si plugin introuvable, non-RT, ou stéréo mismatch.
+ *
+ * fx_lv2_list_uris(): retourne une string JSON array des URIs des plugins
+ *   LV2 RT-safe disponibles. À utiliser par GUI pour le sélecteur.
+ *   Buffer alloué par caller, retourne nb d'octets écrits.
+ */
+int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri);
+int fx_lv2_list_uris(char *buf, int len);
+
 /* Cleanup (libère state). */
 void fx_free(fx_engine_t *fx);
 

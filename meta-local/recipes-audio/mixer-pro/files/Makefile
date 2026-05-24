@@ -1,11 +1,12 @@
 CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11
 LDFLAGS ?=
-# V9.2 — lilv pour LV2 plugin host (pkg-config résolu cross-compile par Yocto)
+# V9.2 — lilv pour LV2 plugin host (pkg-config résolu cross-compile par Yocto).
+# Note : on passe LILV_CFLAGS directement au gcc (pas via CFLAGS) car bitbake
+# override CFLAGS via argument make → += dans Makefile ignoré.
 LILV_CFLAGS := $(shell pkg-config --cflags lilv-0 2>/dev/null)
 LILV_LIBS   := $(shell pkg-config --libs   lilv-0 2>/dev/null)
-CFLAGS  += $(LILV_CFLAGS)
-LIBS     = -lasound -lpthread -lm -lrt $(LILV_LIBS)
+LIBS     = -lasound -lpthread -lm -lrt
 
 PREFIX  ?= /usr
 BINDIR  ?= $(PREFIX)/bin
@@ -13,7 +14,7 @@ BINDIR  ?= $(PREFIX)/bin
 all: mixer-pro mixerctl
 
 mixer-pro: mixer-pro.c mixer-pro.h effects.c effects.h analyzer.c analyzer.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ mixer-pro.c effects.c analyzer.c $(LIBS)
+	$(CC) $(CFLAGS) $(LILV_CFLAGS) $(LDFLAGS) -o $@ mixer-pro.c effects.c analyzer.c $(LIBS) $(LILV_LIBS)
 
 mixerctl: mixerctl.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ mixerctl.c
