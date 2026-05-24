@@ -508,10 +508,17 @@ int fx_init_eq(fx_engine_t *fx, float sample_rate)
  * Sécurité RT : on filtre `lv2:hardRTCapable=true` au load time.
  * Plugin sans cette propriété = refusé (peut allouer en process).
  */
+#include <pthread.h>
+#include <time.h>
+#include <errno.h>
 #include <lilv/lilv.h>
 #include <lv2/core/lv2.h>
 #include <lv2/urid/urid.h>
 #include <lv2/atom/atom.h>
+#include <lv2/options/options.h>
+#include <lv2/buf-size/buf-size.h>
+#include <lv2/parameters/parameters.h>
+#include <lv2/worker/worker.h>
 
 /* Global lilv world (shared par tous les bus LV2). Init lazy. */
 static LilvWorld *g_lv2_world           = NULL;
@@ -525,6 +532,29 @@ static LilvNode  *g_uri_hard_rt         = NULL;
 static LilvNode  *g_uri_atom_port       = NULL;
 static LV2_URID   g_urid_atom_sequence  = 0;
 static LV2_URID   g_urid_atom_chunk     = 0;
+
+/* V9.2-step5d : LV2 options host feature globals.
+ * Permet de passer maxBlockLength, sampleRate, etc. au plugin à init.
+ * Beaucoup de plugins modernes (dragonfly Hall, calf, lsp) requièrent
+ * `opts:options` pour allouer leurs buffers internes.
+ */
+static int32_t  g_opt_max_block    = 96;       /* period frames (cohérent ALSA) */
+static int32_t  g_opt_min_block    = 1;        /* on run sample-par-sample */
+static int32_t  g_opt_nom_block    = 96;       /* nominal = max */
+static int32_t  g_opt_seq_size     = 8192;     /* atom_sequence capacity */
+static float    g_opt_sample_rate  = 48000.0f; /* SAMPLE_RATE projet */
+static LV2_URID g_urid_max_block   = 0;
+static LV2_URID g_urid_min_block   = 0;
+static LV2_URID g_urid_nom_block   = 0;
+static LV2_URID g_urid_seq_size    = 0;
+static LV2_URID g_urid_sample_rate = 0;
+static LV2_URID g_urid_atom_int    = 0;
+static LV2_URID g_urid_atom_float  = 0;
+static LV2_Options_Option g_lv2_options[7];   /* 6 entries + terminator zero */
+static LV2_Feature g_feature_options = {
+	.URI  = LV2_OPTIONS__options,
+	.data = g_lv2_options,
+};
 
 /* V9.2 — host feature `urid:map` : service basique de mapping URI → ID.
  * Beaucoup de plugins LV2 modernes (scope, params, etc.) le require sinon
@@ -553,8 +583,12 @@ static LV2_Feature g_feature_urid_map = {
 	.URI  = LV2_URID__map,
 	.data = &g_urid_map_data,
 };
+/* V9.2-step5d : g_host_features global = urid_map + options.
+ * worker:schedule est INSTANCE-spécifique (handle = struct lv2_worker*),
+ * donc construit per-plugin dans fx_init_lv2() à partir de ce array de base. */
 static const LV2_Feature *g_host_features[] = {
 	&g_feature_urid_map,
+	&g_feature_options,
 	NULL
 };
 
@@ -576,6 +610,33 @@ static int lv2_world_init(void)
 	g_urid_atom_sequence = urid_map_fn(NULL, LV2_ATOM__Sequence);
 	g_urid_atom_chunk    = urid_map_fn(NULL, LV2_ATOM__Chunk);
 
+	/* V9.2-step5d : pre-map options URIDs + init g_lv2_options[] array */
+	g_urid_max_block    = urid_map_fn(NULL, LV2_BUF_SIZE__maxBlockLength);
+	g_urid_min_block    = urid_map_fn(NULL, LV2_BUF_SIZE__minBlockLength);
+	g_urid_nom_block    = urid_map_fn(NULL, LV2_BUF_SIZE__nominalBlockLength);
+	g_urid_seq_size     = urid_map_fn(NULL, LV2_BUF_SIZE__sequenceSize);
+	g_urid_sample_rate  = urid_map_fn(NULL, LV2_PARAMETERS__sampleRate);
+	g_urid_atom_int     = urid_map_fn(NULL, LV2_ATOM__Int);
+	g_urid_atom_float   = urid_map_fn(NULL, LV2_ATOM__Float);
+
+	g_lv2_options[0] = (LV2_Options_Option){
+		LV2_OPTIONS_INSTANCE, 0, g_urid_max_block,
+		sizeof(int32_t), g_urid_atom_int, &g_opt_max_block };
+	g_lv2_options[1] = (LV2_Options_Option){
+		LV2_OPTIONS_INSTANCE, 0, g_urid_min_block,
+		sizeof(int32_t), g_urid_atom_int, &g_opt_min_block };
+	g_lv2_options[2] = (LV2_Options_Option){
+		LV2_OPTIONS_INSTANCE, 0, g_urid_nom_block,
+		sizeof(int32_t), g_urid_atom_int, &g_opt_nom_block };
+	g_lv2_options[3] = (LV2_Options_Option){
+		LV2_OPTIONS_INSTANCE, 0, g_urid_seq_size,
+		sizeof(int32_t), g_urid_atom_int, &g_opt_seq_size };
+	g_lv2_options[4] = (LV2_Options_Option){
+		LV2_OPTIONS_INSTANCE, 0, g_urid_sample_rate,
+		sizeof(float), g_urid_atom_float, &g_opt_sample_rate };
+	g_lv2_options[5] = (LV2_Options_Option){ 0, 0, 0, 0, 0, NULL };  /* terminator */
+	g_lv2_options[6] = (LV2_Options_Option){ 0, 0, 0, 0, 0, NULL };  /* safety */
+
 	g_lv2_plugins = lilv_world_get_all_plugins(g_lv2_world);
 	return 1;
 }
@@ -589,11 +650,74 @@ static int lv2_host_supports_feature(const char *uri)
 {
 	if (!uri) return 0;
 	if (strcmp(uri, LV2_URID__map) == 0) return 1;
+	if (strcmp(uri, LV2_OPTIONS__options) == 0) return 1;
+	/* V9.2-step5d : worker:schedule supporté via thread per-plugin (cf
+	 * struct lv2_worker dans fx_init_lv2). Le feature data est instance-
+	 * spécifique, pas global. */
+	if (strcmp(uri, LV2_WORKER__schedule) == 0) return 1;
+	/* lv2:state (presets, save/restore) : pas implémenté V9.2, plugins
+	 * qui le require seront refusés. À implémenter V9.3 si besoin. */
 	return 0;
 }
 
 #define LV2_MAX_CTRL_PORTS 64
 #define LV2_MAX_NAME_LEN   32
+
+/* V9.2-step5d : LV2 worker support (1 thread non-RT per plugin instance).
+ *
+ * Architecture :
+ *   audio_thread (RT prio 99) — appelle lilv_instance_run() qui peut
+ *     appeler worker_schedule_cb() ; cette callback queue le request
+ *     non-bloquant (pthread_mutex_trylock + counter drops si fail).
+ *   worker thread (sched OTHER) — sleep sur cond, exécute iface->work()
+ *     qui peut prendre 100ms+ (load IR file). Appelle worker_respond_cb()
+ *     qui store la response dans un buffer per-instance.
+ *   audio_thread (lv2_process) — au début, check si resp_pending,
+ *     copy local + call iface->work_response() pour committer dans le plugin.
+ *
+ * Ring SPSC simple à 1 slot in / 1 slot out. Si plugin spam schedule_work
+ * sans laisser le worker thread répondre → drops counter incrémenté.
+ *
+ * RT safety :
+ *   - pthread_mutex_trylock dans audio_thread : non-bloquant (10-20 µs
+ *     worst case sous contention PREEMPT_RT, négligeable / period 2 ms).
+ *   - cond_wait avec timeout 2s côté worker thread pour détecter exit_flag
+ *     (suggestion critic).
+ *   - Si pthread_create fail → refus propre du plugin (suggestion critic).
+ */
+#define LV2_WORKER_BUF_SIZE  8192
+
+struct lv2_worker {
+	pthread_t          thread;
+	pthread_mutex_t    mutex;
+	pthread_cond_t     cond;
+
+	/* SPSC 1-slot ring */
+	uint8_t            req_buf[LV2_WORKER_BUF_SIZE];
+	uint32_t           req_size;
+	volatile int       req_pending;
+
+	uint8_t            resp_buf[LV2_WORKER_BUF_SIZE];
+	uint32_t           resp_size;
+	volatile int       resp_pending;
+
+	volatile int       exit_flag;
+	uint64_t           drops;   /* schedule_work rejetées (critic suggestion) */
+
+	const LV2_Worker_Interface *iface;
+	LV2_Handle         plugin_handle;
+	LV2_Worker_Schedule schedule;
+};
+
+/* Worker thread function : sleep sur cond, execute iface->work(), reboucle.
+ * Timeout 2s sur cond_wait pour détecter exit_flag en cas de glitch (critic). */
+static void *lv2_worker_thread_fn(void *arg);
+
+/* Callbacks (forward decl) */
+static LV2_Worker_Status lv2_worker_respond_cb(LV2_Worker_Respond_Handle handle,
+                                               uint32_t size, const void *data);
+static LV2_Worker_Status lv2_worker_schedule_cb(LV2_Worker_Schedule_Handle handle,
+                                                uint32_t size, const void *data);
 
 /* V9.2-step5c : LV2 atom port buffers.
  * Buffer 8 KB par port = largement suffisant pour usage non-MIDI (state
@@ -635,12 +759,111 @@ struct lv2_state {
 	int            atom_out_idx[LV2_MAX_ATOM_PORTS];
 	uint8_t       *atom_in_bufs[LV2_MAX_ATOM_PORTS];
 	uint8_t       *atom_out_bufs[LV2_MAX_ATOM_PORTS];
+
+	/* V9.2-step5d : worker support (NULL si plugin ne demande pas worker:schedule) */
+	struct lv2_worker *worker;
 };
+
+/* V9.2-step5d : worker callbacks + thread.
+ * - schedule_cb : appelée par plugin depuis run() audio_thread → queue request
+ * - respond_cb  : appelée par plugin depuis work() worker_thread → buffer response
+ * - thread_fn   : worker thread loop (sleep/work/respond)
+ */
+static LV2_Worker_Status lv2_worker_schedule_cb(LV2_Worker_Schedule_Handle handle,
+                                                uint32_t size, const void *data)
+{
+	struct lv2_worker *w = (struct lv2_worker *)handle;
+	if (!w || !data || size == 0 || size > LV2_WORKER_BUF_SIZE) {
+		if (w) w->drops++;
+		return LV2_WORKER_ERR_NO_SPACE;
+	}
+	/* Non-blocking trylock pour rester RT-safe sur audio_thread. */
+	if (pthread_mutex_trylock(&w->mutex) != 0) {
+		w->drops++;
+		return LV2_WORKER_ERR_UNKNOWN;
+	}
+	if (w->req_pending) {
+		/* Worker thread n'a pas encore consommé le request précédent.
+		 * Plugin doit retry au prochain run(). */
+		w->drops++;
+		pthread_mutex_unlock(&w->mutex);
+		return LV2_WORKER_ERR_UNKNOWN;
+	}
+	memcpy(w->req_buf, data, size);
+	w->req_size = size;
+	__sync_synchronize();
+	w->req_pending = 1;
+	pthread_cond_signal(&w->cond);
+	pthread_mutex_unlock(&w->mutex);
+	return LV2_WORKER_SUCCESS;
+}
+
+static LV2_Worker_Status lv2_worker_respond_cb(LV2_Worker_Respond_Handle handle,
+                                               uint32_t size, const void *data)
+{
+	struct lv2_worker *w = (struct lv2_worker *)handle;
+	if (!w || !data || size == 0 || size > LV2_WORKER_BUF_SIZE)
+		return LV2_WORKER_ERR_NO_SPACE;
+	/* Worker thread est le seul writer, audio thread le seul reader.
+	 * resp_pending = 0 sur entrée garanti par audio thread après consume. */
+	memcpy(w->resp_buf, data, size);
+	w->resp_size = size;
+	__sync_synchronize();
+	w->resp_pending = 1;
+	return LV2_WORKER_SUCCESS;
+}
+
+static void *lv2_worker_thread_fn(void *arg)
+{
+	struct lv2_worker *w = (struct lv2_worker *)arg;
+
+	while (!w->exit_flag) {
+		pthread_mutex_lock(&w->mutex);
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		ts.tv_sec += 2;  /* 2s timeout pour relire exit_flag (deadlock guard) */
+		while (!w->req_pending && !w->exit_flag) {
+			int rc = pthread_cond_timedwait(&w->cond, &w->mutex, &ts);
+			if (rc == ETIMEDOUT) break;
+		}
+		if (w->exit_flag) {
+			pthread_mutex_unlock(&w->mutex);
+			break;
+		}
+		if (!w->req_pending) {
+			pthread_mutex_unlock(&w->mutex);
+			continue;
+		}
+		/* Copy request hors mutex avant d'appeler work() (qui peut être long) */
+		uint8_t local[LV2_WORKER_BUF_SIZE];
+		uint32_t sz = w->req_size;
+		memcpy(local, w->req_buf, sz);
+		w->req_pending = 0;
+		pthread_mutex_unlock(&w->mutex);
+
+		if (w->iface && w->iface->work)
+			w->iface->work(w->plugin_handle, lv2_worker_respond_cb, w, sz, local);
+	}
+	return NULL;
+}
 
 static void lv2_process(fx_engine_t *fx, float in_l, float in_r,
                         float *out_l, float *out_r)
 {
 	struct lv2_state *st = fx->state;
+	/* V9.2-step5d : check pending worker response et commit dans le plugin
+	 * AVANT le run() audio. Spec LV2 worker. Copy local pour libérer le buf
+	 * (worker peut re-respond pendant work_response). */
+	if (st->worker && st->worker->resp_pending) {
+		struct lv2_worker *w = st->worker;
+		uint8_t local[LV2_WORKER_BUF_SIZE];
+		uint32_t sz = w->resp_size;
+		memcpy(local, w->resp_buf, sz);
+		__sync_synchronize();
+		w->resp_pending = 0;
+		if (w->iface && w->iface->work_response)
+			w->iface->work_response(w->plugin_handle, sz, local);
+	}
 	st->buf_in_l = in_l;
 	st->buf_in_r = in_r;
 	/* V9.2-step5c : reset atom port buffers chaque cycle.
@@ -729,6 +952,7 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 	/* V9.2-step5c : vérifier que toutes les required_features sont
 	 * supportées par l'host (sinon plugin va segfault à activate ou run).
 	 * Refus propre avec log de la feature manquante. */
+	int needs_worker = 0;
 	LilvNodes *req = lilv_plugin_get_required_features(plug);
 	if (req) {
 		LILV_FOREACH(nodes, it, req) {
@@ -740,8 +964,25 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 				lilv_nodes_free(req);
 				return 0;
 			}
+			if (furi && strcmp(furi, LV2_WORKER__schedule) == 0)
+				needs_worker = 1;
 		}
 		lilv_nodes_free(req);
+	}
+	/* Optional worker support : si plugin l'OFFRE même sans le require, on
+	 * lui donne aussi (certains plugins comme calf l'utilisent en optional). */
+	if (!needs_worker) {
+		LilvNodes *opt = lilv_plugin_get_optional_features(plug);
+		if (opt) {
+			LILV_FOREACH(nodes, it, opt) {
+				const char *furi = lilv_node_as_uri(lilv_nodes_get(opt, it));
+				if (furi && strcmp(furi, LV2_WORKER__schedule) == 0) {
+					needs_worker = 1;
+					break;
+				}
+			}
+			lilv_nodes_free(opt);
+		}
 	}
 
 	struct lv2_state *st = calloc(1, sizeof(*st));
@@ -753,12 +994,75 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 	st->audio_in_idx[0]  = st->audio_in_idx[1]  = -1;
 	st->audio_out_idx[0] = st->audio_out_idx[1] = -1;
 
-	/* Instantiate avec host features (urid:map nécessaire pour plupart plugins) */
-	st->instance = lilv_plugin_instantiate(plug, (double)sample_rate, g_host_features);
+	/* V9.2-step5d : si plugin demande worker, alloc + spawn thread + build
+	 * local features array incluant LV2_WORKER__schedule. Sinon utilise
+	 * g_host_features global. */
+	const LV2_Feature **features_to_use = g_host_features;
+	LV2_Feature feature_worker_local;
+	const LV2_Feature *features_local[8] = { NULL };
+	if (needs_worker) {
+		st->worker = calloc(1, sizeof(*st->worker));
+		if (!st->worker) {
+			fprintf(stderr, "LV2: worker alloc failed for %s\n", uri);
+			free(st->uri); free(st);
+			return 0;
+		}
+		pthread_mutex_init(&st->worker->mutex, NULL);
+		pthread_cond_init(&st->worker->cond, NULL);
+		st->worker->schedule.handle        = st->worker;
+		st->worker->schedule.schedule_work = lv2_worker_schedule_cb;
+		feature_worker_local.URI  = LV2_WORKER__schedule;
+		feature_worker_local.data = &st->worker->schedule;
+
+		/* Copy g_host_features puis append worker_schedule */
+		features_local[0] = &g_feature_urid_map;
+		features_local[1] = &g_feature_options;
+		features_local[2] = &feature_worker_local;
+		features_local[3] = NULL;
+		features_to_use = features_local;
+	}
+
+	/* Instantiate avec host features (urid:map + options + optionnel worker) */
+	st->instance = lilv_plugin_instantiate(plug, (double)sample_rate, features_to_use);
 	if (!st->instance) {
 		fprintf(stderr, "LV2: instantiate failed for %s\n", uri);
+		if (st->worker) {
+			pthread_mutex_destroy(&st->worker->mutex);
+			pthread_cond_destroy(&st->worker->cond);
+			free(st->worker);
+		}
 		free(st->uri); free(st);
 		return 0;
+	}
+
+	/* V9.2-step5d : récupère iface worker + spawn thread maintenant que
+	 * instance existe. */
+	if (st->worker) {
+		const LV2_Worker_Interface *iface = (const LV2_Worker_Interface *)
+			lilv_instance_get_extension_data(st->instance, LV2_WORKER__interface);
+		if (!iface || !iface->work) {
+			fprintf(stderr, "LV2: %s claims worker support but no work() iface — refused\n", uri);
+			lilv_instance_free(st->instance);
+			pthread_mutex_destroy(&st->worker->mutex);
+			pthread_cond_destroy(&st->worker->cond);
+			free(st->worker);
+			free(st->uri); free(st);
+			return 0;
+		}
+		st->worker->iface         = iface;
+		st->worker->plugin_handle = lilv_instance_get_handle(st->instance);
+		/* spawn thread sur sched OTHER (default) — pas pinné */
+		if (pthread_create(&st->worker->thread, NULL,
+		                   lv2_worker_thread_fn, st->worker) != 0) {
+			fprintf(stderr, "LV2: %s worker pthread_create failed — refused\n", uri);
+			lilv_instance_free(st->instance);
+			pthread_mutex_destroy(&st->worker->mutex);
+			pthread_cond_destroy(&st->worker->cond);
+			free(st->worker);
+			free(st->uri); free(st);
+			return 0;
+		}
+		fprintf(stderr, "LV2: %s worker thread spawned\n", uri);
 	}
 
 	/* Get default control values */
@@ -951,6 +1255,22 @@ void fx_free(fx_engine_t *fx)
 	 * Détection par type_name (pas idéal mais évite refactor vtable). */
 	if (fx->type_name && strcmp(fx->type_name, "lv2") == 0) {
 		struct lv2_state *st = fx->state;
+		/* V9.2-step5d : stop worker thread AVANT free instance.
+		 * Set exit_flag + signal cond + join. Plugin work() ne sera plus
+		 * appelée après ; instance peut être deactivate/free. */
+		if (st->worker) {
+			pthread_mutex_lock(&st->worker->mutex);
+			st->worker->exit_flag = 1;
+			pthread_cond_signal(&st->worker->cond);
+			pthread_mutex_unlock(&st->worker->mutex);
+			pthread_join(st->worker->thread, NULL);
+			if (st->worker->drops)
+				fprintf(stderr, "LV2: worker drops=%llu\n",
+				        (unsigned long long)st->worker->drops);
+			pthread_mutex_destroy(&st->worker->mutex);
+			pthread_cond_destroy(&st->worker->cond);
+			free(st->worker);
+		}
 		if (st->instance) {
 			lilv_instance_deactivate(st->instance);
 			lilv_instance_free(st->instance);
