@@ -44,6 +44,11 @@ IMAGE_INSTALL:append = " mixer-gui-http"
 # isole les cores 2 et 3 pour les threads RT du mixer-pro (CPUAffinity=2 3).
 IMAGE_INSTALL:append = " boot-script-rt"
 
+# V9.1 — bump IRQ kthreads critiques (mailbox DSP, SDMA audio, USB) à RT prio 90
+# pour éliminer priority inversion sous PREEMPT_RT. Service systemd one-shot
+# qui run après boot avant mixer-pro.service.
+IMAGE_INSTALL:append = " irq-prio-rt"
+
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 

@@ -205,6 +205,11 @@ void *analyzer_thread(void *arg)
 		fprintf(stderr, "analyzer thread: SCHED_FIFO prio %d failed, "
 				"running SCHED_OTHER\n", RT_PRIO_ANALYZER);
 	}
+	/* V9.0 — pin sur cores 0,1 (non-RT critique, hors des cores audio isolés) */
+	{
+		cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(0, &cs); CPU_SET(1, &cs);
+		pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+	}
 
 	while (atomic_load_explicit(&g_running_flag_for_analyzer,
 				    memory_order_acquire)) {

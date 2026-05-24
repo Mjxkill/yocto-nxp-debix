@@ -1,0 +1,21 @@
+[Unit]
+Description=V9.1 — Daemon : bump audio-critical IRQ kthreads to RT prio 90
+Documentation=man:chrt(1)
+# Démarre tôt mais poll en boucle pour rattraper les kthreads respawnés
+# (le mailbox IRQ est recréé par sof-imx quand le firmware DSP s'init).
+After=basic.target
+DefaultDependencies=yes
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/irq-prio-rt.sh
+Restart=on-failure
+RestartSec=5
+User=root
+StandardOutput=journal
+StandardError=journal
+# CPU affinity sur cores 0,1 (poll daemon non-RT)
+CPUAffinity=0 1
+
+[Install]
+WantedBy=multi-user.target

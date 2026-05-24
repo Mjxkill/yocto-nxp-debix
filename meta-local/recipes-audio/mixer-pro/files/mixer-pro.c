@@ -210,6 +210,20 @@ static _Atomic uint32_t g_wr_min_us = UINT32_MAX;
 static _Atomic uint32_t g_wr_max_us = 0;
 static _Atomic uint32_t g_rd_min_us = UINT32_MAX;
 static _Atomic uint32_t g_rd_max_us = 0;
+
+/* V9.1 — instrumentation jitter audio_thread :
+ *   - Histogramme prof_iter_us en 5 buckets (cible <1.8 ms = 95%+ idéal)
+ *   - Wake-up jitter : retard entre t_next ABSTIME et reprise effective
+ *   - Outlier log si iter > 3 ms : breakdown wake/cap/mix/push
+ */
+static _Atomic unsigned long g_iter_lt18  = 0;  /* < 1.8 ms */
+static _Atomic unsigned long g_iter_18_22 = 0;  /* 1.8 ms - 2.2 ms (cible) */
+static _Atomic unsigned long g_iter_22_30 = 0;  /* 2.2 ms - 3 ms */
+static _Atomic unsigned long g_iter_30_50 = 0;  /* 3 ms - 5 ms */
+static _Atomic unsigned long g_iter_ge50  = 0;  /* > 5 ms (très bad) */
+static _Atomic long g_wake_jitter_max_us  = 0;
+static _Atomic long g_wake_jitter_sum_us  = 0;
+static _Atomic unsigned long g_wake_jitter_count = 0;
 static struct timespec  g_last_wr_ts = {0};
 static struct timespec  g_last_rd_ts = {0};
 /* V8.15 — dump raw USB cap data après readi, avant tout traitement.
@@ -619,9 +633,15 @@ static void *shift_controller_thread(void *arg)
 static void *cap_uac2_thread(void *arg)
 {
 	(void)arg;
-	struct sched_param sp = { .sched_priority = RT_PRIO_AUDIO };
+	struct sched_param sp = { .sched_priority = RT_PRIO_UAC2_CAP };
 	(void)pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
-	mlog("cap_uac2_thread : SCHED_FIFO prio %d (NONBLOCK)", RT_PRIO_AUDIO);
+	/* V9.0 — pin sur core 3 (cap+play UAC2 partagent, séparés du DSP path) */
+	{
+		cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(CPU_UAC2_CAP, &cs);
+		pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+	}
+	mlog("cap_uac2_thread : SCHED_FIFO prio %d core %d (NONBLOCK)",
+	     RT_PRIO_UAC2_CAP, CPU_UAC2_CAP);
 
 	/* V8.20 — Buffer accumulateur : on push TOUJOURS par bloc EXACT de
 	 * PERIOD_FRAMES (96). readi peut retourner N variable (typique 50-100) ;
@@ -941,9 +961,15 @@ static void *cap_uac2_thread(void *arg)
 static void *play_uac2_thread(void *arg)
 {
 	(void)arg;
-	struct sched_param sp = { .sched_priority = RT_PRIO_AUDIO };
+	struct sched_param sp = { .sched_priority = RT_PRIO_UAC2_PLAY };
 	(void)pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
-	mlog("play_uac2_thread : SCHED_FIFO prio %d (V8.22 fill-based)", RT_PRIO_AUDIO);
+	/* V9.0 — pin sur core 3 (même core que cap_uac2_thread) */
+	{
+		cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(CPU_UAC2_PLAY, &cs);
+		pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+	}
+	mlog("play_uac2_thread : SCHED_FIFO prio %d core %d (V8.22 fill-based)",
+	     RT_PRIO_UAC2_PLAY, CPU_UAC2_PLAY);
 
 	int32_t pop_buf[(PERIOD_FRAMES + 6) * UAC2_CH]; /* V8.24 max input_n = 102 */
 	int32_t period_buf[PERIOD_FRAMES * UAC2_CH];
@@ -1290,7 +1316,12 @@ static void *audio_thread(void *arg)
 
 	struct sched_param sp = { .sched_priority = RT_PRIO_AUDIO };
 	int rt_ok = (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0);
-	mlog("audio thread : SCHED_FIFO prio %d %s", RT_PRIO_AUDIO,
+	/* V9.0 — pin sur core 2 (DSP cap readi + mix + ring push, le thread le plus critique) */
+	{
+		cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(CPU_AUDIO, &cs);
+		pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+	}
+	mlog("audio thread : SCHED_FIFO prio %d core %d %s", RT_PRIO_AUDIO, CPU_AUDIO,
 	     rt_ok ? "OK" : "(failed, fallback SCHED_OTHER)");
 
 	/* Pré-allocation des buffers ALSA */
@@ -1368,6 +1399,8 @@ static void *audio_thread(void *arg)
 	while (atomic_load(&g_st.running)) {
 		snd_pcm_sframes_t r;
 
+		/* V9.1 — capture target wake-up BEFORE clock_nanosleep + advance */
+		struct timespec t_wakeup_target = t_next;
 		/* Wait jusqu'à l'heure cible (= précédent iter + 2 ms) */
 		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t_next, NULL);
 		t_next.tv_nsec += PERIOD_NS;
@@ -1377,6 +1410,18 @@ static void *audio_thread(void *arg)
 		}
 
 		clock_gettime(CLOCK_MONOTONIC, &t_iter_start);
+
+		/* V9.1 — wake-up jitter : combien µs après t_wakeup_target on a repris la main */
+		long wakeup_jitter_us =
+		    (t_iter_start.tv_sec  - t_wakeup_target.tv_sec)  * 1000000L +
+		    (t_iter_start.tv_nsec - t_wakeup_target.tv_nsec) / 1000L;
+		if (wakeup_jitter_us > 0) {
+			atomic_fetch_add(&g_wake_jitter_sum_us, wakeup_jitter_us);
+			atomic_fetch_add(&g_wake_jitter_count, 1);
+			long cur_max = atomic_load_explicit(&g_wake_jitter_max_us, memory_order_relaxed);
+			if (wakeup_jitter_us > cur_max)
+				atomic_store_explicit(&g_wake_jitter_max_us, wakeup_jitter_us, memory_order_relaxed);
+		}
 
 		/* 1. DSP cap = horloge maître (blocking read) */
 		r = snd_pcm_readi(g_st.cap_dsp.pcm, cap_dsp_buf, PERIOD_FRAMES);
@@ -1599,6 +1644,18 @@ static void *audio_thread(void *arg)
 		atomic_store(&g_st.last_mix_us,        us_mix);
 		atomic_store(&g_st.last_play_write_us, us_play);
 		atomic_store(&g_st.last_iter_us,       us_iter);
+
+		/* V9.1 — Histogram prof_iter_us + outlier log */
+		if      (us_iter < 1800)  atomic_fetch_add(&g_iter_lt18,  1);
+		else if (us_iter < 2200)  atomic_fetch_add(&g_iter_18_22, 1);
+		else if (us_iter < 3000)  atomic_fetch_add(&g_iter_22_30, 1);
+		else if (us_iter < 5000)  atomic_fetch_add(&g_iter_30_50, 1);
+		else                       atomic_fetch_add(&g_iter_ge50,  1);
+
+		if (us_iter > 3000) {
+			mlog("ITER PIC %ldus wake=%ldus cap=%ldus mix=%ldus push=%ldus",
+			     us_iter, wakeup_jitter_us, us_cap, us_mix, us_play);
+		}
 	}
 
 	mlog("audio thread exiting");
@@ -1614,11 +1671,15 @@ static void *audio_thread(void *arg)
 static void *play_thread(void *arg)
 {
 	(void)arg;
-	struct sched_param sp = { .sched_priority = RT_PRIO_AUDIO + 1 };
+	struct sched_param sp = { .sched_priority = RT_PRIO_PLAY };
 	if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) != 0)
 		mlog("WARN: play_thread SCHED_FIFO failed: %s", strerror(errno));
-	else
-		mlog("play_thread : SCHED_FIFO prio %d", RT_PRIO_AUDIO + 1);
+	/* V9.0 — pin sur core 2 (même core que audio_thread, partage L2 cache + ring SPSC) */
+	{
+		cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(CPU_PLAY, &cs);
+		pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+	}
+	mlog("play_thread : SCHED_FIFO prio %d core %d", RT_PRIO_PLAY, CPU_PLAY);
 
 	int32_t period_buf[PERIOD_FRAMES * N_OUTPUT_DSP];
 
@@ -2049,7 +2110,18 @@ static void handle_cmd(int fd, const char *line)
 		unsigned long n2 = atomic_load(&g_dbg_readi_10_50);
 		unsigned long n3 = atomic_load(&g_dbg_readi_50_100);
 		unsigned long n4 = atomic_load(&g_dbg_readi_ge100);
-		char reply[900];
+		/* V9.1 — wake jitter avg = sum/count (en µs) */
+		long wj_sum = atomic_load(&g_wake_jitter_sum_us);
+		unsigned long wj_cnt = atomic_load(&g_wake_jitter_count);
+		long wj_avg = wj_cnt ? (wj_sum / (long)wj_cnt) : 0;
+		long wj_max = atomic_load(&g_wake_jitter_max_us);
+		unsigned long it_lt18  = atomic_load(&g_iter_lt18);
+		unsigned long it_18_22 = atomic_load(&g_iter_18_22);
+		unsigned long it_22_30 = atomic_load(&g_iter_22_30);
+		unsigned long it_30_50 = atomic_load(&g_iter_30_50);
+		unsigned long it_ge50  = atomic_load(&g_iter_ge50);
+
+		char reply[1200];
 		snprintf(reply, sizeof(reply),
 		         "{\"ok\":true,\"drift_ppm\":%.2f,\"valid\":%d,"
 		         "\"shift_ppm\":%d,"
@@ -2065,7 +2137,10 @@ static void handle_cmd(int fd, const char *line)
 		         "\"uac2_cap_mode\":%d,\"uac2_play_mode\":%d,"
 		         "\"uac2_cap_warm\":%d,\"uac2_play_warm\":%d,"
 		         "\"wr_us_min\":%u,\"wr_us_max\":%u,\"wr_us_avg\":%u,"
-		         "\"rd_us_min\":%u,\"rd_us_max\":%u,\"rd_us_avg\":%u}\n",
+		         "\"rd_us_min\":%u,\"rd_us_max\":%u,\"rd_us_avg\":%u,"
+		         "\"wake_jit_max_us\":%ld,\"wake_jit_avg_us\":%ld,"
+		         "\"iter_lt18\":%lu,\"iter_18_22\":%lu,"
+		         "\"iter_22_30\":%lu,\"iter_30_50\":%lu,\"iter_ge50\":%lu}\n",
 		         (double)x100 / 100.0, valid, shift,
 		         xc, xp, dp, cfe, cee, pfe, pee,
 		         ri, ai, rd, ad, n1, n2, n3, n4,
@@ -2079,7 +2154,9 @@ static void handle_cmd(int fd, const char *line)
 		         atomic_load(&g_uac2_cap_warm),
 		         atomic_load(&g_uac2_play_warm),
 		         wr_min, wr_max, wr_avg,
-		         rd_min, rd_max, rd_avg);
+		         rd_min, rd_max, rd_avg,
+		         wj_max, wj_avg,
+		         it_lt18, it_18_22, it_22_30, it_30_50, it_ge50);
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "apply_drift_as_shift")) {
@@ -2123,6 +2200,15 @@ static void handle_cmd(int fd, const char *line)
 			atomic_store(&g_rd_bucket_cnt[k], 0);
 			atomic_store(&g_rd_bucket_epoch[k], 0);
 		}
+		/* V9.1 — reset histogram prof_iter + wake_jitter */
+		atomic_store(&g_iter_lt18, 0);
+		atomic_store(&g_iter_18_22, 0);
+		atomic_store(&g_iter_22_30, 0);
+		atomic_store(&g_iter_30_50, 0);
+		atomic_store(&g_iter_ge50, 0);
+		atomic_store(&g_wake_jitter_max_us, 0);
+		atomic_store(&g_wake_jitter_sum_us, 0);
+		atomic_store(&g_wake_jitter_count, 0);
 		dprintf(fd, "{\"ok\":true,\"op\":\"reset_drift_stats\"}\n");
 
 	} else if (json_has_op(line, "reset_fx")) {
@@ -2157,6 +2243,12 @@ static void handle_cmd(int fd, const char *line)
 static void *control_thread(void *arg)
 {
 	(void)arg;
+	/* V9.0 — pin sur cores 0,1 (non-RT, hors des cores isolcpus audio) */
+	{
+		cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(0, &cs); CPU_SET(1, &cs);
+		pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+	}
+	mlog("control_thread : SCHED_OTHER cores 0,1");
 	int srv = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (srv < 0) { mlog("socket: %s", strerror(errno)); return NULL; }
 

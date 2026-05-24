@@ -5,7 +5,7 @@ rcu_nocbs=2,3 aux bootargs, ce qui réserve les cores 2 et 3 pour mixer-pro \
 (configurés via CPUAffinity dans le .service)."
 HOMEPAGE = "https://github.com/Mjxkill/yocto-nxp-debix"
 LICENSE = "GPL-2.0-or-later"
-LIC_FILES_CHKSUM = "file://boot.cmd;beginline=1;endline=1;md5=7e92ece71535405b78421fb06e9e7b9f"
+LIC_FILES_CHKSUM = "file://boot.cmd;beginline=1;endline=1;md5=8ebef8cbb1d0893d1336ce149c97b068"
 
 SRC_URI = "file://boot.cmd"
 

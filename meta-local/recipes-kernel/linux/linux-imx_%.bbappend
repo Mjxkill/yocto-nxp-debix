@@ -1,5 +1,12 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
+# V9.0 — PREEMPT_RT patch series (kernel.org)
+# Applied first (before our other custom patches) since RT touches core kernel
+# infrastructure (locking, scheduling, IRQ). Our custom patches (TAC5212,
+# NPU tap, multicodec) are user-space-adjacent and don't conflict with RT.
+SRC_URI += "file://patch-6.6.36-rt35.patch.gz;apply=yes;striplevel=1"
+SRC_URI += "file://rt.cfg"
+
 # Apply board audio/MIPI updates and enable SPDIF DIR/DIT support
 SRC_URI += "file://0001-imx8mp-evk-audio-mipi.patch"
 SRC_URI += "file://spdif.cfg"
@@ -72,7 +79,7 @@ do_patch:append() {
     python3 ${WORKDIR}/apply-imx-card-linkid.py ${S}
 }
 
-# Force TAC5212 + SOF imx-probes config into .config after kernel configure
+# Force TAC5212 + SOF imx-probes + PREEMPT_RT config into .config after kernel configure
 do_configure:append() {
     cfg="${B}/.config"
     if [ -f "$cfg" ]; then
@@ -84,6 +91,24 @@ do_configure:append() {
         if ! grep -q "CONFIG_SND_SOC_SOF_IMX_PROBES" "$cfg"; then
             echo "CONFIG_SND_SOC_SOF_IMX_PROBES=m" >> "$cfg"
         fi
+
+        # V9.0 — Switch preempt model from CONFIG_PREEMPT to CONFIG_PREEMPT_RT.
+        # The 4 preempt models are mutually exclusive Kconfig choices, so
+        # merge_config of rt.cfg alone is silently rejected if CONFIG_PREEMPT=y
+        # is already set (case here from defconfig). Forced switch via sed
+        # before olddefconfig resolves the choice deterministically.
+        sed -i 's/^CONFIG_PREEMPT=y/# CONFIG_PREEMPT is not set/' "$cfg"
+        sed -i 's/^CONFIG_PREEMPT_DYNAMIC=y/# CONFIG_PREEMPT_DYNAMIC is not set/' "$cfg"
+        sed -i 's/^# CONFIG_PREEMPT_RT is not set/CONFIG_PREEMPT_RT=y/' "$cfg"
+        if ! grep -q "^CONFIG_PREEMPT_RT=y" "$cfg"; then
+            echo "CONFIG_PREEMPT_RT=y" >> "$cfg"
+        fi
+        # Threaded IRQs default (also need `threadirqs` in bootargs)
+        sed -i 's/^# CONFIG_IRQ_FORCED_THREADING_DEFAULT is not set/CONFIG_IRQ_FORCED_THREADING_DEFAULT=y/' "$cfg"
+        if ! grep -q "^CONFIG_IRQ_FORCED_THREADING_DEFAULT=y" "$cfg"; then
+            echo "CONFIG_IRQ_FORCED_THREADING_DEFAULT=y" >> "$cfg"
+        fi
+
         oe_runmake -C ${S} O=${B} olddefconfig
     fi
 }

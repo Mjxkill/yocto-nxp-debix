@@ -41,3 +41,10 @@ flash.bin
 
 # Test scripts dir (per-board tests)
 build-imx8m/
+
+# V9.1 — SD card backups (huge, never commit)
+backup/
+
+# Auto-generated reports (kept locally for reference)
+rapport_run-*.md
+rapport_run-*.pdf

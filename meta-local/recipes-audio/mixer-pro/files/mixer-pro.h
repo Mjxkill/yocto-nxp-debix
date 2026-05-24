@@ -26,7 +26,7 @@
 
 #include <stdint.h>
 
-#define MIXER_VERSION  "v8.33-selfpaced"
+#define MIXER_VERSION  "v9.1-diag"
 
 /* E6.g Phase 2 + E6.h tuning : ring buffer SPSC entre thread audio (cap+mix)
  * et thread play DSP. Taille = N_RING_PERIODS périodes × 18 ch × 4 B.
@@ -74,8 +74,32 @@
 /* Control socket */
 #define MIXER_SOCK_PATH "/run/mixer-pro.sock"
 
-/* RT priorities */
-#define RT_PRIO_AUDIO   80
+/* V9.0 — RT priorities + per-thread CPU pinning (PREEMPT_RT kernel).
+ *
+ * Sur cores isolés (isolcpus=2,3) on pin chaque thread sur 1 core unique
+ * pour éliminer la concurrence intra-prio.
+ *
+ * Core 2 : audio + DSP play   (pipeline DSP cap → mix → DSP play)
+ *   audio_thread       prio 99 → max RT, jamais préempté
+ *   play_thread        prio 98 → tourne dans les "trous" d'audio (sleep/blocking)
+ *
+ * Core 3 : USB UAC2 cap + play (pipeline USB host ↔ ring SPSC)
+ *   cap_uac2_thread    prio 95
+ *   play_uac2_thread   prio 95
+ *
+ * Cores 0,1 : non-RT critique
+ *   analyzer_thread    prio 60 (FFT taps, peut tolérer du jitter)
+ *   control_thread     SCHED_OTHER (Unix socket IPC)
+ *   mixer-gui-http     CPUAffinity service
+ */
+#define RT_PRIO_AUDIO        99
+#define RT_PRIO_PLAY         98
+#define RT_PRIO_UAC2_CAP     95
+#define RT_PRIO_UAC2_PLAY    95
+#define CPU_AUDIO            2
+#define CPU_PLAY             2
+#define CPU_UAC2_CAP         3
+#define CPU_UAC2_PLAY        3
 
 /* In/out vector indices (utiles pour le protocole JSON) :
  *   in_id  : 0..N_INPUT_REAL-1 = sources réelles
