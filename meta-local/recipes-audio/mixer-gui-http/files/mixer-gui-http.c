@@ -729,7 +729,9 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		if (req[n - 1] != '\n') req[n++] = '\n';
 		req[n] = '\0';
 
-		char reply[8192];
+		/* V9.2d-step5e : 32 KB pour supporter list_lv2_plugins avec 200+ plugins
+		 * (chaque entry ~80 octets). 8 KB tronquait à 88 plugins. */
+		static char reply[32768];
 		int rc = mixer_request(req, reply, sizeof(reply));
 		return send_json(conn, rc > 0 ? 200 : 503, reply);
 	}

@@ -75,7 +75,23 @@ IMAGE_INSTALL:append = " mda-lv2"
 # P3 x42 family — broadcast pro (fil4 EQ + darc DRC + dpl limiter + meters LUFS + fat1 autotune)
 # Validés board V9.2c avec AtomPort support dans mixer-pro (commits e6a6363f + 2a8e6719 + V9.2c)
 IMAGE_INSTALL:append = " fil4.lv2 darc.lv2 dpl.lv2 meters.lv2 fat1.lv2"
-# (autres paquets ajoutés au fur et à mesure des validations)
+
+# V9.2-step7 lv2-ttl-generator (target + native) — utilisé par postinst de plugins
+# avec UI .so (genre dragonfly) pour rafraîchir TTL si modifié.
+IMAGE_INSTALL:append = " lv2-ttl-generator"
+
+# V9.2-step5d dragonfly-reverb-lv2 — 4 reverbs (Hall + early + plate + room).
+# Worker + options requis (cf effects.c V9.2d). DragonflyReverb-vst skippé.
+IMAGE_INSTALL:append = " dragonfly-reverb-lv2"
+
+# V9.2-step5e calf studio gear — 50 plugins (mb-comp, exciter, vintage delay,
+# reverbs, EQ12/EQ8/EQ5, analyzer, etc.). Validés V9.2d worker support.
+IMAGE_INSTALL:append = " calf"
+
+# V9.2-step5e zam-plugins-lv2 — 15 plugins ZamAudio (mastering : EQ2, GEQ31,
+# Comp, MultiComp, MaximX2, Tube, Verb, DynamicEQ, Phono).
+# zam-plugins-ladspa/vst/standalone packages skippés.
+IMAGE_INSTALL:append = " zam-plugins-lv2"
 
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
