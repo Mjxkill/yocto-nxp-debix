@@ -71,6 +71,10 @@ IMAGE_INSTALL:append = " lilv lv2"
 #   - sjaehn B-series  : choppr/slizr/sequencer/shapr/jumblr/spacr/oops…
 # P1 mda-lv2 — 25+ effets MDA validés sur board V9.2 (Dynamics/Leslie/Ambience/DubDelay)
 IMAGE_INSTALL:append = " mda-lv2"
+
+# P3 x42 family — broadcast pro (fil4 EQ + darc DRC + dpl limiter + meters LUFS + fat1 autotune)
+# Validés board V9.2c avec AtomPort support dans mixer-pro (commits e6a6363f + 2a8e6719 + V9.2c)
+IMAGE_INSTALL:append = " fil4.lv2 darc.lv2 dpl.lv2 meters.lv2 fat1.lv2"
 # (autres paquets ajoutés au fur et à mesure des validations)
 
 # Python audio/DSP

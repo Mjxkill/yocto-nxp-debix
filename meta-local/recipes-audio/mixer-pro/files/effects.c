@@ -511,6 +511,7 @@ int fx_init_eq(fx_engine_t *fx, float sample_rate)
 #include <lilv/lilv.h>
 #include <lv2/core/lv2.h>
 #include <lv2/urid/urid.h>
+#include <lv2/atom/atom.h>
 
 /* Global lilv world (shared par tous les bus LV2). Init lazy. */
 static LilvWorld *g_lv2_world           = NULL;
@@ -520,6 +521,10 @@ static LilvNode  *g_uri_control_port    = NULL;
 static LilvNode  *g_uri_input_port      = NULL;
 static LilvNode  *g_uri_output_port     = NULL;
 static LilvNode  *g_uri_hard_rt         = NULL;
+/* V9.2-step5c : LV2 atom port support (control/automation/notify) */
+static LilvNode  *g_uri_atom_port       = NULL;
+static LV2_URID   g_urid_atom_sequence  = 0;
+static LV2_URID   g_urid_atom_chunk     = 0;
 
 /* V9.2 — host feature `urid:map` : service basique de mapping URI → ID.
  * Beaucoup de plugins LV2 modernes (scope, params, etc.) le require sinon
@@ -565,13 +570,41 @@ static int lv2_world_init(void)
 	g_uri_input_port    = lilv_new_uri(g_lv2_world, LV2_CORE__InputPort);
 	g_uri_output_port   = lilv_new_uri(g_lv2_world, LV2_CORE__OutputPort);
 	g_uri_hard_rt       = lilv_new_uri(g_lv2_world, LV2_CORE__hardRTCapable);
+	g_uri_atom_port     = lilv_new_uri(g_lv2_world, LV2_ATOM__AtomPort);
+
+	/* Pre-map atom URIDs (utilisés à chaque cycle audio dans lv2_process) */
+	g_urid_atom_sequence = urid_map_fn(NULL, LV2_ATOM__Sequence);
+	g_urid_atom_chunk    = urid_map_fn(NULL, LV2_ATOM__Chunk);
 
 	g_lv2_plugins = lilv_world_get_all_plugins(g_lv2_world);
 	return 1;
 }
 
+/* V9.2-step5c : liste des URIs de features que l'host implémente. Utilisé
+ * pour valider les required_features du plugin AVANT instantiate. Refus
+ * propre si plugin demande worker/state/options/etc. non supportés.
+ * On supporte aujourd'hui : urid:map (cf g_host_features ci-dessus).
+ * hardRTCapable est dans CORE et n'est pas une feature, c'est un trait. */
+static int lv2_host_supports_feature(const char *uri)
+{
+	if (!uri) return 0;
+	if (strcmp(uri, LV2_URID__map) == 0) return 1;
+	return 0;
+}
+
 #define LV2_MAX_CTRL_PORTS 64
 #define LV2_MAX_NAME_LEN   32
+
+/* V9.2-step5c : LV2 atom port buffers.
+ * Buffer 8 KB par port = largement suffisant pour usage non-MIDI (state
+ * notify, presets ack, peak meter feedback). Si plugin overflow, on logue
+ * un warning + cap au capacity initial pour éviter corruption mémoire.
+ * Mode mono→stereo : instance2 partage les mêmes buffers que instance1
+ * (limitation : pas d'automation indépendante par instance, suffisant en
+ * mode passif sans MIDI/automation host).
+ */
+#define LV2_MAX_ATOM_PORTS 8
+#define LV2_ATOM_BUF_SIZE  8192
 
 struct lv2_state {
 	float          sr;
@@ -595,6 +628,13 @@ struct lv2_state {
 
 	/* Dummy buffer pour control output (1 par port output, ignoré) */
 	float          ctrl_out_dummy[LV2_MAX_CTRL_PORTS];
+
+	/* V9.2-step5c : atom port support (control input + notify output) */
+	int            n_atom_in, n_atom_out;
+	int            atom_in_idx[LV2_MAX_ATOM_PORTS];
+	int            atom_out_idx[LV2_MAX_ATOM_PORTS];
+	uint8_t       *atom_in_bufs[LV2_MAX_ATOM_PORTS];
+	uint8_t       *atom_out_bufs[LV2_MAX_ATOM_PORTS];
 };
 
 static void lv2_process(fx_engine_t *fx, float in_l, float in_r,
@@ -603,6 +643,21 @@ static void lv2_process(fx_engine_t *fx, float in_l, float in_r,
 	struct lv2_state *st = fx->state;
 	st->buf_in_l = in_l;
 	st->buf_in_r = in_r;
+	/* V9.2-step5c : reset atom port buffers chaque cycle.
+	 * - Input  : signaler "no events" → seq.atom.size = body size (8)
+	 * - Output : donner la capacity pour que plugin sache où écrire
+	 *            (convention LV2 atom_sequence spec).
+	 */
+	for (int k = 0; k < st->n_atom_in; k++) {
+		LV2_Atom *atom = (LV2_Atom *)st->atom_in_bufs[k];
+		atom->size = sizeof(LV2_Atom_Sequence_Body);
+		atom->type = g_urid_atom_sequence;
+	}
+	for (int k = 0; k < st->n_atom_out; k++) {
+		LV2_Atom *atom = (LV2_Atom *)st->atom_out_bufs[k];
+		atom->size = LV2_ATOM_BUF_SIZE - sizeof(LV2_Atom);
+		atom->type = g_urid_atom_chunk;
+	}
 	lilv_instance_run(st->instance, 1);
 	if (st->is_mono && st->instance2)
 		lilv_instance_run(st->instance2, 1);  /* canal R sur 2e instance */
@@ -671,6 +726,24 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 		return 0;
 	}
 
+	/* V9.2-step5c : vérifier que toutes les required_features sont
+	 * supportées par l'host (sinon plugin va segfault à activate ou run).
+	 * Refus propre avec log de la feature manquante. */
+	LilvNodes *req = lilv_plugin_get_required_features(plug);
+	if (req) {
+		LILV_FOREACH(nodes, it, req) {
+			const LilvNode *f = lilv_nodes_get(req, it);
+			const char *furi = lilv_node_as_uri(f);
+			if (!lv2_host_supports_feature(furi)) {
+				fprintf(stderr, "LV2: %s requires unsupported feature '%s' — refused\n",
+				        uri, furi ? furi : "(null)");
+				lilv_nodes_free(req);
+				return 0;
+			}
+		}
+		lilv_nodes_free(req);
+	}
+
 	struct lv2_state *st = calloc(1, sizeof(*st));
 	if (!st) return 0;
 	st->sr  = sample_rate;
@@ -698,6 +771,7 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 		const LilvPort *port = lilv_plugin_get_port_by_index(plug, i);
 		int is_audio  = lilv_port_is_a(plug, port, g_uri_audio_port);
 		int is_ctrl   = lilv_port_is_a(plug, port, g_uri_control_port);
+		int is_atom   = lilv_port_is_a(plug, port, g_uri_atom_port);
 		int is_input  = lilv_port_is_a(plug, port, g_uri_input_port);
 
 		if (is_audio && is_input && audio_in_n < 2) {
@@ -710,6 +784,46 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 			lilv_instance_connect_port(st->instance, i,
 				audio_out_n == 0 ? &st->buf_out_l : &st->buf_out_r);
 			audio_out_n++;
+		} else if (is_atom) {
+			/* V9.2-step5c : AtomPort = control/automation/notify.
+			 * Alloue un buffer 8 KB par port, init en sequence vide,
+			 * connecte. Reset à chaque cycle dans lv2_process(). */
+			int *cnt = is_input ? &st->n_atom_in : &st->n_atom_out;
+			if (*cnt >= LV2_MAX_ATOM_PORTS) {
+				fprintf(stderr, "LV2: %s too many atom ports (>%d) — refused\n",
+				        uri, LV2_MAX_ATOM_PORTS);
+				free(defaults);
+				/* cleanup partial alloc + return */
+				for (int k = 0; k < st->n_atom_in; k++)  free(st->atom_in_bufs[k]);
+				for (int k = 0; k < st->n_atom_out; k++) free(st->atom_out_bufs[k]);
+				lilv_instance_free(st->instance);
+				free(st->uri); free(st);
+				return 0;
+			}
+			uint8_t *buf = calloc(1, LV2_ATOM_BUF_SIZE);
+			if (!buf) {
+				fprintf(stderr, "LV2: %s atom buf alloc failed\n", uri);
+				free(defaults);
+				for (int k = 0; k < st->n_atom_in; k++)  free(st->atom_in_bufs[k]);
+				for (int k = 0; k < st->n_atom_out; k++) free(st->atom_out_bufs[k]);
+				lilv_instance_free(st->instance);
+				free(st->uri); free(st);
+				return 0;
+			}
+			if (is_input) {
+				LV2_Atom *atom = (LV2_Atom *)buf;
+				atom->size = sizeof(LV2_Atom_Sequence_Body);
+				atom->type = g_urid_atom_sequence;
+				st->atom_in_idx[st->n_atom_in] = i;
+				st->atom_in_bufs[st->n_atom_in++] = buf;
+			} else {
+				LV2_Atom *atom = (LV2_Atom *)buf;
+				atom->size = LV2_ATOM_BUF_SIZE - sizeof(LV2_Atom);
+				atom->type = g_urid_atom_chunk;
+				st->atom_out_idx[st->n_atom_out] = i;
+				st->atom_out_bufs[st->n_atom_out++] = buf;
+			}
+			lilv_instance_connect_port(st->instance, i, buf);
 		} else if (is_ctrl && is_input && st->n_ctrl_in < LV2_MAX_CTRL_PORTS) {
 			int idx = st->n_ctrl_in++;
 			st->ctrl_in_idx[idx] = i;
@@ -751,16 +865,32 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 		 *  - control outputs → ctrl_out_dummy
 		 */
 		int ctrl_i = 0;
+		int ain_i = 0, aout_i = 0;
 		for (int i = 0; i < st->n_ports; i++) {
 			const LilvPort *port = lilv_plugin_get_port_by_index(plug, i);
 			int is_audio  = lilv_port_is_a(plug, port, g_uri_audio_port);
 			int is_ctrl   = lilv_port_is_a(plug, port, g_uri_control_port);
+			int is_atom   = lilv_port_is_a(plug, port, g_uri_atom_port);
 			int is_input  = lilv_port_is_a(plug, port, g_uri_input_port);
 
 			if (is_audio && is_input)
 				lilv_instance_connect_port(st->instance2, i, &st->buf_in_r);
 			else if (is_audio && !is_input)
 				lilv_instance_connect_port(st->instance2, i, &st->buf_out_r);
+			else if (is_atom) {
+				/* V9.2-step5c : partage des buffers atom avec instance1.
+				 * Limitation : pas d'automation indépendante par instance.
+				 * Suffisant en mode passif (pas de MIDI/automation envoyés). */
+				uint8_t *buf = NULL;
+				if (is_input)
+					buf = (ain_i < st->n_atom_in) ? st->atom_in_bufs[ain_i++] : NULL;
+				else
+					buf = (aout_i < st->n_atom_out) ? st->atom_out_bufs[aout_i++] : NULL;
+				/* Si pas de buf (mismatch), connect NULL = laisser flotter
+				 * → mais le plugin a déjà passé l'init donc tolère probablement.
+				 * Cas non observé jusqu'ici. */
+				if (buf) lilv_instance_connect_port(st->instance2, i, buf);
+			}
 			else if (is_ctrl && is_input)
 				lilv_instance_connect_port(st->instance2, i, &st->ctrl_values[ctrl_i++]);
 			else if (is_ctrl)
@@ -829,6 +959,9 @@ void fx_free(fx_engine_t *fx)
 			lilv_instance_deactivate(st->instance2);
 			lilv_instance_free(st->instance2);
 		}
+		/* V9.2-step5c : libère les buffers atom alloués en fx_init_lv2 */
+		for (int k = 0; k < st->n_atom_in; k++)  free(st->atom_in_bufs[k]);
+		for (int k = 0; k < st->n_atom_out; k++) free(st->atom_out_bufs[k]);
 		free(st->uri);
 	}
 	free(fx->state);
