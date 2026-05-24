@@ -50,9 +50,28 @@ IMAGE_INSTALL:append = " boot-script-rt"
 IMAGE_INSTALL:append = " irq-prio-rt"
 
 # V9.2 — LV2 plugin host stack (mixer-pro lien lilv via DEPENDS).
-# lilv + core LV2 spec runtime ; plugins externes (Calf, x42…) à installer
-# à part selon besoin utilisateur.
+# lilv + core LV2 spec runtime.
 IMAGE_INSTALL:append = " lilv lv2"
+
+# V9.2 step 5 — pack de plugins LV2 (effets uniquement, pas de synths/DAW).
+# Recettes recopiées de meta-musicians (incompat Scarthgap, donc port manuel)
+# vers meta-local/recipes-musicians/. Stratégie itérative : on ajoute ici au
+# fur et à mesure que la recette parse + build + deploy OK sur la cible.
+#
+# Familles cibles (cf ARCHI §10) :
+#   - mda-lv2          : MDA classics (16 effets simples + bons)
+#   - dragonfly-reverb : 4 reverbs (early-ref, hall, plate, room)
+#   - calf             : 40+ Calf (mb-comp, exciter, vintage delay, EQ, reverb…)
+#   - lsp-plugins      : 200+ plugins LSP qualité broadcast
+#   - zam-plugins      : ZamAudio mastering (EQ, comp, gate, tube, GEQ31)
+#   - x42 family       : fil4 EQ, darc DRC, dpl limiter, meters LUFS, fat1, sisco
+#   - noise-repellent  : denoise voix
+#   - ir.lv2           : convolution reverb
+#   - gxplugins.lv2    : amp/cab sims Guitarix
+#   - sjaehn B-series  : choppr/slizr/sequencer/shapr/jumblr/spacr/oops…
+# P1 mda-lv2 — 25+ effets MDA validés sur board V9.2 (Dynamics/Leslie/Ambience/DubDelay)
+IMAGE_INSTALL:append = " mda-lv2"
+# (autres paquets ajoutés au fur et à mesure des validations)
 
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
