@@ -93,6 +93,19 @@ IMAGE_INSTALL:append = " calf"
 # zam-plugins-ladspa/vst/standalone packages skippés.
 IMAGE_INSTALL:append = " zam-plugins-lv2"
 
+# V9.2-step5f sjaehn B-series — 10 plugins créatifs LV2 (sequencer/chopper/
+# slizer/jumblr/spacer/shaper/oops/angr/blow/schaffl). ~3 hardRTCapable
+# chargeables dans mixer-pro, les autres skippés (non hardRT).
+IMAGE_INSTALL:append = " bsequencer bchoppr bslizr bjumblr bspacr bshapr boops blow bangr bschaffl"
+
+# V9.2-step5f gxplugins.lv2 — 43 plugins Guitarix (amp/cab sims, distorsions,
+# boost/overdrive, modulation, delays, reverbs). Application principale :
+# chaînes guitare électrique mais utilisables aussi pour synthés/vocodage.
+IMAGE_INSTALL:append = " gxplugins.lv2"
+
+# V9.2-step5f arty-fx — 11 plugins OpenAV modular (filter, lfo, etc.)
+IMAGE_INSTALL:append = " arty-fx"
+
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 
