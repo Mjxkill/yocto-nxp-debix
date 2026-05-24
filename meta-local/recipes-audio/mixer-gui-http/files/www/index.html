@@ -1666,25 +1666,82 @@ html, body {
     <div>
       <h3 x-text="'Bus FX ' + (selectedFxBus + 1) + ' — '
                   + (fxState[selectedFxBus].type
-                      ? fxState[selectedFxBus].type.charAt(0).toUpperCase()
-                        + fxState[selectedFxBus].type.slice(1)
+                      ? (fxState[selectedFxBus].type === 'lv2'
+                          ? 'LV2 : ' + (fxState[selectedFxBus].uri || '?').split('/').pop()
+                          : fxState[selectedFxBus].type.charAt(0).toUpperCase()
+                            + fxState[selectedFxBus].type.slice(1))
                       : '…')"></h3>
       <div class="fxbus-sub">live params · changes apply immediately</div>
-      <div class="alsa-ctrls">
-        <template x-for="p in fxParamSpec(fxState[selectedFxBus].type)" :key="p.key">
-          <div class="alsa-ctrl">
-            <div class="alsa-ctrl-label" x-text="p.label"></div>
-            <div class="alsa-ctrl-int">
-              <input type="range"
-                     :min="p.min" :max="p.max" :step="p.step"
-                     :value="fxState[selectedFxBus][p.key] ?? p.min"
-                     @input.debounce.40ms="setFxParam(selectedFxBus, p.key, $event.target.value)">
-              <span class="alsa-ctrl-val"
-                    x-text="(fxState[selectedFxBus][p.key] ?? p.min).toFixed(p.step < 1 ? 2 : 0) + ' ' + p.unit"></span>
-            </div>
-          </div>
-        </template>
+
+      <!-- V9.2c-step6 : selecteur d'engine (4 natifs + 88+ LV2) -->
+      <div class="alsa-ctrl" style="margin-bottom: 12px; padding: 8px; background: rgba(245,158,11,0.05); border-radius: 6px;">
+        <div class="alsa-ctrl-label">Engine</div>
+        <select style="width:100%; padding:4px 6px; background:#1a1a1a; color:#fff; border:1px solid #444; border-radius:4px;"
+                :value="fxState[selectedFxBus].type === 'lv2' ? 'lv2:' + (fxState[selectedFxBus].uri||'')
+                                                              : (fxState[selectedFxBus].type||'passthrough')"
+                @change="(() => {
+                  const v = $event.target.value;
+                  if (v.startsWith('lv2:')) {
+                    setFxEngine(selectedFxBus, 'lv2', v.slice(4));
+                  } else {
+                    setFxEngine(selectedFxBus, v);
+                  }
+                })()">
+          <optgroup label="Natifs C (RT)">
+            <option value="passthrough">Passthrough (bypass)</option>
+            <option value="compressor">Compressor</option>
+            <option value="reverb">Reverb</option>
+            <option value="delay">Delay</option>
+            <option value="eq">EQ 3-band</option>
+          </optgroup>
+          <optgroup :label="'LV2 plugins (' + lv2Plugins.length + ' dispos)'">
+            <template x-for="p in lv2Plugins" :key="p.uri">
+              <option :value="'lv2:' + p.uri" x-text="p.name || p.uri"></option>
+            </template>
+          </optgroup>
+        </select>
       </div>
+
+      <!-- Params natifs (compressor/reverb/delay/eq) via fxParamSpec -->
+      <template x-if="fxState[selectedFxBus].type !== 'lv2'">
+        <div class="alsa-ctrls">
+          <template x-for="p in fxParamSpec(fxState[selectedFxBus].type)" :key="p.key">
+            <div class="alsa-ctrl">
+              <div class="alsa-ctrl-label" x-text="p.label"></div>
+              <div class="alsa-ctrl-int">
+                <input type="range"
+                       :min="p.min" :max="p.max" :step="p.step"
+                       :value="fxState[selectedFxBus][p.key] ?? p.min"
+                       @input.debounce.40ms="setFxParam(selectedFxBus, p.key, $event.target.value)">
+                <span class="alsa-ctrl-val"
+                      x-text="(fxState[selectedFxBus][p.key] ?? p.min).toFixed(p.step < 1 ? 2 : 0) + ' ' + p.unit"></span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- Params LV2 dynamiques depuis fxState[b].params{} avec heuristique slider spec -->
+      <template x-if="fxState[selectedFxBus].type === 'lv2' && fxState[selectedFxBus].params">
+        <div class="alsa-ctrls">
+          <template x-for="(val, key) in fxState[selectedFxBus].params" :key="key">
+            <div class="alsa-ctrl">
+              <div class="alsa-ctrl-label" x-text="key"></div>
+              <div class="alsa-ctrl-int">
+                <input type="range"
+                       :min="fxLv2ParamSpec(key, val).min"
+                       :max="fxLv2ParamSpec(key, val).max"
+                       :step="fxLv2ParamSpec(key, val).step"
+                       :value="val"
+                       @input.debounce.40ms="setFxParam(selectedFxBus, key, $event.target.value)">
+                <span class="alsa-ctrl-val"
+                      x-text="Number(val).toFixed(fxLv2ParamSpec(key, val).step < 1 ? 2 : 0)
+                              + ' ' + fxLv2ParamSpec(key, val).unit"></span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
     </div>
   </template>
 </div>
@@ -1729,8 +1786,13 @@ function mixerApp() {
     alsaControls: {},            /* parsed map name → control object */
 
     /* E7.4.b : DSP bus FX state — params returned by mixer-pro `get_fx`.
-     * fxState[b] = { type, threshold, ratio, attack, release, ... } for b=0..3 */
+     * fxState[b] = { type, threshold, ratio, attack, release, ... } for b=0..3
+     * V9.2c-step6 : pour engine=lv2, params sont nested dans .params{} */
     fxState: [{}, {}, {}, {}],
+
+    /* V9.2c-step6 : liste des plugins LV2 disponibles (chargée au boot).
+     * [{uri, name}, ...] — populated par loadLv2Plugins via /api/cmd list_lv2_plugins */
+    lv2Plugins: [],
 
     /* E7.4.b post-feedback : FX bus detail overlay state.
      * null = closed ; 0..3 = bus index whose detail panel is open. */
@@ -1792,6 +1854,7 @@ function mixerApp() {
       await this.fetchAlsaControls();
       this.initBiquadParams();
       await this.fetchFxStates();
+      await this.loadLv2Plugins();
       await this.fetchAllReturnsRouting();
       /* V8.1.b — poll drift USB↔DSP toutes les 2 sec (mesure lente, pas SSE) */
       this.fetchDrift();
@@ -3180,8 +3243,111 @@ function mixerApp() {
     async setFxParam(bus, name, value) {
       const v = parseFloat(value);
       /* local optimistic update */
-      this.fxState[bus] = { ...this.fxState[bus], [name]: v };
+      const cur = this.fxState[bus] || {};
+      if (cur.type === 'lv2') {
+        /* LV2 : params sont nested. Update in place pour reactive UI */
+        this.fxState[bus] = { ...cur, params: { ...(cur.params||{}), [name]: v } };
+      } else {
+        this.fxState[bus] = { ...cur, [name]: v };
+      }
       this.sendCmd({op:'set_fx_param', bus, param:name, value:v});
+    },
+
+    /* V9.2c-step6 : récupère la liste des plugins LV2 dispos (88+ aujourd'hui).
+     * Le backend mixer-pro scanne lilv_world au boot. La liste change rarement
+     * (seulement quand on installe/désinstalle des plugins LV2 sur le système). */
+    async loadLv2Plugins() {
+      try {
+        const r = await fetch('/api/cmd', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({op:'list_lv2_plugins'}),
+        });
+        const j = await r.json();
+        if (j && j.ok && Array.isArray(j.plugins)) {
+          /* Tri par name pour avoir un dropdown lisible */
+          this.lv2Plugins = j.plugins.slice().sort((a,b) =>
+            (a.name||'').localeCompare(b.name||''));
+        }
+      } catch(e) { console.warn('list_lv2_plugins failed', e); }
+    },
+
+    /* V9.2c-step6 : change le moteur d'effet d'un bus.
+     * engine = 'compressor'|'reverb'|'delay'|'eq'|'passthrough'|'lv2'
+     * Pour engine='lv2', uri est l'URI complet du plugin. */
+    async setFxEngine(bus, engine, uri) {
+      const body = { op:'set_fx_engine', bus, engine };
+      if (engine === 'lv2' && uri) body.uri = uri;
+      try {
+        const r = await fetch('/api/cmd', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        if (!j || !j.ok) {
+          console.warn('set_fx_engine failed', j);
+          alert('Échec chargement engine ' + engine + (uri?' '+uri:'') + ' : ' + (j?.err||'?'));
+          return;
+        }
+        /* re-fetch fxState pour récupérer params live */
+        await new Promise(r => setTimeout(r, 200));
+        const r2 = await fetch('/api/cmd', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({op:'get_fx', bus}),
+        });
+        const j2 = await r2.json();
+        if (j2 && j2.ok) this.fxState[bus] = j2;
+      } catch(e) { console.warn('setFxEngine error', e); }
+    },
+
+    /* V9.2c-step6 : heuristique pour spec slider d'un param LV2.
+     * Pas d'introspection des port:minimum/port:maximum côté backend pour
+     * l'instant (TODO V9.3). On devine min/max/step depuis le nom + valeur
+     * courante du paramètre. Mieux qu'un slider 0-1 plat. */
+    fxLv2ParamSpec(key, currentValue) {
+      const k = (key||'').toLowerCase();
+      const v = Number(currentValue) || 0;
+      /* freq Hz */
+      if (k.includes('freq') || k.includes('fhz') || k.includes('xover'))
+        return { min: 20, max: 20000, step: 1, unit: 'Hz' };
+      /* Q factor */
+      if (/(^|_)q($|_|\d)/.test(k) || k === 'lsq' || k === 'hpq' || k === 'lpq')
+        return { min: 0.1, max: 10, step: 0.01, unit: '' };
+      /* gain dB */
+      if (k.includes('gain') || k.includes('output') || k.includes('makeup'))
+        return { min: -24, max: 24, step: 0.5, unit: 'dB' };
+      /* threshold dB */
+      if (k.includes('thresh'))
+        return { min: -60, max: 0, step: 0.5, unit: 'dB' };
+      /* ratio */
+      if (k.includes('ratio'))
+        return { min: 1, max: 20, step: 0.1, unit: ':1' };
+      /* attack ms */
+      if (k.includes('attack'))
+        return { min: 0.1, max: 500, step: 0.1, unit: 'ms' };
+      /* release ms */
+      if (k.includes('release'))
+        return { min: 1, max: 2000, step: 1, unit: 'ms' };
+      /* delay ms */
+      if (k.includes('delay') || k.includes('time'))
+        return { min: 0, max: 2000, step: 1, unit: 'ms' };
+      /* mix / wet / dry / depth / width / size / damp / feedback */
+      if (k.includes('mix') || k.includes('wet') || k.includes('dry') ||
+          k.includes('depth') || k.includes('width') || k.includes('size') ||
+          k.includes('damp') || k.includes('feedback') || k.includes('throb'))
+        return { min: 0, max: 1, step: 0.01, unit: '' };
+      /* toggle on/off (enable, sec1, peakreset, lowpass…) */
+      if (k.includes('enable') || /^sec\d/.test(k) || k.includes('peakreset') ||
+          k.includes('lowpass') || k.includes('highpass'))
+        return { min: 0, max: 1, step: 1, unit: '' };
+      /* mode/speed/lfo */
+      if (k.includes('mode') || k.includes('speed') || k.includes('lfo'))
+        return { min: 0, max: 1, step: 0.01, unit: '' };
+      /* Default : auto-range depuis la valeur courante */
+      const a = Math.max(1, Math.abs(v) * 2);
+      return { min: -a, max: a, step: a/200, unit: '' };
     },
 
     openFxBus(b)  { this.selectedFxBus = b; },
