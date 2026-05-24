@@ -48,9 +48,9 @@ FILES:${PN} = " \
 "
 
 SYSTEMD_SERVICE:${PN} = "mixer-pro.service"
-# Disable par défaut : conflits potentiels avec loopback-c-lowlat et autres
-# tests qui prennent les 3 paires PCMs en exclusif. L'utilisateur ou le GUI E7
-# active manuellement.
-SYSTEMD_AUTO_ENABLE:${PN} = "disable"
+# V9.1 : enable par défaut. mixer-pro = service principal de la board audio
+# (= console DAW). Désactiver manuellement si tests loopback-c-lowlat
+# (systemctl disable mixer-pro).
+SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 COMPATIBLE_MACHINE = "(imx8mpevk|imx8mp-debix-model-ab)"
