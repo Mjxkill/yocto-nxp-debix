@@ -25,12 +25,23 @@
 typedef struct fx_engine fx_engine_t;
 
 struct fx_engine {
-	const char *type_name;          /* "compressor" | "reverb" | "delay" | "eq" */
+	const char *type_name;          /* "compressor" | "reverb" | "delay" | "eq" | "lv2" */
 	void *state;                    /* opaque state par implémentation */
 
-	/* Process 1 frame stéréo (sample interleaved L+R en in, idem out). */
-	void (*process)(fx_engine_t *fx, float in_l, float in_r,
-			float *out_l, float *out_r);
+	/* V9.3 : process block stéréo de N samples.
+	 * - in_l, in_r : buffers d'entrée (N floats chacun)
+	 * - out_l, out_r : buffers de sortie (N floats chacun, écriture en place OK)
+	 * - N : nombre de samples à traiter (typique 96 = PERIOD_FRAMES)
+	 *
+	 * Block-based pour permettre :
+	 *  1. lilv_instance_run(N) en 1 appel pour LV2 (vs 96 calls × N=1)
+	 *  2. Auto-vectorisation NEON par gcc sur les boucles inner
+	 *  3. Amortir overhead vtable indirect (1 call vs 96 par bus)
+	 */
+	void (*process_block)(fx_engine_t *fx,
+			      const float *in_l, const float *in_r,
+			      float *out_l, float *out_r,
+			      uint32_t N);
 
 	/* set_param : retourne 0 si OK, -1 si param inconnu. */
 	int  (*set_param)(fx_engine_t *fx, const char *name, float value);

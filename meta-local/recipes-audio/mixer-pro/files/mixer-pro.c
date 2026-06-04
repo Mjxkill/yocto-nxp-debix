@@ -1259,52 +1259,106 @@ static void smooth_gains(void)
 			alpha * (g_st.input_target[i] - g_st.input_gain[i]);
 }
 
-/* Process 1 frame du mixer. Modifié en place : in[]→out[].
- * E7.1 : `bus_out` et `ret_out` exposent les bus FX pre/post-effets pour les
- * peak meters (lus par audio_thread après la boucle frame).
+/* V9.3 : mix_block — process N samples en 1 passe (vs mix_frame × N).
+ *
+ * Buffers in/out organisés par channel-major (in[ch][frame]) pour permettre
+ * au compilo d'auto-vectoriser les boucles inner `for (f=0..N-1)` en NEON.
+ *
+ * Phases :
+ *   A. Sends : in_block[26][N] × send_gain[26][8] → bus_in[8][N]
+ *   B. FX    : fx_engines[b].process_block(bus_in, bus_out, N) × 4 bus
+ *      → bus_out[8][N] (post-FX), puis × fx_bus_gain → ret_block[8][N]
+ *   C. Master: (in_block + ret_block) × master_gain[34][18] → out_block[18][N]
+ *
+ * Tous les paramètres (input_gain, send_gain, master_gain, fx_bus_gain) sont
+ * lus une fois en début de block (snapshot post-smooth_gains). Pour smooth
+ * intra-block sur des changements rapides, voir TODO V9.4.
  */
-static void mix_frame(const float in[N_INPUT_REAL], float out[N_OUTPUT_TOTAL],
-		      float bus_out[N_BUS_FX_CH], float ret_out[N_RETURN_CH])
+static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
+		      float out_block[N_OUTPUT_TOTAL][PERIOD_FRAMES],
+		      float bus_pre_out[N_BUS_FX_CH][PERIOD_FRAMES],
+		      float ret_post_out[N_RETURN_CH][PERIOD_FRAMES],
+		      uint32_t N)
 {
-	/* 1. Sends : 18 inputs → 8 bus channels (post-strip-gain E7.2) */
-	float bus[N_BUS_FX_CH] = {0};
+	/* Phase A : Sends 26→8 (block). */
+	float bus_in[N_BUS_FX_CH][PERIOD_FRAMES];
+	for (int b = 0; b < N_BUS_FX_CH; b++)
+		memset(bus_in[b], 0, sizeof(float) * N);
+
 	for (int i = 0; i < N_INPUT_REAL; i++) {
 		if (g_st.mute_mask & (1u << i))
 			continue;
-		float v_in = in[i] * g_st.input_gain[i];
-		for (int b = 0; b < N_BUS_FX_CH; b++)
-			bus[b] += v_in * g_st.send_gain[i][b];
-	}
-	if (bus_out)
-		memcpy(bus_out, bus, sizeof(bus));
-
-	/* 2. Bus FX (E6.e) : chaque paire (L,R) traverse 1 fx_engine. Le gain
-	 * fx_bus_gain[L]/fx_bus_gain[R] est appliqué post-effet (wet niveau).
-	 */
-	float ret[N_RETURN_CH];
-	for (int b = 0; b < N_BUS_FX; b++) {
-		float l = bus[b * 2], r = bus[b * 2 + 1];
-		float out_l, out_r;
-		g_st.fx_engines[b].process(&g_st.fx_engines[b], l, r, &out_l, &out_r);
-		ret[b * 2]     = out_l * g_st.fx_bus_gain[b * 2];
-		ret[b * 2 + 1] = out_r * g_st.fx_bus_gain[b * 2 + 1];
-	}
-	if (ret_out)
-		memcpy(ret_out, ret, sizeof(ret));
-
-	/* 3. Master : 26 sources = 18 in + 8 returns → 18 outputs */
-	float src[N_INPUT_TOTAL];
-	memcpy(src, in, sizeof(float) * N_INPUT_REAL);
-	memcpy(src + N_INPUT_REAL, ret, sizeof(float) * N_RETURN_CH);
-
-	for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
-		float v = 0;
-		for (int s = 0; s < N_INPUT_TOTAL; s++) {
-			if (g_st.mute_mask & (1u << s))
-				continue;
-			v += src[s] * g_st.input_gain[s] * g_st.master_gain[s][o];
+		const float ig = g_st.input_gain[i];
+		for (int b = 0; b < N_BUS_FX_CH; b++) {
+			const float g = ig * g_st.send_gain[i][b];
+			if (g == 0.0f) continue;   /* sparse skip */
+			float *dst = bus_in[b];
+			const float *src = in_block[i];
+			for (uint32_t f = 0; f < N; f++)
+				dst[f] += src[f] * g;
 		}
-		out[o] = v;
+	}
+
+	/* Snapshot pour peak meters bus pre-FX */
+	if (bus_pre_out) {
+		for (int b = 0; b < N_BUS_FX_CH; b++)
+			memcpy(bus_pre_out[b], bus_in[b], sizeof(float) * N);
+	}
+
+	/* Phase B : FX process_block × 4 bus stéréo */
+	float bus_out[N_BUS_FX_CH][PERIOD_FRAMES];
+	for (int b = 0; b < N_BUS_FX; b++) {
+		g_st.fx_engines[b].process_block(&g_st.fx_engines[b],
+			bus_in[b * 2], bus_in[b * 2 + 1],
+			bus_out[b * 2], bus_out[b * 2 + 1],
+			N);
+	}
+
+	/* Phase B.5 : fx_bus_gain post-effet → ret_block */
+	float ret[N_RETURN_CH][PERIOD_FRAMES];
+	for (int b = 0; b < N_BUS_FX_CH; b++) {
+		const float g = g_st.fx_bus_gain[b];
+		float *dst = ret[b];
+		const float *src = bus_out[b];
+		for (uint32_t f = 0; f < N; f++)
+			dst[f] = src[f] * g;
+	}
+	if (ret_post_out) {
+		for (int s = 0; s < N_RETURN_CH; s++)
+			memcpy(ret_post_out[s], ret[s], sizeof(float) * N);
+	}
+
+	/* Phase C : Master 26 sources → 18 outputs */
+	for (int o = 0; o < N_OUTPUT_TOTAL; o++)
+		memset(out_block[o], 0, sizeof(float) * N);
+
+	/* Inputs réels 0..17 */
+	for (int s = 0; s < N_INPUT_REAL; s++) {
+		if (g_st.mute_mask & (1u << s))
+			continue;
+		const float ig = g_st.input_gain[s];
+		const float *src = in_block[s];
+		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
+			const float g = ig * g_st.master_gain[s][o];
+			if (g == 0.0f) continue;
+			float *dst = out_block[o];
+			for (uint32_t f = 0; f < N; f++)
+				dst[f] += src[f] * g;
+		}
+	}
+	/* Returns 18..25 */
+	for (int s = 0; s < N_RETURN_CH; s++) {
+		int src_idx = N_INPUT_REAL + s;
+		if (g_st.mute_mask & (1u << src_idx))
+			continue;
+		const float *src = ret[s];
+		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
+			const float g = g_st.master_gain[src_idx][o];
+			if (g == 0.0f) continue;
+			float *dst = out_block[o];
+			for (uint32_t f = 0; f < N; f++)
+				dst[f] += src[f] * g;
+		}
 	}
 }
 
@@ -1456,99 +1510,119 @@ static void *audio_thread(void *arg)
 		smooth_gains();
 		pthread_mutex_unlock(&g_st.target_lock);
 
-		float in[N_INPUT_REAL];
-		float out[N_OUTPUT_TOTAL];
+		/* V9.3 : block-based processing.
+		 * 1. Convert S32 cap → float in_block[ch][frame] (channel-major).
+		 * 2. mix_block UNE FOIS pour N=96 (au lieu de mix_frame × 96).
+		 * 3. Analyzer taps : push N samples par tap.
+		 * 4. Convert float → S32 vers play_dsp/uac2/phone_buf.
+		 * 5. Peaks : max(abs) sur N samples par channel.
+		 */
+		float in_block[N_INPUT_REAL][PERIOD_FRAMES];
+		float out_block[N_OUTPUT_TOTAL][PERIOD_FRAMES];
+		float bus_pre_block[N_BUS_FX_CH][PERIOD_FRAMES];
+		float ret_post_block[N_RETURN_CH][PERIOD_FRAMES];
 
-		/* E7.1 : peaks per channel calculés frame-par-frame, agrégés en
-		 * uint32_t raw abs (scaled S32). Decay backend après la loop. */
 		uint32_t pk_in[N_INPUT_TOTAL] = {0};
 		uint32_t pk_out[N_OUTPUT_TOTAL] = {0};
 		uint32_t pk_fx[N_BUS_FX_CH] = {0};
 
+		/* Convert S32 → float, déinterleave par channel */
 		for (int f = 0; f < PERIOD_FRAMES; f++) {
 			for (int i = 0; i < N_INPUT_MICS; i++)
-				in[i] = s32_to_f(cap_dsp_buf[f * N_INPUT_MICS + i]);
+				in_block[i][f] = s32_to_f(cap_dsp_buf[f * N_INPUT_MICS + i]);
 			for (int i = 0; i < N_INPUT_STEMS; i++)
-				in[N_INPUT_MICS + i] = s32_to_f(cap_uac2_buf[f * N_INPUT_STEMS + i]);
+				in_block[N_INPUT_MICS + i][f] = s32_to_f(cap_uac2_buf[f * N_INPUT_STEMS + i]);
 			for (int i = 0; i < N_INPUT_PHONE; i++)
-				in[N_INPUT_MICS + N_INPUT_STEMS + i] =
+				in_block[N_INPUT_MICS + N_INPUT_STEMS + i][f] =
 					s32_to_f(cap_phone_buf[f * N_INPUT_PHONE + i]);
+		}
 
-			float bus_pre[N_BUS_FX_CH];
-			float ret_post[N_RETURN_CH];
-			mix_frame(in, out, bus_pre, ret_post);
+		/* MIX BLOCK — 1 appel pour 96 frames (vs 96 calls × 1 frame) */
+		mix_block(in_block, out_block, bus_pre_block, ret_post_block, PERIOD_FRAMES);
 
-			/* E7.5 : push current frame into each active analyzer tap.
-			 * Reads the per-tap kind/a/b atomically so the control_thread
-			 * can re-target a tap without holding a lock. b == -1 means
-			 * mono (R duplicates L). */
-			for (int t = 0; t < N_TAPS; t++) {
-				int kind = atomic_load_explicit(
-					&g_taps[t].kind, memory_order_relaxed);
-				if (kind == TAP_KIND_NONE)
-					continue;
-				int a = atomic_load_explicit(
-					&g_taps[t].a, memory_order_relaxed);
-				int b = atomic_load_explicit(
-					&g_taps[t].b, memory_order_relaxed);
-				float lv = 0.0f, rv = 0.0f;
-				switch (kind) {
-				case TAP_KIND_INPUT:
-					if (a >= 0 && a < N_INPUT_REAL)        lv = in[a];
-					else if (a >= N_INPUT_REAL && a < N_INPUT_TOTAL)
-						lv = ret_post[a - N_INPUT_REAL];
-					if (b >= 0) {
-						if (b < N_INPUT_REAL)               rv = in[b];
-						else if (b < N_INPUT_TOTAL)
-							rv = ret_post[b - N_INPUT_REAL];
-					} else rv = lv;
-					break;
-				case TAP_KIND_BUS_PRE:
-					if (a >= 0 && a < N_BUS_FX_CH)         lv = bus_pre[a];
-					if (b >= 0 && b < N_BUS_FX_CH)         rv = bus_pre[b];
-					else                                    rv = lv;
-					break;
-				case TAP_KIND_OUTPUT:
-					if (a >= 0 && a < N_OUTPUT_TOTAL)      lv = out[a];
-					if (b >= 0 && b < N_OUTPUT_TOTAL)      rv = out[b];
-					else                                    rv = lv;
-					break;
-				}
-				analyzer_tap_write(&g_taps[t], lv, rv);
+		/* Analyzer taps : push N samples par tap (lecture buffers block) */
+		for (int t = 0; t < N_TAPS; t++) {
+			int kind = atomic_load_explicit(
+				&g_taps[t].kind, memory_order_relaxed);
+			if (kind == TAP_KIND_NONE)
+				continue;
+			int a = atomic_load_explicit(
+				&g_taps[t].a, memory_order_relaxed);
+			int b = atomic_load_explicit(
+				&g_taps[t].b, memory_order_relaxed);
+			const float *bufL = NULL, *bufR = NULL;
+			switch (kind) {
+			case TAP_KIND_INPUT:
+				if (a >= 0 && a < N_INPUT_REAL)        bufL = in_block[a];
+				else if (a >= N_INPUT_REAL && a < N_INPUT_TOTAL)
+					bufL = ret_post_block[a - N_INPUT_REAL];
+				if (b >= 0) {
+					if (b < N_INPUT_REAL)               bufR = in_block[b];
+					else if (b < N_INPUT_TOTAL)
+						bufR = ret_post_block[b - N_INPUT_REAL];
+				} else bufR = bufL;
+				break;
+			case TAP_KIND_BUS_PRE:
+				if (a >= 0 && a < N_BUS_FX_CH)         bufL = bus_pre_block[a];
+				if (b >= 0 && b < N_BUS_FX_CH)         bufR = bus_pre_block[b];
+				else                                    bufR = bufL;
+				break;
+			case TAP_KIND_OUTPUT:
+				if (a >= 0 && a < N_OUTPUT_TOTAL)      bufL = out_block[a];
+				if (b >= 0 && b < N_OUTPUT_TOTAL)      bufR = out_block[b];
+				else                                    bufR = bufL;
+				break;
 			}
+			if (bufL && bufR) {
+				for (int f = 0; f < PERIOD_FRAMES; f++)
+					analyzer_tap_write(&g_taps[t], bufL[f], bufR[f]);
+			}
+		}
 
+		/* Convert float → S32 vers play buffers */
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
 			for (int o = 0; o < N_OUTPUT_DSP; o++)
-				play_dsp_buf[f * N_OUTPUT_DSP + o] = f_to_s32(out[o]);
+				play_dsp_buf[f * N_OUTPUT_DSP + o] = f_to_s32(out_block[o][f]);
 			for (int o = 0; o < N_OUTPUT_UAC2; o++)
 				play_uac2_buf[f * N_OUTPUT_UAC2 + o] =
-					f_to_s32(out[N_OUTPUT_DSP + o]);
+					f_to_s32(out_block[N_OUTPUT_DSP + o][f]);
 			for (int o = 0; o < N_OUTPUT_PHONE; o++)
 				play_phone_buf[f * N_OUTPUT_PHONE + o] =
-					f_to_s32(out[N_OUTPUT_DSP + N_OUTPUT_UAC2 + o]);
+					f_to_s32(out_block[N_OUTPUT_DSP + N_OUTPUT_UAC2 + o][f]);
+		}
 
-			/* E7.1 peaks : inputs réels (18) depuis in[], returns (8)
-			 * depuis ret_post[], bus pre-FX (8) depuis bus_pre[], outputs
-			 * (18) depuis out[]. Tous en float [-1.0, 1.0] → scale uint32. */
-			for (int i = 0; i < N_INPUT_REAL; i++) {
-				float v = in[i] < 0 ? -in[i] : in[i];
-				uint32_t a = (uint32_t)(v * 2147483647.0f);
-				if (a > pk_in[i]) pk_in[i] = a;
+		/* Peaks : max(abs) sur N samples par channel */
+		for (int i = 0; i < N_INPUT_REAL; i++) {
+			float m = 0.0f;
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float v = in_block[i][f] < 0 ? -in_block[i][f] : in_block[i][f];
+				if (v > m) m = v;
 			}
-			for (int i = 0; i < N_RETURN_CH; i++) {
-				float v = ret_post[i] < 0 ? -ret_post[i] : ret_post[i];
-				uint32_t a = (uint32_t)(v * 2147483647.0f);
-				if (a > pk_in[N_INPUT_REAL + i]) pk_in[N_INPUT_REAL + i] = a;
+			pk_in[i] = (uint32_t)(m * 2147483647.0f);
+		}
+		for (int i = 0; i < N_RETURN_CH; i++) {
+			float m = 0.0f;
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float v = ret_post_block[i][f] < 0 ? -ret_post_block[i][f] : ret_post_block[i][f];
+				if (v > m) m = v;
 			}
-			for (int b = 0; b < N_BUS_FX_CH; b++) {
-				float v = bus_pre[b] < 0 ? -bus_pre[b] : bus_pre[b];
-				uint32_t a = (uint32_t)(v * 2147483647.0f);
-				if (a > pk_fx[b]) pk_fx[b] = a;
+			pk_in[N_INPUT_REAL + i] = (uint32_t)(m * 2147483647.0f);
+		}
+		for (int b = 0; b < N_BUS_FX_CH; b++) {
+			float m = 0.0f;
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float v = bus_pre_block[b][f] < 0 ? -bus_pre_block[b][f] : bus_pre_block[b][f];
+				if (v > m) m = v;
 			}
-			for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
-				float v = out[o] < 0 ? -out[o] : out[o];
-				uint32_t a = (uint32_t)(v * 2147483647.0f);
-				if (a > pk_out[o]) pk_out[o] = a;
+			pk_fx[b] = (uint32_t)(m * 2147483647.0f);
+		}
+		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
+			float m = 0.0f;
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float v = out_block[o][f] < 0 ? -out_block[o][f] : out_block[o][f];
+				if (v > m) m = v;
 			}
+			pk_out[o] = (uint32_t)(m * 2147483647.0f);
 		}
 
 		/* E7.1 decay backend × 240/256 (≈ 0.9375) appliqué par bloc 2 ms.

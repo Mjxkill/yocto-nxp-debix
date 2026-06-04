@@ -46,32 +46,36 @@ static void comp_recalc(struct comp_state *c)
 	c->release_coef = expf(-1.0f / (c->release_ms * 0.001f * c->sr));
 }
 
-static void comp_process(fx_engine_t *fx, float in_l, float in_r,
-			 float *out_l, float *out_r)
+/* V9.3 : process_block — boucle sur N samples, état env_l/env_r persistant.
+ * Loop simple float → auto-vectorisable par gcc -O2 (gcc -ftree-loop-vectorize
+ * activé en O2 ; voir asm produit pour confirmer NEON). */
+static void comp_process_block(fx_engine_t *fx,
+			       const float *in_l, const float *in_r,
+			       float *out_l, float *out_r,
+			       uint32_t N)
 {
 	struct comp_state *c = fx->state;
+	const float acoef = c->attack_coef;
+	const float rcoef = c->release_coef;
+	const float one_a = 1.0f - acoef;
+	const float one_r = 1.0f - rcoef;
+	const float thr   = c->threshold_lin;
+	const float ratio = c->ratio;
+	const float mk    = c->makeup_lin;
+	float el = c->env_l, er = c->env_r;
 
-	/* Envelope follower : peak suivi par attack/release. */
-	float al = fabsf(in_l);
-	float ar = fabsf(in_r);
-	c->env_l = (al > c->env_l)
-		? c->attack_coef  * c->env_l + (1.0f - c->attack_coef)  * al
-		: c->release_coef * c->env_l + (1.0f - c->release_coef) * al;
-	c->env_r = (ar > c->env_r)
-		? c->attack_coef  * c->env_r + (1.0f - c->attack_coef)  * ar
-		: c->release_coef * c->env_r + (1.0f - c->release_coef) * ar;
-
-	/* Gain reduction : si env > threshold, on applique 1/ratio sur l'excès.
-	 * gain = (threshold + (env - threshold) / ratio) / env  (en dessous = 1.0)
-	 */
-	float gl = 1.0f, gr = 1.0f;
-	if (c->env_l > c->threshold_lin)
-		gl = (c->threshold_lin + (c->env_l - c->threshold_lin) / c->ratio) / c->env_l;
-	if (c->env_r > c->threshold_lin)
-		gr = (c->threshold_lin + (c->env_r - c->threshold_lin) / c->ratio) / c->env_r;
-
-	*out_l = in_l * gl * c->makeup_lin;
-	*out_r = in_r * gr * c->makeup_lin;
+	for (uint32_t i = 0; i < N; i++) {
+		float xl = in_l[i], xr = in_r[i];
+		float al = fabsf(xl), ar = fabsf(xr);
+		el = (al > el) ? (acoef * el + one_a * al) : (rcoef * el + one_r * al);
+		er = (ar > er) ? (acoef * er + one_a * ar) : (rcoef * er + one_r * ar);
+		float gl = (el > thr) ? (thr + (el - thr) / ratio) / el : 1.0f;
+		float gr = (er > thr) ? (thr + (er - thr) / ratio) / er : 1.0f;
+		out_l[i] = xl * gl * mk;
+		out_r[i] = xr * gr * mk;
+	}
+	c->env_l = el;
+	c->env_r = er;
 }
 
 static int comp_set_param(fx_engine_t *fx, const char *name, float value)
@@ -119,7 +123,7 @@ int fx_init_compressor(fx_engine_t *fx, float sample_rate)
 
 	fx->type_name = "compressor";
 	fx->state = c;
-	fx->process = comp_process;
+	fx->process_block = comp_process_block;
 	fx->set_param = comp_set_param;
 	fx->reset = comp_reset;
 	fx->get_state = comp_get_state;
@@ -153,57 +157,59 @@ struct reverb_state {
 	int   ap_idx[2][AP_N];
 };
 
-static void reverb_process(fx_engine_t *fx, float in_l, float in_r,
-			   float *out_l, float *out_r)
+/* V9.3 : process_block. Le reverb a des feedback loops avec dépendances
+ * sample-par-sample (impossible à vectoriser), donc la loop interne reste
+ * sample. Gain : amortir overhead vtable (1 call vs N) + locality cache. */
+static void reverb_process_block(fx_engine_t *fx,
+				 const float *in_l, const float *in_r,
+				 float *out_l, float *out_r,
+				 uint32_t N)
 {
 	struct reverb_state *r = fx->state;
-	float feedback = 0.28f + r->room_size * 0.7f;   /* 0.28..0.98 */
-	float damp1 = r->damping * 0.4f;
-	float damp2 = 1.0f - damp1;
+	const float feedback = 0.28f + r->room_size * 0.7f;
+	const float damp1 = r->damping * 0.4f;
+	const float damp2 = 1.0f - damp1;
+	const float wet = r->wet;
 
-	float comb_out_l = 0.0f, comb_out_r = 0.0f;
+	for (uint32_t s = 0; s < N; s++) {
+		float xl = in_l[s], xr = in_r[s];
+		float comb_out_l = 0.0f, comb_out_r = 0.0f;
 
-	for (int c = 0; c < COMB_N; c++) {
-		int n = comb_lens[c];
-		/* L */
-		int i = r->comb_idx[0][c];
-		float v = r->comb_buf[0][c][i];
-		r->comb_filt[0][c] = v * damp2 + r->comb_filt[0][c] * damp1;
-		r->comb_buf[0][c][i] = in_l + r->comb_filt[0][c] * feedback;
-		r->comb_idx[0][c] = (i + 1) % n;
-		comb_out_l += v;
-		/* R */
-		i = r->comb_idx[1][c];
-		v = r->comb_buf[1][c][i];
-		r->comb_filt[1][c] = v * damp2 + r->comb_filt[1][c] * damp1;
-		r->comb_buf[1][c][i] = in_r + r->comb_filt[1][c] * feedback;
-		r->comb_idx[1][c] = (i + 1) % n;
-		comb_out_r += v;
+		for (int c = 0; c < COMB_N; c++) {
+			int n = comb_lens[c];
+			int i = r->comb_idx[0][c];
+			float v = r->comb_buf[0][c][i];
+			r->comb_filt[0][c] = v * damp2 + r->comb_filt[0][c] * damp1;
+			r->comb_buf[0][c][i] = xl + r->comb_filt[0][c] * feedback;
+			r->comb_idx[0][c] = (i + 1) % n;
+			comb_out_l += v;
+			i = r->comb_idx[1][c];
+			v = r->comb_buf[1][c][i];
+			r->comb_filt[1][c] = v * damp2 + r->comb_filt[1][c] * damp1;
+			r->comb_buf[1][c][i] = xr + r->comb_filt[1][c] * feedback;
+			r->comb_idx[1][c] = (i + 1) % n;
+			comb_out_r += v;
+		}
+		float ap_l = comb_out_l;
+		float ap_r = comb_out_r;
+		for (int a = 0; a < AP_N; a++) {
+			int n = ap_lens[a];
+			int i = r->ap_idx[0][a];
+			float bufout = r->ap_buf[0][a][i];
+			float input  = ap_l;
+			r->ap_buf[0][a][i] = input + bufout * 0.5f;
+			ap_l = bufout - input;
+			r->ap_idx[0][a] = (i + 1) % n;
+			i = r->ap_idx[1][a];
+			bufout = r->ap_buf[1][a][i];
+			input  = ap_r;
+			r->ap_buf[1][a][i] = input + bufout * 0.5f;
+			ap_r = bufout - input;
+			r->ap_idx[1][a] = (i + 1) % n;
+		}
+		out_l[s] = ap_l * wet;
+		out_r[s] = ap_r * wet;
 	}
-
-	/* Allpass série */
-	float ap_l = comb_out_l;
-	float ap_r = comb_out_r;
-	for (int a = 0; a < AP_N; a++) {
-		int n = ap_lens[a];
-		/* L */
-		int i = r->ap_idx[0][a];
-		float bufout = r->ap_buf[0][a][i];
-		float input  = ap_l;
-		r->ap_buf[0][a][i] = input + bufout * 0.5f;
-		ap_l = bufout - input;
-		r->ap_idx[0][a] = (i + 1) % n;
-		/* R */
-		i = r->ap_idx[1][a];
-		bufout = r->ap_buf[1][a][i];
-		input  = ap_r;
-		r->ap_buf[1][a][i] = input + bufout * 0.5f;
-		ap_r = bufout - input;
-		r->ap_idx[1][a] = (i + 1) % n;
-	}
-
-	*out_l = ap_l * r->wet;
-	*out_r = ap_r * r->wet;
 }
 
 static int reverb_set_param(fx_engine_t *fx, const char *name, float value)
@@ -243,7 +249,7 @@ int fx_init_reverb(fx_engine_t *fx, float sample_rate)
 
 	fx->type_name = "reverb";
 	fx->state = r;
-	fx->process = reverb_process;
+	fx->process_block = reverb_process_block;
 	fx->set_param = reverb_set_param;
 	fx->reset = reverb_reset;
 	fx->get_state = reverb_get_state;
@@ -276,23 +282,30 @@ static void delay_recalc(struct delay_state *d)
 	d->delay_samples = s;
 }
 
-static void delay_process(fx_engine_t *fx, float in_l, float in_r,
-			  float *out_l, float *out_r)
+/* V9.3 : process_block delay (ring buffer non vectorisable due au feedback) */
+static void delay_process_block(fx_engine_t *fx,
+				const float *in_l, const float *in_r,
+				float *out_l, float *out_r,
+				uint32_t N)
 {
 	struct delay_state *d = fx->state;
-	int ridx = d->widx - d->delay_samples;
-	if (ridx < 0) ridx += DELAY_MAX_SAMP;
-
-	float dl = d->buf_l[ridx];
-	float dr = d->buf_r[ridx];
-
-	/* Write : input + feedback du dernier sample lu */
-	d->buf_l[d->widx] = in_l + dl * d->feedback;
-	d->buf_r[d->widx] = in_r + dr * d->feedback;
-	d->widx = (d->widx + 1) % DELAY_MAX_SAMP;
-
-	*out_l = dl * d->wet;
-	*out_r = dr * d->wet;
+	const float fb = d->feedback;
+	const float wet = d->wet;
+	const int dsamp = d->delay_samples;
+	int widx = d->widx;
+	for (uint32_t s = 0; s < N; s++) {
+		int ridx = widx - dsamp;
+		if (ridx < 0) ridx += DELAY_MAX_SAMP;
+		float dl = d->buf_l[ridx];
+		float dr = d->buf_r[ridx];
+		d->buf_l[widx] = in_l[s] + dl * fb;
+		d->buf_r[widx] = in_r[s] + dr * fb;
+		widx++;
+		if (widx >= DELAY_MAX_SAMP) widx = 0;
+		out_l[s] = dl * wet;
+		out_r[s] = dr * wet;
+	}
+	d->widx = widx;
 }
 
 static int delay_set_param(fx_engine_t *fx, const char *name, float value)
@@ -336,7 +349,7 @@ int fx_init_delay(fx_engine_t *fx, float sample_rate)
 
 	fx->type_name = "delay";
 	fx->state = d;
-	fx->process = delay_process;
+	fx->process_block = delay_process_block;
 	fx->set_param = delay_set_param;
 	fx->reset = delay_reset;
 	fx->get_state = delay_get_state;
@@ -422,18 +435,24 @@ static void eq_recalc(struct eq_state *e)
 	biquad_set(&e->bq_high, BQ_HIGH_SHELF, e->sr, 5000.0f,  0.707f, e->high_db);
 }
 
-static void eq_process(fx_engine_t *fx, float in_l, float in_r,
-		       float *out_l, float *out_r)
+/* V9.3 : process_block EQ (cascade biquads non vectorisable car y[n]
+ * dépend de y[n-1] de chaque biquad). Gain : amortir overhead vtable. */
+static void eq_process_block(fx_engine_t *fx,
+			     const float *in_l, const float *in_r,
+			     float *out_l, float *out_r,
+			     uint32_t N)
 {
 	struct eq_state *e = fx->state;
-	float l = biquad_step(&e->bq_high, 0,
-	          biquad_step(&e->bq_mid,  0,
-	          biquad_step(&e->bq_low,  0, in_l)));
-	float r = biquad_step(&e->bq_high, 1,
-	          biquad_step(&e->bq_mid,  1,
-	          biquad_step(&e->bq_low,  1, in_r)));
-	*out_l = l;
-	*out_r = r;
+	for (uint32_t s = 0; s < N; s++) {
+		float l = biquad_step(&e->bq_high, 0,
+		          biquad_step(&e->bq_mid,  0,
+		          biquad_step(&e->bq_low,  0, in_l[s])));
+		float r = biquad_step(&e->bq_high, 1,
+		          biquad_step(&e->bq_mid,  1,
+		          biquad_step(&e->bq_low,  1, in_r[s])));
+		out_l[s] = l;
+		out_r[s] = r;
+	}
 }
 
 static int eq_set_param(fx_engine_t *fx, const char *name, float value)
@@ -486,7 +505,7 @@ int fx_init_eq(fx_engine_t *fx, float sample_rate)
 
 	fx->type_name = "eq";
 	fx->state = e;
-	fx->process = eq_process;
+	fx->process_block = eq_process_block;
 	fx->set_param = eq_set_param;
 	fx->reset = eq_reset;
 	fx->get_state = eq_get_state;
@@ -847,13 +866,24 @@ static void *lv2_worker_thread_fn(void *arg)
 	return NULL;
 }
 
-static void lv2_process(fx_engine_t *fx, float in_l, float in_r,
-                        float *out_l, float *out_r)
+/* V9.3 : process_block — le GROS GAIN du refactor.
+ * AVANT V9.3 : lilv_instance_run(N=1) appelée N fois par cycle audio.
+ *   → 96 calls × 4 bus = 384 calls par cycle, overhead jump table +
+ *     state restore × 384. Pour LSP Para EQ 16-band = ~30 ms par cycle.
+ * APRÈS V9.3 : 1 call lilv_instance_run(N=96) par bus → 4 calls par cycle.
+ *   Le plugin process son block en interne (avec ses optims internes
+ *   block-loop, NEON, SIMD si présentes dans le code source LSP/calf).
+ *   → Gain attendu 30-60× sur plugins lourds.
+ *
+ * Worker response commit + atom reset : 1 fois par block (vs 96 fois). */
+static void lv2_process_block(fx_engine_t *fx,
+			      const float *in_l, const float *in_r,
+			      float *out_l, float *out_r,
+			      uint32_t N)
 {
 	struct lv2_state *st = fx->state;
-	/* V9.2-step5d : check pending worker response et commit dans le plugin
-	 * AVANT le run() audio. Spec LV2 worker. Copy local pour libérer le buf
-	 * (worker peut re-respond pendant work_response). */
+
+	/* Worker response commit avant run (LV2 spec) */
 	if (st->worker && st->worker->resp_pending) {
 		struct lv2_worker *w = st->worker;
 		uint8_t local[LV2_WORKER_BUF_SIZE];
@@ -864,13 +894,32 @@ static void lv2_process(fx_engine_t *fx, float in_l, float in_r,
 		if (w->iface && w->iface->work_response)
 			w->iface->work_response(w->plugin_handle, sz, local);
 	}
-	st->buf_in_l = in_l;
-	st->buf_in_r = in_r;
-	/* V9.2-step5c : reset atom port buffers chaque cycle.
-	 * - Input  : signaler "no events" → seq.atom.size = body size (8)
-	 * - Output : donner la capacity pour que plugin sache où écrire
-	 *            (convention LV2 atom_sequence spec).
-	 */
+
+	/* Reconnecte audio ports aux buffers externes (block).
+	 * V9.3 : reconnect par cycle = function ptr set, négligeable vs gain N=96. */
+	if (!st->is_mono) {
+		/* Stéréo natif 2/2 */
+		if (st->audio_in_idx[0] >= 0)
+			lilv_instance_connect_port(st->instance, st->audio_in_idx[0], (void *)in_l);
+		if (st->audio_in_idx[1] >= 0)
+			lilv_instance_connect_port(st->instance, st->audio_in_idx[1], (void *)in_r);
+		if (st->audio_out_idx[0] >= 0)
+			lilv_instance_connect_port(st->instance, st->audio_out_idx[0], out_l);
+		if (st->audio_out_idx[1] >= 0)
+			lilv_instance_connect_port(st->instance, st->audio_out_idx[1], out_r);
+	} else {
+		/* Mono 1/1 dupliqué : instance1 = L, instance2 = R */
+		if (st->audio_in_idx[0] >= 0) {
+			lilv_instance_connect_port(st->instance,  st->audio_in_idx[0], (void *)in_l);
+			lilv_instance_connect_port(st->instance2, st->audio_in_idx[0], (void *)in_r);
+		}
+		if (st->audio_out_idx[0] >= 0) {
+			lilv_instance_connect_port(st->instance,  st->audio_out_idx[0], out_l);
+			lilv_instance_connect_port(st->instance2, st->audio_out_idx[0], out_r);
+		}
+	}
+
+	/* Reset atom ports — 1 fois par block (vs N fois). */
 	for (int k = 0; k < st->n_atom_in; k++) {
 		LV2_Atom *atom = (LV2_Atom *)st->atom_in_bufs[k];
 		atom->size = sizeof(LV2_Atom_Sequence_Body);
@@ -881,11 +930,11 @@ static void lv2_process(fx_engine_t *fx, float in_l, float in_r,
 		atom->size = LV2_ATOM_BUF_SIZE - sizeof(LV2_Atom);
 		atom->type = g_urid_atom_chunk;
 	}
-	lilv_instance_run(st->instance, 1);
+
+	/* RUN N samples en 1 call (vs N × N=1). */
+	lilv_instance_run(st->instance, N);
 	if (st->is_mono && st->instance2)
-		lilv_instance_run(st->instance2, 1);  /* canal R sur 2e instance */
-	*out_l = st->buf_out_l;
-	*out_r = st->buf_out_r;
+		lilv_instance_run(st->instance2, N);
 }
 
 static int lv2_set_param(fx_engine_t *fx, const char *name, float value)
@@ -1215,7 +1264,7 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 
 	fx->type_name = "lv2";
 	fx->state     = st;
-	fx->process   = lv2_process;
+	fx->process_block = lv2_process_block;
 	fx->set_param = lv2_set_param;
 	fx->reset     = lv2_reset;
 	fx->get_state = lv2_get_state;
