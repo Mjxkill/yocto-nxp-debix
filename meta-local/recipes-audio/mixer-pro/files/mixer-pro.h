@@ -26,7 +26,7 @@
 
 #include <stdint.h>
 
-#define MIXER_VERSION  "v9.3.1.3-mono-stereo"
+#define MIXER_VERSION  "v9.3.2-neon"
 
 /* E6.g Phase 2 + E6.h tuning : ring buffer SPSC entre thread audio (cap+mix)
  * et thread play DSP. Taille = N_RING_PERIODS périodes × 18 ch × 4 B.

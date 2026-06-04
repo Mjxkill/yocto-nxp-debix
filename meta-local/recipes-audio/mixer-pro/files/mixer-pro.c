@@ -1282,6 +1282,35 @@ static float g_mix_bus_in[N_BUS_FX_CH][PERIOD_FRAMES];
 static float g_mix_bus_out[N_BUS_FX_CH][PERIOD_FRAMES];
 static float g_mix_ret[N_RETURN_CH][PERIOD_FRAMES];
 
+/* V9.3.2 : NEON intrinsics pour les boucles inner du mix.
+ * aarch64 a NEON nativement (toujours dispo). PERIOD_FRAMES=96 = multiple de 4
+ * → pas de tail handling. Gain attendu × 3-4 sur les matrices send + master.
+ *
+ * Helper inline : dst[f] += src[f] * g pour f=0..N-1, N multiple de 4.
+ * vmlaq_f32(a, b, c) = a + b * c (multiply-accumulate sur 4 floats). */
+#include <arm_neon.h>
+
+static inline void mac_block_n4(float *dst, const float *src, float g, uint32_t N)
+{
+	float32x4_t vg = vdupq_n_f32(g);
+	for (uint32_t f = 0; f < N; f += 4) {
+		float32x4_t vs = vld1q_f32(src + f);
+		float32x4_t vd = vld1q_f32(dst + f);
+		vd = vmlaq_f32(vd, vs, vg);
+		vst1q_f32(dst + f, vd);
+	}
+}
+
+/* dst[f] = src[f] * g pour f=0..N-1 (multiply, pas accumulate). */
+static inline void mul_block_n4(float *dst, const float *src, float g, uint32_t N)
+{
+	float32x4_t vg = vdupq_n_f32(g);
+	for (uint32_t f = 0; f < N; f += 4) {
+		float32x4_t vs = vld1q_f32(src + f);
+		vst1q_f32(dst + f, vmulq_f32(vs, vg));
+	}
+}
+
 static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		      float out_block[N_OUTPUT_TOTAL][PERIOD_FRAMES],
 		      float bus_pre_out[N_BUS_FX_CH][PERIOD_FRAMES],
@@ -1299,10 +1328,8 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		for (int b = 0; b < N_BUS_FX_CH; b++) {
 			const float g = ig * g_st.send_gain[i][b];
 			if (g == 0.0f) continue;   /* sparse skip */
-			float *dst = g_mix_bus_in[b];
-			const float *src = in_block[i];
-			for (uint32_t f = 0; f < N; f++)
-				dst[f] += src[f] * g;
+			/* V9.3.2 : NEON mac_block. dst += src * g sur N samples. */
+			mac_block_n4(g_mix_bus_in[b], in_block[i], g, N);
 		}
 	}
 
@@ -1320,13 +1347,9 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 			N);
 	}
 
-	/* Phase B.5 : fx_bus_gain post-effet → ret_block */
+	/* Phase B.5 : fx_bus_gain post-effet → ret_block (NEON mul) */
 	for (int b = 0; b < N_BUS_FX_CH; b++) {
-		const float g = g_st.fx_bus_gain[b];
-		float *dst = g_mix_ret[b];
-		const float *src = g_mix_bus_out[b];
-		for (uint32_t f = 0; f < N; f++)
-			dst[f] = src[f] * g;
+		mul_block_n4(g_mix_ret[b], g_mix_bus_out[b], g_st.fx_bus_gain[b], N);
 	}
 	if (ret_post_out) {
 		for (int s = 0; s < N_RETURN_CH; s++)
@@ -1337,7 +1360,8 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 	for (int o = 0; o < N_OUTPUT_TOTAL; o++)
 		memset(out_block[o], 0, sizeof(float) * N);
 
-	/* Inputs réels 0..17 */
+	/* V9.3.2 : NEON mac sur tout master matrix.
+	 * Inputs réels 0..17 */
 	for (int s = 0; s < N_INPUT_REAL; s++) {
 		if (g_st.mute_mask & (1u << s))
 			continue;
@@ -1346,9 +1370,7 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
 			const float g = ig * g_st.master_gain[s][o];
 			if (g == 0.0f) continue;
-			float *dst = out_block[o];
-			for (uint32_t f = 0; f < N; f++)
-				dst[f] += src[f] * g;
+			mac_block_n4(out_block[o], src, g, N);
 		}
 	}
 	/* Returns 18..25 */
@@ -1360,9 +1382,7 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
 			const float g = g_st.master_gain[src_idx][o];
 			if (g == 0.0f) continue;
-			float *dst = out_block[o];
-			for (uint32_t f = 0; f < N; f++)
-				dst[f] += src[f] * g;
+			mac_block_n4(out_block[o], src, g, N);
 		}
 	}
 }
