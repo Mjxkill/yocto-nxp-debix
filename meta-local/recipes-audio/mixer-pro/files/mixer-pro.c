@@ -1274,6 +1274,14 @@ static void smooth_gains(void)
  * lus une fois en début de block (snapshot post-smooth_gains). Pour smooth
  * intra-block sur des changements rapides, voir TODO V9.4.
  */
+/* V9.3.1 : buffers internes mix_block en static BSS (pas stack).
+ * Appelée uniquement depuis audio_thread (1 thread), donc thread-safe sans lock.
+ * Taille : 3 × N_BUS_FX_CH × PERIOD_FRAMES × 4 + N_RETURN_CH × PERIOD_FRAMES × 4
+ *       = 3 × 8 × 96 × 4 + 8 × 96 × 4 = 12288 octets = 12 KB en BSS. */
+static float g_mix_bus_in[N_BUS_FX_CH][PERIOD_FRAMES];
+static float g_mix_bus_out[N_BUS_FX_CH][PERIOD_FRAMES];
+static float g_mix_ret[N_RETURN_CH][PERIOD_FRAMES];
+
 static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		      float out_block[N_OUTPUT_TOTAL][PERIOD_FRAMES],
 		      float bus_pre_out[N_BUS_FX_CH][PERIOD_FRAMES],
@@ -1281,9 +1289,8 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		      uint32_t N)
 {
 	/* Phase A : Sends 26→8 (block). */
-	float bus_in[N_BUS_FX_CH][PERIOD_FRAMES];
 	for (int b = 0; b < N_BUS_FX_CH; b++)
-		memset(bus_in[b], 0, sizeof(float) * N);
+		memset(g_mix_bus_in[b], 0, sizeof(float) * N);
 
 	for (int i = 0; i < N_INPUT_REAL; i++) {
 		if (g_st.mute_mask & (1u << i))
@@ -1292,7 +1299,7 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		for (int b = 0; b < N_BUS_FX_CH; b++) {
 			const float g = ig * g_st.send_gain[i][b];
 			if (g == 0.0f) continue;   /* sparse skip */
-			float *dst = bus_in[b];
+			float *dst = g_mix_bus_in[b];
 			const float *src = in_block[i];
 			for (uint32_t f = 0; f < N; f++)
 				dst[f] += src[f] * g;
@@ -1302,30 +1309,28 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 	/* Snapshot pour peak meters bus pre-FX */
 	if (bus_pre_out) {
 		for (int b = 0; b < N_BUS_FX_CH; b++)
-			memcpy(bus_pre_out[b], bus_in[b], sizeof(float) * N);
+			memcpy(bus_pre_out[b], g_mix_bus_in[b], sizeof(float) * N);
 	}
 
 	/* Phase B : FX process_block × 4 bus stéréo */
-	float bus_out[N_BUS_FX_CH][PERIOD_FRAMES];
 	for (int b = 0; b < N_BUS_FX; b++) {
 		g_st.fx_engines[b].process_block(&g_st.fx_engines[b],
-			bus_in[b * 2], bus_in[b * 2 + 1],
-			bus_out[b * 2], bus_out[b * 2 + 1],
+			g_mix_bus_in[b * 2], g_mix_bus_in[b * 2 + 1],
+			g_mix_bus_out[b * 2], g_mix_bus_out[b * 2 + 1],
 			N);
 	}
 
 	/* Phase B.5 : fx_bus_gain post-effet → ret_block */
-	float ret[N_RETURN_CH][PERIOD_FRAMES];
 	for (int b = 0; b < N_BUS_FX_CH; b++) {
 		const float g = g_st.fx_bus_gain[b];
-		float *dst = ret[b];
-		const float *src = bus_out[b];
+		float *dst = g_mix_ret[b];
+		const float *src = g_mix_bus_out[b];
 		for (uint32_t f = 0; f < N; f++)
 			dst[f] = src[f] * g;
 	}
 	if (ret_post_out) {
 		for (int s = 0; s < N_RETURN_CH; s++)
-			memcpy(ret_post_out[s], ret[s], sizeof(float) * N);
+			memcpy(ret_post_out[s], g_mix_ret[s], sizeof(float) * N);
 	}
 
 	/* Phase C : Master 26 sources → 18 outputs */
@@ -1351,7 +1356,7 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		int src_idx = N_INPUT_REAL + s;
 		if (g_st.mute_mask & (1u << src_idx))
 			continue;
-		const float *src = ret[s];
+		const float *src = g_mix_ret[s];
 		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
 			const float g = g_st.master_gain[src_idx][o];
 			if (g == 0.0f) continue;
@@ -1506,21 +1511,23 @@ static void *audio_thread(void *arg)
 		clock_gettime(CLOCK_MONOTONIC, &t_cap_done);
 
 		/* 2. Mixer loop frame-par-frame */
+		/* V9.3.1 : tenir target_lock pendant tout le mix_block + analyzer
+		 * + peaks + convert. Fix race use-after-free entre set_fx_engine
+		 * (fx_free du state worker LV2) et audio_thread (process_block sur
+		 * le même state). audio_thread RT prio 99 préempte control_thread
+		 * → blocage de set_fx_engine de quelques µs au pire pendant 1 cycle. */
 		pthread_mutex_lock(&g_st.target_lock);
 		smooth_gains();
-		pthread_mutex_unlock(&g_st.target_lock);
 
 		/* V9.3 : block-based processing.
-		 * 1. Convert S32 cap → float in_block[ch][frame] (channel-major).
-		 * 2. mix_block UNE FOIS pour N=96 (au lieu de mix_frame × 96).
-		 * 3. Analyzer taps : push N samples par tap.
-		 * 4. Convert float → S32 vers play_dsp/uac2/phone_buf.
-		 * 5. Peaks : max(abs) sur N samples par channel.
-		 */
-		float in_block[N_INPUT_REAL][PERIOD_FRAMES];
-		float out_block[N_OUTPUT_TOTAL][PERIOD_FRAMES];
-		float bus_pre_block[N_BUS_FX_CH][PERIOD_FRAMES];
-		float ret_post_block[N_RETURN_CH][PERIOD_FRAMES];
+		 * V9.3.1 : buffers float static (BSS, pas stack) — RT-safe, pas
+		 * de risque overflow stack. Audio_thread = thread unique → safe.
+		 * Taille totale BSS : (N_INPUT_REAL + N_OUTPUT_TOTAL + N_BUS_FX_CH
+		 * + N_RETURN_CH) × PERIOD_FRAMES × 4 = (18+18+8+8) × 96 × 4 = 20 KB. */
+		static float in_block[N_INPUT_REAL][PERIOD_FRAMES];
+		static float out_block[N_OUTPUT_TOTAL][PERIOD_FRAMES];
+		static float bus_pre_block[N_BUS_FX_CH][PERIOD_FRAMES];
+		static float ret_post_block[N_RETURN_CH][PERIOD_FRAMES];
 
 		uint32_t pk_in[N_INPUT_TOTAL] = {0};
 		uint32_t pk_out[N_OUTPUT_TOTAL] = {0};
@@ -1624,6 +1631,9 @@ static void *audio_thread(void *arg)
 			}
 			pk_out[o] = (uint32_t)(m * 2147483647.0f);
 		}
+
+		/* V9.3.1 : unlock fin section critique fx_engines */
+		pthread_mutex_unlock(&g_st.target_lock);
 
 		/* E7.1 decay backend × 240/256 (≈ 0.9375) appliqué par bloc 2 ms.
 		 * Fall ≈ 12 dB/s, suffisant pour un VU visuel à 30 Hz refresh. */
