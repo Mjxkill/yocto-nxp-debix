@@ -1136,15 +1136,25 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 		int is_atom   = lilv_port_is_a(plug, port, g_uri_atom_port);
 		int is_input  = lilv_port_is_a(plug, port, g_uri_input_port);
 
-		if (is_audio && is_input && audio_in_n < 2) {
+		/* V9.3.1.2 : détecter sidechain via symbol "sc..." pour ne pas le
+		 * compter comme audio input principal (faussait la détection
+		 * mono 1/1 quand plugin avait main+sc, ex: sc_compressor_mono). */
+		int is_sidechain = 0;
+		if (is_audio && is_input) {
+			LilvNode *sym = (LilvNode *)lilv_port_get_symbol(plug, port);
+			const char *s = sym ? lilv_node_as_string(sym) : NULL;
+			if (s && strncmp(s, "sc", 2) == 0)
+				is_sidechain = 1;
+		}
+
+		if (is_audio && is_input && !is_sidechain && audio_in_n < 2) {
 			st->audio_in_idx[audio_in_n] = i;
 			lilv_instance_connect_port(st->instance, i,
 				audio_in_n == 0 ? &st->buf_in_l : &st->buf_in_r);
 			audio_in_n++;
 		} else if (is_audio && is_input) {
-			/* V9.3.1.1 : audio input supplémentaire (>2). Plugins comme
-			 * sc_compressor_lr ont sc_l/sc_r (sidechain). On les connecte au
-			 * extra_in_silence (zeros) → sidechain self-key sans signal externe. */
+			/* V9.3.1.1 : audio input supplémentaire (sidechain ou >2).
+			 * Connect au extra_in_silence (zeros) → self-keyed sans signal. */
 			lilv_instance_connect_port(st->instance, i, st->extra_in_silence);
 		} else if (is_audio && !is_input && audio_out_n < 2) {
 			st->audio_out_idx[audio_out_n] = i;
