@@ -106,6 +106,13 @@ IMAGE_INSTALL:append = " gxplugins.lv2"
 # V9.2-step5f arty-fx — 11 plugins OpenAV modular (filter, lfo, etc.)
 IMAGE_INSTALL:append = " arty-fx"
 
+# V9.2-step5g lsp-plugins-lv2 — ~120 plugins LSP broadcast pro v1.1.31.
+# Mono+stéréo+LR+M/S variantes : compressor, gate, limiter, expander,
+# dynaproc, crossover, EQ paramétrique 4/8/16/32 bandes, art_delay,
+# comp_delay, FIR/IIR filters, oscilloscope, spectrum_analyzer, etc.
+# 6 fixes Yocto Scarthgap successifs (cf TESTS_V9.2_lsp_plugins.md).
+IMAGE_INSTALL:append = " lsp-plugins-lv2"
+
 # Python audio/DSP
 IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 

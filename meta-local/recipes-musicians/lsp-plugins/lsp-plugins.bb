@@ -51,21 +51,35 @@ EXTRA_OEMAKE += " \
     BUILD_PLATFORM=Linux \
     BUILD_PROFILE=${LSP_TARGET_ARCH} \
     PREFIX=${prefix} \
+    BUILD_MODULES=lv2 \
 "
+
+# V9.2-step5g : blockers identifiés sur lsp-plugins 1.1.31 + bitbake :
+#   1. Fork-bomb pipes avec -j > 1 → fix avec -j 1
+#   2. configure.mk utilise `export VAR = $(shell pkg-config ...)` (lazy expand)
+#      → ré-évalué à chaque sub-make × 200+ recursions = millions d'appels
+#      pkg-config en boucle → 1h12 wallclock sans compiler 1 fichier.
+#      Confirmé par strace : pkg-config --cflags/libs jack/gl en continu.
+#      Fix : sed `= $(shell` → `:= $(shell` pour mémoïser (simply expanded).
+PARALLEL_MAKE = "-j 1"
+
+do_compile:prepend() {
+    # V9.2-step5g : mémoïse les $(shell pkg-config ...) dans configure.mk
+    # via := pour éviter la re-évaluation infinie en sub-makes récursifs.
+    # NB : les lignes export sont indentées (dans un ifeq block), regex avec \s*.
+    sed -i 's/^\(\s*export [A-Z_]\+\s\+\)= \(\$(shell pkg-config\)/\1:= \2/' \
+        ${S}/scripts/make/configure.mk
+    # Vérifie qu'on a bien substitué (sinon le build re-boucle infiniment)
+    if grep -q '^\s*export [A-Z_]\+\s\+= \$(shell pkg-config' ${S}/scripts/make/configure.mk; then
+        echo "ERROR: sed memoization failed — configure.mk still has lazy pkg-config"
+        grep "pkg-config" ${S}/scripts/make/configure.mk
+        exit 1
+    fi
+}
 
 do_compile() {
     export CC_ARCH="${CXXFLAGS}"
-
-    # uncomment to build/run unittest
-    #UNIT_TEST="1"
-    if [ "${UNIT_TEST}" = "1" ]; then
-        oe_runmake clean
-        oe_runmake test
-        echo "QEMU unittest..."
-        ${@qemu_run_binary_local(d, '${STAGING_DIR_TARGET}', '.build/lsp-plugins-test')} utest --verbose core.lspstring || echo "ERROR: QEMU unittest failed!"
-        oe_runmake clean
-    fi
-    oe_runmake
+    oe_runmake -j 1
 }
 
 do_install() {
