@@ -2016,7 +2016,7 @@ static void handle_cmd(int fd, const char *line)
 
 	} else if (json_has_op(line, "list_lv2_plugins")) {
 		/* V9.2 — Énumère les plugins LV2 RT-safe disponibles. */
-		static char lv2_buf[16384];
+		static char lv2_buf[65536];
 		int n = fx_lv2_list_uris(lv2_buf, sizeof(lv2_buf));
 		dprintf(fd, "{\"ok\":true,\"op\":\"list_lv2_plugins\",\"plugins\":%s}\n",
 		        n > 0 ? lv2_buf : "[]");
