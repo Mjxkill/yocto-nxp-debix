@@ -755,6 +755,7 @@ struct lv2_state {
 	LilvInstance  *instance;
 	LilvInstance  *instance2;   /* V9.2 : 2e instance pour canal R en mode mono */
 	int            is_mono;     /* 1 si plugin 1in/1out (2 instances pour L+R) */
+	int            is_mono_in_stereo_out;  /* V9.3.1.3 : 1in/2out (ex: room_builder_mono) */
 	const LilvPlugin *plugin;
 
 	int            n_ports;
@@ -780,6 +781,11 @@ struct lv2_state {
 	 * Note : taille hardcodée PERIOD_FRAMES = 96, doit matcher mixer-pro.h. */
 	float          extra_in_silence[96];   /* lecture seule = 0 (zeros via calloc) */
 	float          extra_out_discard[96];  /* écriture jetée */
+
+	/* V9.3.1.3 : buffer mono = (in_l + in_r) / 2 pour mode 1in/2out
+	 * (mono input alimentant un plugin qui synthétise stéréo natif, ex:
+	 * room_builder_mono, certains reverbs). Calculé chaque process_block. */
+	float          mono_in_buf[96];
 
 	/* V9.2-step5c : atom port support (control input + notify output) */
 	int            n_atom_in, n_atom_out;
@@ -906,7 +912,19 @@ static void lv2_process_block(fx_engine_t *fx,
 
 	/* Reconnecte audio ports aux buffers externes (block).
 	 * V9.3 : reconnect par cycle = function ptr set, négligeable vs gain N=96. */
-	if (!st->is_mono) {
+	if (st->is_mono_in_stereo_out) {
+		/* V9.3.1.3 : mono in, stéréo out natif.
+		 * Mix L+R → mono_in_buf, connect input mono + outputs L/R. */
+		const float *l = in_l, *r = in_r;
+		for (uint32_t i = 0; i < N; i++)
+			st->mono_in_buf[i] = (l[i] + r[i]) * 0.5f;
+		if (st->audio_in_idx[0] >= 0)
+			lilv_instance_connect_port(st->instance, st->audio_in_idx[0], st->mono_in_buf);
+		if (st->audio_out_idx[0] >= 0)
+			lilv_instance_connect_port(st->instance, st->audio_out_idx[0], out_l);
+		if (st->audio_out_idx[1] >= 0)
+			lilv_instance_connect_port(st->instance, st->audio_out_idx[1], out_r);
+	} else if (!st->is_mono) {
 		/* Stéréo natif 2/2 */
 		if (st->audio_in_idx[0] >= 0)
 			lilv_instance_connect_port(st->instance, st->audio_in_idx[0], (void *)in_l);
@@ -1280,8 +1298,14 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 		}
 		lilv_instance_activate(st->instance2);
 		fprintf(stderr, "LV2: %s mono→stereo (2 instances)\n", uri);
+	} else if (audio_in_n == 1 && audio_out_n == 2) {
+		/* V9.3.1.3 : mono in, stéréo out natif (room_builder_mono,
+		 * certains reverbs/spatialisations). 1 seule instance, on mixe
+		 * L+R en mono dans process_block. */
+		st->is_mono_in_stereo_out = 1;
+		fprintf(stderr, "LV2: %s mono-in/stereo-out (1 instance, L+R mixed)\n", uri);
 	} else {
-		fprintf(stderr, "LV2: %s I/O mismatch (in=%d out=%d, want 2/2 or 1/1)\n",
+		fprintf(stderr, "LV2: %s I/O mismatch (in=%d out=%d, want 2/2, 1/1 ou 1/2)\n",
 		        uri, audio_in_n, audio_out_n);
 		lilv_instance_free(st->instance);
 		free(st->uri); free(st);
