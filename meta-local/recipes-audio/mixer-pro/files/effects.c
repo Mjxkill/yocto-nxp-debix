@@ -766,11 +766,20 @@ struct lv2_state {
 	char           ctrl_in_name[LV2_MAX_CTRL_PORTS][LV2_MAX_NAME_LEN];
 	float          ctrl_values[LV2_MAX_CTRL_PORTS];   /* live values, connected */
 
-	/* Buffers I/O 1-sample (alloués pour audio L/R, in et out) */
+	/* Buffers I/O 1-sample (legacy V9.2 sample-by-sample, plus utilisés en V9.3). */
 	float          buf_in_l, buf_in_r, buf_out_l, buf_out_r;
 
 	/* Dummy buffer pour control output (1 par port output, ignoré) */
 	float          ctrl_out_dummy[LV2_MAX_CTRL_PORTS];
+
+	/* V9.3.1.1 : buffers internes pour audio ports supplémentaires (>2).
+	 * Plugins comme sc_compressor_lr ont 4-6 ports audio (in_l/r + sc_l/r + out_l/r).
+	 * Si on ne connecte que 2, le plugin lit/écrit des pointers NULL → SEGV au 1er run.
+	 * Solution : buffer silence pour extras inputs (sidechain self-key = silence),
+	 *            buffer discard pour extras outputs.
+	 * Note : taille hardcodée PERIOD_FRAMES = 96, doit matcher mixer-pro.h. */
+	float          extra_in_silence[96];   /* lecture seule = 0 (zeros via calloc) */
+	float          extra_out_discard[96];  /* écriture jetée */
 
 	/* V9.2-step5c : atom port support (control input + notify output) */
 	int            n_atom_in, n_atom_out;
@@ -1132,11 +1141,20 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 			lilv_instance_connect_port(st->instance, i,
 				audio_in_n == 0 ? &st->buf_in_l : &st->buf_in_r);
 			audio_in_n++;
+		} else if (is_audio && is_input) {
+			/* V9.3.1.1 : audio input supplémentaire (>2). Plugins comme
+			 * sc_compressor_lr ont sc_l/sc_r (sidechain). On les connecte au
+			 * extra_in_silence (zeros) → sidechain self-key sans signal externe. */
+			lilv_instance_connect_port(st->instance, i, st->extra_in_silence);
 		} else if (is_audio && !is_input && audio_out_n < 2) {
 			st->audio_out_idx[audio_out_n] = i;
 			lilv_instance_connect_port(st->instance, i,
 				audio_out_n == 0 ? &st->buf_out_l : &st->buf_out_r);
 			audio_out_n++;
+		} else if (is_audio && !is_input) {
+			/* V9.3.1.1 : audio output supplémentaire (>2). Ex: oscilloscope_x2
+			 * a plus de 2 outputs. On les jette dans extra_out_discard. */
+			lilv_instance_connect_port(st->instance, i, st->extra_out_discard);
 		} else if (is_atom) {
 			/* V9.2-step5c : AtomPort = control/automation/notify.
 			 * Alloue un buffer 8 KB par port, init en sequence vide,
