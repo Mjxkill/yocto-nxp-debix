@@ -43,8 +43,14 @@
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
-#define POST_MAX_BYTES    4096
-#define SOCK_RECV_TIMEO_MS 200
+/* V9.4.3 : 32 KB pour tenir les payloads ALSA BYTES (DRC blob = 4096 bytes
+ * = 8192 chars hex + JSON wrapper). */
+#define POST_MAX_BYTES    32768
+/* V9.2g-step5h : 10s pour absorber le temps d'instantiate LV2 lourd
+ * (LSP/calf peuvent prendre 1-5s à instantiate, surtout en cascade
+ * après scan lilv 348 plugins). Avant 200ms → connection refused
+ * en bench. */
+#define SOCK_RECV_TIMEO_MS 10000
 #define MHD_THREAD_POOL   8       /* E7.1 : 4 SSE persistants + 4 REST/static */
 #define STREAM_PERIOD_US  33333   /* E7.1 : 30 Hz SSE */
 
@@ -88,7 +94,11 @@ static int mixer_request(const char *req_line, char *out, size_t out_sz)
 			 strerror(errno));
 		return -1;
 	}
-	struct timeval tv = { 0, SOCK_RECV_TIMEO_MS * 1000 };
+	/* V9.2g-step5h : split en tv_sec + tv_usec car tv_usec doit être < 1e6 */
+	struct timeval tv = {
+		.tv_sec  = SOCK_RECV_TIMEO_MS / 1000,
+		.tv_usec = (SOCK_RECV_TIMEO_MS % 1000) * 1000,
+	};
 	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 

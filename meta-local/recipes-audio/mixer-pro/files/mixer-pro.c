@@ -2277,8 +2277,10 @@ static void handle_cmd(int fd, const char *line)
 		float value = 0;
 		int by_numid = (json_get_int(line, "numid", &numid) == 0);
 		int by_name  = (json_get_str(line, "name", ctrl_name, sizeof(ctrl_name)) == 0);
-		if (json_get_float(line, "value", &value) < 0 || (!by_numid && !by_name)) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_alsa args\"}\n");
+		/* V9.4.3 : "value" optionnel — pas requis pour BYTES (qui prend "bytes"). */
+		int has_value = (json_get_float(line, "value", &value) == 0);
+		if (!by_numid && !by_name) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"need numid or name\"}\n");
 			return;
 		}
 		snd_ctl_t *h = NULL;
@@ -2307,14 +2309,78 @@ static void handle_cmd(int fd, const char *line)
 		snd_ctl_elem_value_alloca(&val);
 		snd_ctl_elem_value_set_id(val, id);
 		if (type == SND_CTL_ELEM_TYPE_INTEGER) {
+			if (!has_value) {
+				snd_ctl_close(h);
+				dprintf(fd, "{\"ok\":false,\"err\":\"INTEGER needs value\"}\n");
+				return;
+			}
 			unsigned int n_chan = snd_ctl_elem_info_get_count(info);
 			for (unsigned int c = 0; c < n_chan; c++)
 				snd_ctl_elem_value_set_integer(val, c, (long)value);
 		} else if (type == SND_CTL_ELEM_TYPE_BOOLEAN) {
+			if (!has_value) {
+				snd_ctl_close(h);
+				dprintf(fd, "{\"ok\":false,\"err\":\"BOOLEAN needs value\"}\n");
+				return;
+			}
 			snd_ctl_elem_value_set_boolean(val, 0, value != 0.0f);
+		} else if (type == SND_CTL_ELEM_TYPE_BYTES) {
+			/* V9.4.3 : parse "bytes":"<hex>" → raw bytes → snd_ctl set.
+			 * Pour DRC blob 4096 octets = 8192 chars hex requis.
+			 * Le control count = nb max d'octets attendu. */
+			const char *hex_p = strstr(line, "\"bytes\"");
+			if (!hex_p) {
+				snd_ctl_close(h);
+				dprintf(fd, "{\"ok\":false,\"err\":\"BYTES needs hex field\"}\n");
+				return;
+			}
+			hex_p = strchr(hex_p, '"');     /* skip "bytes" */
+			if (hex_p) hex_p = strchr(hex_p + 1, '"');   /* skip : */
+			if (hex_p) hex_p = strchr(hex_p + 1, '"');   /* opening " of value */
+			if (!hex_p) {
+				snd_ctl_close(h);
+				dprintf(fd, "{\"ok\":false,\"err\":\"bad bytes format\"}\n");
+				return;
+			}
+			hex_p++;
+			const char *hex_end = strchr(hex_p, '"');
+			if (!hex_end) {
+				snd_ctl_close(h);
+				dprintf(fd, "{\"ok\":false,\"err\":\"unclosed bytes\"}\n");
+				return;
+			}
+			size_t hex_len = (size_t)(hex_end - hex_p);
+			if (hex_len % 2 != 0) {
+				snd_ctl_close(h);
+				dprintf(fd, "{\"ok\":false,\"err\":\"odd hex length\"}\n");
+				return;
+			}
+			size_t n_bytes = hex_len / 2;
+			unsigned int max_bytes = snd_ctl_elem_info_get_count(info);
+			if (n_bytes > max_bytes) {
+				snd_ctl_close(h);
+				dprintf(fd, "{\"ok\":false,\"err\":\"too many bytes (%zu > %u)\"}\n",
+				        n_bytes, max_bytes);
+				return;
+			}
+			/* Parse hex into raw bytes — local stack buf 4 KB suffit pour DRC */
+			static unsigned char raw[4096];
+			for (size_t i = 0; i < n_bytes && i < sizeof(raw); i++) {
+				char c1 = hex_p[i*2], c2 = hex_p[i*2 + 1];
+				int hi = (c1 <= '9') ? c1 - '0' : ((c1 | 0x20) - 'a' + 10);
+				int lo = (c2 <= '9') ? c2 - '0' : ((c2 | 0x20) - 'a' + 10);
+				if (hi < 0 || hi > 15 || lo < 0 || lo > 15) {
+					snd_ctl_close(h);
+					dprintf(fd, "{\"ok\":false,\"err\":\"bad hex char\"}\n");
+					return;
+				}
+				raw[i] = (unsigned char)((hi << 4) | lo);
+			}
+			for (size_t i = 0; i < n_bytes; i++)
+				snd_ctl_elem_value_set_byte(val, (unsigned int)i, raw[i]);
 		} else {
 			snd_ctl_close(h);
-			dprintf(fd, "{\"ok\":false,\"err\":\"unsupported type (BYTES = V9.4.2)\"}\n");
+			dprintf(fd, "{\"ok\":false,\"err\":\"unsupported control type\"}\n");
 			return;
 		}
 		rc = snd_ctl_elem_write(h, val);
@@ -2341,6 +2407,16 @@ static void handle_cmd(int fd, const char *line)
 		if (by_numid) snd_ctl_elem_id_set_numid(id, numid);
 		else { snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
 		       snd_ctl_elem_id_set_name(id, ctrl_name); }
+		/* V9.4.3 : type-aware read. Lookup type via info pour distinguer
+		 * INTEGER (value:N) de BYTES (bytes:"hex"). */
+		snd_ctl_elem_info_t *ginfo;
+		snd_ctl_elem_info_alloca(&ginfo);
+		snd_ctl_elem_info_set_id(ginfo, id);
+		if (snd_ctl_elem_info(h, ginfo) < 0) {
+			snd_ctl_close(h);
+			dprintf(fd, "{\"ok\":false,\"err\":\"info failed\"}\n"); return;
+		}
+		snd_ctl_elem_type_t gtype = snd_ctl_elem_info_get_type(ginfo);
 		snd_ctl_elem_value_t *val;
 		snd_ctl_elem_value_alloca(&val);
 		snd_ctl_elem_value_set_id(val, id);
@@ -2348,9 +2424,24 @@ static void handle_cmd(int fd, const char *line)
 			snd_ctl_close(h);
 			dprintf(fd, "{\"ok\":false,\"err\":\"read failed\"}\n"); return;
 		}
-		long v = snd_ctl_elem_value_get_integer(val, 0);
-		snd_ctl_close(h);
-		dprintf(fd, "{\"ok\":true,\"value\":%ld}\n", v);
+		if (gtype == SND_CTL_ELEM_TYPE_BYTES) {
+			unsigned int n_bytes = snd_ctl_elem_info_get_count(ginfo);
+			if (n_bytes > 4096) n_bytes = 4096;   /* cap pour hex 8 KB output */
+			static char hex_out[8200];
+			for (unsigned int i = 0; i < n_bytes; i++) {
+				unsigned char b = snd_ctl_elem_value_get_byte(val, i);
+				static const char hex_chars[] = "0123456789abcdef";
+				hex_out[i*2]     = hex_chars[(b >> 4) & 0xF];
+				hex_out[i*2 + 1] = hex_chars[b & 0xF];
+			}
+			hex_out[n_bytes * 2] = '\0';
+			snd_ctl_close(h);
+			dprintf(fd, "{\"ok\":true,\"bytes\":\"%s\",\"len\":%u}\n", hex_out, n_bytes);
+		} else {
+			long v = snd_ctl_elem_value_get_integer(val, 0);
+			snd_ctl_close(h);
+			dprintf(fd, "{\"ok\":true,\"value\":%ld}\n", v);
+		}
 
 	} else if (json_has_op(line, "set_tac_reg")) {
 		/* V9.4.2 — Set TAC5212 codec register via i2c-3.
@@ -2739,18 +2830,30 @@ static void *control_thread(void *arg)
 			mlog("accept: %s", strerror(errno));
 			break;
 		}
-		char buf[1024];
+		/* V9.4.3 : buffer 16 KB + accumulation pour tenir les blobs ALSA
+		 * BYTES (DRC 4096 octets = 8192 chars hex + JSON wrapper).
+		 * read() peut retourner < sizeof - 1 même si plus est dispo →
+		 * accumuler jusqu'à '\n', puis dispatcher les lignes complètes. */
+		static char buf[16384];
+		size_t pos = 0;
 		ssize_t n;
-		while ((n = read(cli, buf, sizeof(buf) - 1)) > 0) {
-			buf[n] = 0;
-			/* Une commande par ligne */
+		while ((n = read(cli, buf + pos, sizeof(buf) - 1 - pos)) > 0) {
+			pos += n;
+			buf[pos] = 0;
 			char *line = buf, *next;
 			while (line && *line) {
 				next = strchr(line, '\n');
-				if (next) *next++ = 0;
-				if (*line)
-					handle_cmd(cli, line);
+				if (!next) break;   /* ligne incomplète : attendre plus */
+				*next++ = 0;
+				if (*line) handle_cmd(cli, line);
 				line = next;
+			}
+			if (line && *line) {
+				size_t rem = strlen(line);
+				memmove(buf, line, rem);
+				pos = rem;
+			} else {
+				pos = 0;
 			}
 		}
 		close(cli);
