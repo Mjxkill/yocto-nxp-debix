@@ -771,6 +771,12 @@ struct lv2_state {
 	float          ctrl_in_min[LV2_MAX_CTRL_PORTS];
 	float          ctrl_in_max[LV2_MAX_CTRL_PORTS];
 	float          ctrl_in_default[LV2_MAX_CTRL_PORTS];
+	/* V9.4.1 : smoothing externe NPU.
+	 * set_param écrit dans ctrl_target ; process_block interpole ctrl_values
+	 * vers ctrl_target avec alpha = 1 - exp(-PERIOD/(tau*SR)).
+	 * Pour tau=50ms, period=96, sr=48k → alpha ≈ 0.0392 → 95% en ~150ms.
+	 * Évite clicks sur changes NPU rapides (peut sauter dB d'un coup). */
+	float          ctrl_target[LV2_MAX_CTRL_PORTS];
 
 	/* Buffers I/O 1-sample (legacy V9.2 sample-by-sample, plus utilisés en V9.3). */
 	float          buf_in_l, buf_in_r, buf_out_l, buf_out_r;
@@ -896,12 +902,27 @@ static void *lv2_worker_thread_fn(void *arg)
  *   → Gain attendu 30-60× sur plugins lourds.
  *
  * Worker response commit + atom reset : 1 fois par block (vs 96 fois). */
+/* V9.4.1 : smoothing alpha pour ctrl params LV2 (interpolation linéaire vers
+ * target). Calculé une fois pour tau=50ms à 48kHz/period=96.
+ * Formule : alpha = 1 - expf(-PERIOD_FRAMES / (tau * SAMPLE_RATE))
+ *         = 1 - expf(-96 / (0.05 * 48000)) = 1 - expf(-0.04) ≈ 0.0392.
+ * 95% convergence en ~150 ms = 75 cycles. */
+#define LV2_CTRL_SMOOTH_ALPHA  0.0392f
+
 static void lv2_process_block(fx_engine_t *fx,
 			      const float *in_l, const float *in_r,
 			      float *out_l, float *out_r,
 			      uint32_t N)
 {
 	struct lv2_state *st = fx->state;
+
+	/* V9.4.1 : smoothing 1 step par block (== 1 step toutes 2 ms).
+	 * Interpole ctrl_values vers ctrl_target. Cas N=0 (target==value) ne
+	 * coûte qu'une comparaison float trivialement vectorisable par gcc. */
+	for (int i = 0; i < st->n_ctrl_in; i++) {
+		st->ctrl_values[i] += (st->ctrl_target[i] - st->ctrl_values[i])
+		                      * LV2_CTRL_SMOOTH_ALPHA;
+	}
 
 	/* Worker response commit avant run (LV2 spec) */
 	if (st->worker && st->worker->resp_pending) {
@@ -974,7 +995,9 @@ static int lv2_set_param(fx_engine_t *fx, const char *name, float value)
 	struct lv2_state *st = fx->state;
 	for (int i = 0; i < st->n_ctrl_in; i++) {
 		if (strcmp(st->ctrl_in_name[i], name) == 0) {
-			st->ctrl_values[i] = value;
+			/* V9.4.1 : écrit target, audio_thread interpole ctrl_values
+			 * vers target via smoothing. Évite click NPU rapide. */
+			st->ctrl_target[i] = value;
 			return 0;
 		}
 	}
@@ -1270,6 +1293,7 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 			int idx = st->n_ctrl_in++;
 			st->ctrl_in_idx[idx] = i;
 			st->ctrl_values[idx]     = defaults[i];
+			st->ctrl_target[idx]     = defaults[i];   /* V9.4.1 smoothing init */
 			st->ctrl_in_min[idx]     = mins[i];
 			st->ctrl_in_max[idx]     = maxs[i];
 			st->ctrl_in_default[idx] = defaults[i];

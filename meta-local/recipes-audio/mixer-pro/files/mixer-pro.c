@@ -1898,7 +1898,10 @@ static int json_has_op(const char *s, const char *op)
 	if (!p) return 0;
 	p += strlen(pattern);
 	while (*p == ' ' || *p == ':' || *p == '\t' || *p == '"') p++;
-	return strncmp(p, op, strlen(op)) == 0;
+	size_t n = strlen(op);
+	/* V9.4.1 : match exact — sinon "set_insert" matche "set_insert_param".
+	 * Le char après op doit terminer la string JSON ("). */
+	return strncmp(p, op, n) == 0 && p[n] == '"';
 }
 
 static void handle_cmd(int fd, const char *line)
@@ -2259,6 +2262,95 @@ static void handle_cmd(int fd, const char *line)
 		atomic_store(&g_insert_active, bypass_flag ? 0 : 1);
 		dprintf(fd, "{\"ok\":true,\"op\":\"insert_bypass\",\"active\":%s}\n",
 		        bypass_flag ? "false" : "true");
+
+	} else if (json_has_op(line, "set_alsa")) {
+		/* V9.4.1 — Set ALSA control (INTEGER seul pour V9.4.1).
+		 * Format :
+		 *   {"op":"set_alsa","name":"PGA2.0 2 Out Strip1 Volume","value":50}
+		 *   {"op":"set_alsa","numid":324,"value":50}
+		 *
+		 * Hardcode card "softac5212tdm" (le seul DSP HiFi4 SOF expose les
+		 * kcontrols MULTIBAND_DRC + PGA + TAC BQ). Pour BYTES blob (DRC
+		 * raw), implementation en V9.4.2 (besoin parser hex/base64). */
+		char ctrl_name[128] = {0};
+		int numid = 0;
+		float value = 0;
+		int by_numid = (json_get_int(line, "numid", &numid) == 0);
+		int by_name  = (json_get_str(line, "name", ctrl_name, sizeof(ctrl_name)) == 0);
+		if (json_get_float(line, "value", &value) < 0 || (!by_numid && !by_name)) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_alsa args\"}\n");
+			return;
+		}
+		snd_ctl_t *h = NULL;
+		if (snd_ctl_open(&h, "hw:CARD=softac5212tdm", 0) < 0) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"snd_ctl_open failed\"}\n");
+			return;
+		}
+		snd_ctl_elem_id_t *id;
+		snd_ctl_elem_id_alloca(&id);
+		if (by_numid) snd_ctl_elem_id_set_numid(id, numid);
+		else {
+			snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
+			snd_ctl_elem_id_set_name(id, ctrl_name);
+		}
+		snd_ctl_elem_info_t *info;
+		snd_ctl_elem_info_alloca(&info);
+		snd_ctl_elem_info_set_id(info, id);
+		int rc = snd_ctl_elem_info(h, info);
+		if (rc < 0) {
+			snd_ctl_close(h);
+			dprintf(fd, "{\"ok\":false,\"err\":\"control not found\"}\n");
+			return;
+		}
+		snd_ctl_elem_type_t type = snd_ctl_elem_info_get_type(info);
+		snd_ctl_elem_value_t *val;
+		snd_ctl_elem_value_alloca(&val);
+		snd_ctl_elem_value_set_id(val, id);
+		if (type == SND_CTL_ELEM_TYPE_INTEGER) {
+			unsigned int n_chan = snd_ctl_elem_info_get_count(info);
+			for (unsigned int c = 0; c < n_chan; c++)
+				snd_ctl_elem_value_set_integer(val, c, (long)value);
+		} else if (type == SND_CTL_ELEM_TYPE_BOOLEAN) {
+			snd_ctl_elem_value_set_boolean(val, 0, value != 0.0f);
+		} else {
+			snd_ctl_close(h);
+			dprintf(fd, "{\"ok\":false,\"err\":\"unsupported type (BYTES = V9.4.2)\"}\n");
+			return;
+		}
+		rc = snd_ctl_elem_write(h, val);
+		snd_ctl_close(h);
+		if (rc < 0) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"snd_ctl_elem_write failed\"}\n");
+		} else {
+			dprintf(fd, "{\"ok\":true,\"op\":\"set_alsa\",\"value\":%.4f}\n", value);
+		}
+
+	} else if (json_has_op(line, "get_alsa")) {
+		/* Format : {"op":"get_alsa","name":"..."} ou numid */
+		char ctrl_name[128] = {0};
+		int numid = 0;
+		int by_numid = (json_get_int(line, "numid", &numid) == 0);
+		int by_name  = (json_get_str(line, "name", ctrl_name, sizeof(ctrl_name)) == 0);
+		if (!by_numid && !by_name) { dprintf(fd, "{\"ok\":false,\"err\":\"bad args\"}\n"); return; }
+		snd_ctl_t *h = NULL;
+		if (snd_ctl_open(&h, "hw:CARD=softac5212tdm", 0) < 0) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"snd_ctl_open failed\"}\n"); return;
+		}
+		snd_ctl_elem_id_t *id;
+		snd_ctl_elem_id_alloca(&id);
+		if (by_numid) snd_ctl_elem_id_set_numid(id, numid);
+		else { snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
+		       snd_ctl_elem_id_set_name(id, ctrl_name); }
+		snd_ctl_elem_value_t *val;
+		snd_ctl_elem_value_alloca(&val);
+		snd_ctl_elem_value_set_id(val, id);
+		if (snd_ctl_elem_read(h, val) < 0) {
+			snd_ctl_close(h);
+			dprintf(fd, "{\"ok\":false,\"err\":\"read failed\"}\n"); return;
+		}
+		long v = snd_ctl_elem_value_get_integer(val, 0);
+		snd_ctl_close(h);
+		dprintf(fd, "{\"ok\":true,\"value\":%ld}\n", v);
 
 	} else if (json_has_op(line, "list_lv2_plugins")) {
 		/* V9.2 — Énumère les plugins LV2 RT-safe disponibles. */
