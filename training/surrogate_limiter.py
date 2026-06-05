@@ -27,10 +27,11 @@ Limites :
 import math
 import torch
 import torch.nn as nn
+import torchaudio.functional as TAF
 
 
 def db_to_lin(x_db: torch.Tensor) -> torch.Tensor:
-    return torch.pow(torch.tensor(10.0, dtype=x_db.dtype, device=x_db.device), x_db / 20.0)
+    return 10.0 ** (x_db / 20.0)   # device-safe
 
 
 def lin_to_db(x_lin: torch.Tensor) -> torch.Tensor:
@@ -68,27 +69,22 @@ class LSPLimiterSurrogate(nn.Module):
 
     def _env_follower(self, x: torch.Tensor, attack_a: torch.Tensor,
                       release_a: torch.Tensor) -> torch.Tensor:
-        """Peak envelope follower différentiable, one-pole asymétrique.
+        """Peak envelope follower one-pole, IIR vectorisé via lfilter.
 
-        x : (..., N) absolute amplitude (rectified). N samples.
-        attack_a, release_a : scalaires entre 0 et 1.
+        x : (..., N) absolute amplitude (rectified).
 
-        Implémentation : boucle sample-par-sample (différentiable mais lent).
-        Pour N=48000 c'est ~1 sec audio, prend ~50 ms en Python. Acceptable
-        pour training.
+        V9.5.3 phase 6 : approximation symétrique avec alpha = attack_a
+        (le path "transient down" via release n'est pas pris en compte).
+        Trade-off : ×1000 plus rapide que sample-par-sample, suffit pour
+        training POC. Pour mastering final, le NPU set les vrais params
+        attack/release sur la chaîne LV2 (LSP Limiter réel).
         """
-        # Flatten leading dims
-        orig_shape = x.shape
-        x_flat = x.reshape(-1, orig_shape[-1])
-        env = torch.zeros_like(x_flat)
-        prev = torch.zeros(x_flat.shape[0], device=x.device, dtype=x.dtype)
-        for n in range(x_flat.shape[-1]):
-            xn = x_flat[:, n]
-            up = xn > prev
-            coef = torch.where(up, attack_a, release_a)
-            prev = prev + (xn - prev) * coef
-            env[:, n] = prev
-        return env.reshape(orig_shape)
+        alpha = attack_a.clamp(min=1e-4, max=1.0)
+        # IIR : y[n] = alpha*x[n] + (1-alpha)*y[n-1]
+        # → numerateur b = [alpha], dénominateur a = [1, -(1-alpha)]
+        b = torch.stack([alpha, torch.zeros_like(alpha)])
+        a = torch.stack([torch.ones_like(alpha), -(1.0 - alpha)])
+        return TAF.lfilter(x, a, b, clamp=False)
 
     def forward(self, x: torch.Tensor,
                 threshold_db: torch.Tensor = None,

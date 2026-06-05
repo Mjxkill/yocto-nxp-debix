@@ -49,7 +49,7 @@ def biquad_peak_coefs(freq_hz: torch.Tensor,
     sin_w = torch.sin(omega)
     cos_w = torch.cos(omega)
     alpha = sin_w / (2.0 * q.clamp(min=0.1))
-    A = torch.pow(torch.tensor(10.0), gain_db / 40.0)
+    A = 10.0 ** (gain_db / 40.0)   # device-safe (utilise device de gain_db)
 
     b0 = 1.0 + alpha * A
     b1 = -2.0 * cos_w
