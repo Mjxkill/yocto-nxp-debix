@@ -1138,6 +1138,11 @@ atomic_int   g_running_flag_for_analyzer;
  */
 static int g_skip_uac2  = 0;
 static int g_skip_phone = 0;
+
+/* V9.3.5 : persistence presets debounced. atomic flag, set par
+ * set_fx_engine/set_fx_param. Thread écrit JSON 1s après dernière modif. */
+static atomic_int g_presets_dirty = 0;
+#define PRESETS_PATH "/var/lib/mixer-pro/presets.json"
 /* g_no_asrc déclaré plus haut près de g_shift_ppm */
 
 /* ============================== Logging ============================ */
@@ -2053,6 +2058,7 @@ static void handle_cmd(int fd, const char *line)
 		if (rc < 0) {
 			dprintf(fd, "{\"ok\":false,\"err\":\"unknown fx param\"}\n");
 		} else {
+			atomic_store(&g_presets_dirty, 1);  /* V9.3.5 */
 			snprintf(reply, sizeof(reply),
 				 "{\"ok\":true,\"op\":\"set_fx_param\",\"bus\":%d,"
 				 "\"param\":\"%s\",\"value\":%.4f}\n",
@@ -2114,6 +2120,7 @@ static void handle_cmd(int fd, const char *line)
 		g_st.fx_engines[bus] = new_eng;
 		pthread_mutex_unlock(&g_st.target_lock);
 		fx_free(&old_eng);
+		atomic_store(&g_presets_dirty, 1);  /* V9.3.5 */
 
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"op\":\"set_fx_engine\",\"bus\":%d,"
@@ -2459,6 +2466,57 @@ static void *control_thread(void *arg)
 	return NULL;
 }
 
+/* ============================== Persistence presets ================ */
+
+/* V9.3.5 : sauvegarde atomique l'état des 4 bus FX dans
+ * /var/lib/mixer-pro/presets.json. Écriture via .tmp + rename pour atomicité.
+ * Format :
+ *   {"version":1,"buses":[{"bus":0,<get_state output>}, ...]}
+ *
+ * Appelée par persistence_thread quand g_presets_dirty est settée par
+ * set_fx_engine ou set_fx_param. mkdir -p si absent. */
+static void save_presets(void)
+{
+	mkdir("/var/lib/mixer-pro", 0755);
+	char tmp_path[256];
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", PRESETS_PATH);
+	FILE *f = fopen(tmp_path, "w");
+	if (!f) {
+		fprintf(stderr, "save_presets: fopen %s failed: %s\n",
+		        tmp_path, strerror(errno));
+		return;
+	}
+	fprintf(f, "{\"version\":1,\"buses\":[");
+	/* Hold lock pour cohérence engine state vs params */
+	pthread_mutex_lock(&g_st.target_lock);
+	for (int b = 0; b < N_BUS_FX; b++) {
+		static char body[16384];
+		g_st.fx_engines[b].get_state(&g_st.fx_engines[b], body, sizeof(body));
+		fprintf(f, "%s{\"bus\":%d,%s}", b == 0 ? "" : ",", b, body);
+	}
+	pthread_mutex_unlock(&g_st.target_lock);
+	fprintf(f, "]}\n");
+	fclose(f);
+	/* rename atomique */
+	if (rename(tmp_path, PRESETS_PATH) < 0)
+		fprintf(stderr, "save_presets: rename failed: %s\n", strerror(errno));
+}
+
+static void *persistence_thread(void *arg)
+{
+	(void)arg;
+	while (atomic_load(&g_st.running)) {
+		sleep(1);
+		if (atomic_exchange(&g_presets_dirty, 0)) {
+			save_presets();
+		}
+	}
+	/* Final save au shutdown si dirty */
+	if (atomic_load(&g_presets_dirty))
+		save_presets();
+	return NULL;
+}
+
 /* ============================== Signal handling ==================== */
 
 static void on_signal(int sig)
@@ -2584,11 +2642,13 @@ int main(int argc, char **argv)
 	signal(SIGTERM, on_signal);
 
 	pthread_t th_audio, th_ctrl, th_play, th_analyzer;
-	pthread_t th_cap_uac2, th_play_uac2, th_shift_ctl;
+	pthread_t th_cap_uac2, th_play_uac2, th_shift_ctl, th_persist;
 	pthread_create(&th_ctrl, NULL, control_thread, NULL);
 	pthread_create(&th_play, NULL, play_thread, NULL);   /* E6.g Phase 2 */
 	pthread_create(&th_audio, NULL, audio_thread, NULL);
 	pthread_create(&th_analyzer, NULL, analyzer_thread, NULL);  /* E7.5 */
+	/* V9.3.5 : thread persistence presets (debounced 1s) */
+	pthread_create(&th_persist, NULL, persistence_thread, NULL);
 	/* V8.1 : threads UAC2 dédiés (isolation USB ↔ DSP) */
 	if (!g_skip_uac2) {
 		pthread_create(&th_cap_uac2,  NULL, cap_uac2_thread,  NULL);
@@ -2602,6 +2662,7 @@ int main(int argc, char **argv)
 	pthread_join(th_audio, NULL);
 	pthread_join(th_play, NULL);
 	pthread_join(th_ctrl, NULL);
+	pthread_join(th_persist, NULL);  /* V9.3.5 : final save dans le thread */
 	/* V8.26 — shift_controller_thread désactivé (cf création) */
 	if (!g_skip_uac2) {
 		pthread_join(th_cap_uac2, NULL);
