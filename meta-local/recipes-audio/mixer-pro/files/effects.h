@@ -73,6 +73,24 @@ int fx_init_eq        (fx_engine_t *fx, float sample_rate);
 int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri);
 int fx_lv2_list_uris(char *buf, int len);
 
+/* V9.4 — Chain : cascade de N sub-engines (LV2 ou builtin) sur 1 bus.
+ * Usage : insert mastering post-master sur out_0+out_1 DSP.
+ * MAX_CHAIN = 8 sub-engines max. Ping-pong buffers tmp_a/tmp_b globaux.
+ *
+ * Spec de chaque sub-engine :
+ *   {engine: "lv2"|"compressor"|"reverb"|"delay"|"eq",
+ *    uri: "..." (lv2 seulement)}
+ */
+#define FX_CHAIN_MAX 8
+
+struct fx_chain_spec {
+	const char *engine;   /* "lv2" | "compressor" | "reverb" | "delay" | "eq" */
+	const char *uri;      /* pour lv2 seulement (sinon NULL/"") */
+};
+
+int fx_init_chain(fx_engine_t *fx, float sample_rate,
+                  const struct fx_chain_spec *specs, int n_specs);
+
 /* Cleanup (libère state). */
 void fx_free(fx_engine_t *fx);
 

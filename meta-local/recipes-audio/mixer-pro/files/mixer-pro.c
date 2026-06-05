@@ -1143,6 +1143,13 @@ static int g_skip_phone = 0;
  * set_fx_engine/set_fx_param. Thread écrit JSON 1s après dernière modif. */
 static atomic_int g_presets_dirty = 0;
 #define PRESETS_PATH "/var/lib/mixer-pro/presets.json"
+
+/* V9.4 — insert mastering : chaîne de N plugins sur out_0+out_1 DSP.
+ * g_insert_active = 0 : bypass total, mix_block out directement vers convert.
+ * g_insert_active = 1 : g_insert_chain.process_block sur out_block[0..1].
+ * Init/swap protégé par target_lock (cohérent avec mix_block). */
+static fx_engine_t g_insert_chain;
+static atomic_int  g_insert_active = 0;
 /* g_no_asrc déclaré plus haut près de g_shift_ppm */
 
 /* ============================== Logging ============================ */
@@ -1571,6 +1578,16 @@ static void *audio_thread(void *arg)
 
 		/* MIX BLOCK — 1 appel pour 96 frames (vs 96 calls × 1 frame) */
 		mix_block(in_block, out_block, bus_pre_block, ret_post_block, PERIOD_FRAMES);
+
+		/* V9.4 — Insert mastering post-master sur out_0+out_1 DSP.
+		 * In-place : out_block[0/1] modifié si insert actif. Autres out
+		 * (UAC2 stems, phone) restent dry. */
+		if (atomic_load_explicit(&g_insert_active, memory_order_acquire)) {
+			g_insert_chain.process_block(&g_insert_chain,
+				out_block[0], out_block[1],
+				out_block[0], out_block[1],
+				PERIOD_FRAMES);
+		}
 
 		/* Analyzer taps : push N samples par tap (lecture buffers block) */
 		for (int t = 0; t < N_TAPS; t++) {
@@ -2127,6 +2144,121 @@ static void handle_cmd(int fd, const char *line)
 			 "\"engine\":\"%s\",\"uri\":\"%s\"}\n",
 			 bus, engine, uri);
 		write(fd, reply, strlen(reply));
+
+	} else if (json_has_op(line, "set_insert")) {
+		/* V9.4 — Configure la chaîne insert post-master.
+		 * Format : {"op":"set_insert","plugins":[
+		 *   {"engine":"lv2","uri":"http://..."},
+		 *   {"engine":"compressor"},
+		 *   ...
+		 * ]}
+		 * plugins:[] = bypass (insert désactivé).
+		 *
+		 * Parser ad-hoc : itère sur les `{...}` contenus entre `"plugins":[`
+		 * et le matching `]`. Pour chaque, extrait engine + uri. Limite
+		 * FX_CHAIN_MAX (8) plugins. */
+		const char *p = strstr(line, "\"plugins\"");
+		if (!p) { dprintf(fd, "{\"ok\":false,\"err\":\"missing plugins\"}\n"); return; }
+		p = strchr(p, '['); if (!p) { dprintf(fd, "{\"ok\":false,\"err\":\"bad plugins array\"}\n"); return; }
+		p++;
+		struct fx_chain_spec specs[FX_CHAIN_MAX];
+		char engines[FX_CHAIN_MAX][32], uris[FX_CHAIN_MAX][256];
+		int n_specs = 0;
+		while (*p && *p != ']' && n_specs < FX_CHAIN_MAX) {
+			const char *brace = strchr(p, '{');
+			if (!brace) break;
+			const char *end = strchr(brace, '}');
+			if (!end) break;
+			char obj[512];
+			size_t len_obj = (size_t)(end - brace + 1);
+			if (len_obj >= sizeof(obj)) len_obj = sizeof(obj) - 1;
+			memcpy(obj, brace, len_obj); obj[len_obj] = '\0';
+			engines[n_specs][0] = '\0';
+			uris[n_specs][0] = '\0';
+			(void)json_get_str(obj, "engine", engines[n_specs], sizeof(engines[0]));
+			(void)json_get_str(obj, "uri",     uris[n_specs],    sizeof(uris[0]));
+			specs[n_specs].engine = engines[n_specs];
+			specs[n_specs].uri    = uris[n_specs];
+			n_specs++;
+			p = end + 1;
+		}
+
+		if (n_specs == 0) {
+			/* Bypass : désactive l'insert + free chain existante */
+			pthread_mutex_lock(&g_st.target_lock);
+			int was_active = atomic_exchange(&g_insert_active, 0);
+			pthread_mutex_unlock(&g_st.target_lock);
+			if (was_active) fx_free(&g_insert_chain);
+			dprintf(fd, "{\"ok\":true,\"op\":\"set_insert\",\"n\":0}\n");
+			atomic_store(&g_presets_dirty, 1);
+			return;
+		}
+
+		fx_engine_t new_chain = {0};
+		if (!fx_init_chain(&new_chain, (float)SAMPLE_RATE, specs, n_specs)) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"chain init failed\"}\n");
+			return;
+		}
+
+		pthread_mutex_lock(&g_st.target_lock);
+		fx_engine_t old_chain = g_insert_chain;
+		int was_active = atomic_load(&g_insert_active);
+		g_insert_chain = new_chain;
+		atomic_store(&g_insert_active, 1);
+		pthread_mutex_unlock(&g_st.target_lock);
+		if (was_active) fx_free(&old_chain);
+		atomic_store(&g_presets_dirty, 1);
+
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_insert\",\"n\":%d}\n", n_specs);
+
+	} else if (json_has_op(line, "set_insert_param")) {
+		/* Format : {"op":"set_insert_param","slot":N,"param":"name","value":X} */
+		int slot;
+		char param[32]; float value = 0;
+		if (json_get_int(line, "slot", &slot) < 0 ||
+		    json_get_str(line, "param", param, sizeof(param)) < 0 ||
+		    json_get_float(line, "value", &value) < 0 ||
+		    slot < 0 || slot >= FX_CHAIN_MAX) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad args\"}\n"); return;
+		}
+		if (!atomic_load(&g_insert_active)) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"insert not active\"}\n"); return;
+		}
+		/* Construit "<slot>/<param>" pour chain_set_param */
+		char composite[64];
+		snprintf(composite, sizeof(composite), "%d/%s", slot, param);
+		pthread_mutex_lock(&g_st.target_lock);
+		int rc = g_insert_chain.set_param(&g_insert_chain, composite, value);
+		pthread_mutex_unlock(&g_st.target_lock);
+		if (rc < 0) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"unknown param or slot\"}\n");
+		} else {
+			atomic_store(&g_presets_dirty, 1);
+			dprintf(fd, "{\"ok\":true,\"op\":\"set_insert_param\",\"slot\":%d,"
+			            "\"param\":\"%s\",\"value\":%.4f}\n",
+			        slot, param, value);
+		}
+
+	} else if (json_has_op(line, "get_insert")) {
+		/* Dump JSON full : type + n + chain[] avec slot/state/ranges */
+		if (!atomic_load(&g_insert_active)) {
+			dprintf(fd, "{\"ok\":true,\"active\":false}\n"); return;
+		}
+		static char insert_buf[32768];
+		pthread_mutex_lock(&g_st.target_lock);
+		int n = g_insert_chain.get_state(&g_insert_chain, insert_buf, sizeof(insert_buf));
+		pthread_mutex_unlock(&g_st.target_lock);
+		dprintf(fd, "{\"ok\":true,\"active\":true,%s}\n", n > 0 ? insert_buf : "");
+
+	} else if (json_has_op(line, "insert_bypass")) {
+		/* Format : {"op":"insert_bypass","bypass":true|false}.
+		 * Quand bypass=true : désactive l'insert sans free la chain
+		 * (réactivable par bypass=false instantanément). */
+		int bypass_flag = 1;   /* default true si pas spécifié */
+		(void)json_get_int(line, "bypass", &bypass_flag);
+		atomic_store(&g_insert_active, bypass_flag ? 0 : 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"insert_bypass\",\"active\":%s}\n",
+		        bypass_flag ? "false" : "true");
 
 	} else if (json_has_op(line, "list_lv2_plugins")) {
 		/* V9.2 — Énumère les plugins LV2 RT-safe disponibles. */
