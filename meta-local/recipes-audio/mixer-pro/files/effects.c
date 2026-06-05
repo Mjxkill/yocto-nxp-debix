@@ -1155,9 +1155,20 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 		}
 		st->worker->iface         = iface;
 		st->worker->plugin_handle = lilv_instance_get_handle(st->instance);
-		/* spawn thread sur sched OTHER (default) — pas pinné */
-		if (pthread_create(&st->worker->thread, NULL,
-		                   lv2_worker_thread_fn, st->worker) != 0) {
+		/* V9.3.4 : worker thread pinné sur cores 0+1 (non-RT) pour ne pas
+		 * impacter le jitter audio_thread RT prio 99 sur core 2.
+		 * sched OTHER par défaut, peut être préempté librement. */
+		pthread_attr_t wattr;
+		pthread_attr_init(&wattr);
+		cpu_set_t wcpus;
+		CPU_ZERO(&wcpus);
+		CPU_SET(0, &wcpus);
+		CPU_SET(1, &wcpus);
+		pthread_attr_setaffinity_np(&wattr, sizeof(wcpus), &wcpus);
+		int rc = pthread_create(&st->worker->thread, &wattr,
+		                        lv2_worker_thread_fn, st->worker);
+		pthread_attr_destroy(&wattr);
+		if (rc != 0) {
 			fprintf(stderr, "LV2: %s worker pthread_create failed — refused\n", uri);
 			lilv_instance_free(st->instance);
 			pthread_mutex_destroy(&st->worker->mutex);
@@ -1166,7 +1177,7 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 			free(st->uri); free(st);
 			return 0;
 		}
-		fprintf(stderr, "LV2: %s worker thread spawned\n", uri);
+		fprintf(stderr, "LV2: %s worker thread spawned (cores 0-1)\n", uri);
 	}
 
 	/* Get default + min + max control values (V9.3.3 : ranges pour NPU).
