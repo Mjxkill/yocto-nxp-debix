@@ -2352,6 +2352,77 @@ static void handle_cmd(int fd, const char *line)
 		snd_ctl_close(h);
 		dprintf(fd, "{\"ok\":true,\"value\":%ld}\n", v);
 
+	} else if (json_has_op(line, "set_tac_reg")) {
+		/* V9.4.2 — Set TAC5212 codec register via i2c-3.
+		 * Format : {"op":"set_tac_reg","tac":0..3,"reg":0xRR,"value":0xVV}
+		 *
+		 * 4 codecs TAC5212 aux addresses 0x50, 0x51, 0x52, 0x53 sur /dev/i2c-3.
+		 * Le codec utilise des pages registres (reg 0x00 = page select).
+		 * NPU peut writer reg 0x00 séparément pour switcher page.
+		 *
+		 * I2C_SLAVE_FORCE car le driver tac5212 kernel tient le device.
+		 * Risque : désync driver/hw si on touche les registres init driver.
+		 * En pratique le NPU vise les registres DRC/limiter/BQ que le driver
+		 * ne reset jamais après init. */
+		int tac_idx = 0, reg = 0;
+		float val_f = 0;
+		if (json_get_int(line, "tac", &tac_idx) < 0 ||
+		    json_get_int(line, "reg", &reg) < 0 ||
+		    json_get_float(line, "value", &val_f) < 0 ||
+		    tac_idx < 0 || tac_idx > 3 ||
+		    reg < 0 || reg > 0xFF) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad args (tac 0..3, reg 0..255)\"}\n");
+			return;
+		}
+		int fd_i2c = open("/dev/i2c-3", O_RDWR);
+		if (fd_i2c < 0) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"open i2c-3 failed: %s\"}\n", strerror(errno));
+			return;
+		}
+		if (ioctl(fd_i2c, 0x0706 /*I2C_SLAVE_FORCE*/, 0x50 + tac_idx) < 0) {
+			close(fd_i2c);
+			dprintf(fd, "{\"ok\":false,\"err\":\"ioctl I2C_SLAVE_FORCE failed: %s\"}\n", strerror(errno));
+			return;
+		}
+		uint8_t buf[2] = { (uint8_t)reg, (uint8_t)(int)val_f };
+		ssize_t w = write(fd_i2c, buf, 2);
+		close(fd_i2c);
+		if (w != 2) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"i2c write failed\"}\n");
+		} else {
+			dprintf(fd, "{\"ok\":true,\"op\":\"set_tac_reg\",\"tac\":%d,"
+			            "\"reg\":%d,\"value\":%d}\n",
+			        tac_idx, reg, (int)val_f);
+		}
+
+	} else if (json_has_op(line, "get_tac_reg")) {
+		/* Format : {"op":"get_tac_reg","tac":0..3,"reg":0xRR}
+		 * → {"ok":true,"value":N} */
+		int tac_idx = 0, reg = 0;
+		if (json_get_int(line, "tac", &tac_idx) < 0 ||
+		    json_get_int(line, "reg", &reg) < 0 ||
+		    tac_idx < 0 || tac_idx > 3 || reg < 0 || reg > 0xFF) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad args\"}\n");
+			return;
+		}
+		int fd_i2c = open("/dev/i2c-3", O_RDWR);
+		if (fd_i2c < 0) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"open failed\"}\n"); return;
+		}
+		if (ioctl(fd_i2c, 0x0706 /*I2C_SLAVE_FORCE*/, 0x50 + tac_idx) < 0) {
+			close(fd_i2c);
+			dprintf(fd, "{\"ok\":false,\"err\":\"ioctl failed\"}\n"); return;
+		}
+		uint8_t r = (uint8_t)reg, v = 0;
+		ssize_t ww = write(fd_i2c, &r, 1);
+		ssize_t rr = read(fd_i2c, &v, 1);
+		close(fd_i2c);
+		if (ww != 1 || rr != 1) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"i2c read failed\"}\n");
+		} else {
+			dprintf(fd, "{\"ok\":true,\"value\":%d}\n", v);
+		}
+
 	} else if (json_has_op(line, "list_lv2_plugins")) {
 		/* V9.2 — Énumère les plugins LV2 RT-safe disponibles. */
 		static char lv2_buf[65536];
