@@ -766,6 +766,11 @@ struct lv2_state {
 	int            ctrl_in_idx[LV2_MAX_CTRL_PORTS];
 	char           ctrl_in_name[LV2_MAX_CTRL_PORTS][LV2_MAX_NAME_LEN];
 	float          ctrl_values[LV2_MAX_CTRL_PORTS];   /* live values, connected */
+	/* V9.3.3 : ranges critiques pour normalisation NPU (lilv_plugin_get_port_ranges_float).
+	 * NaN si non spécifié dans le TTL (NPU doit alors deviner ou utiliser defaults). */
+	float          ctrl_in_min[LV2_MAX_CTRL_PORTS];
+	float          ctrl_in_max[LV2_MAX_CTRL_PORTS];
+	float          ctrl_in_default[LV2_MAX_CTRL_PORTS];
 
 	/* Buffers I/O 1-sample (legacy V9.2 sample-by-sample, plus utilisés en V9.3). */
 	float          buf_in_l, buf_in_r, buf_out_l, buf_out_r;
@@ -990,6 +995,14 @@ static void lv2_reset(fx_engine_t *fx)
 	}
 }
 
+/* Format flottant JSON-safe : NaN/Inf → null (sinon JSON.parse rejette). */
+static int json_float(char *buf, int len, float v)
+{
+	if (isnan(v) || isinf(v))
+		return snprintf(buf, len, "null");
+	return snprintf(buf, len, "%.4f", v);
+}
+
 static int lv2_get_state(fx_engine_t *fx, char *buf, int len)
 {
 	struct lv2_state *st = fx->state;
@@ -1001,6 +1014,21 @@ static int lv2_get_state(fx_engine_t *fx, char *buf, int len)
 		              i == 0 ? "" : ",",
 		              st->ctrl_in_name[i],
 		              st->ctrl_values[i]);
+	}
+	/* V9.3.3 : ranges pour normalisation NPU.
+	 * Format : {"freq1":{"min":20,"max":20000,"def":1000}, ...}
+	 * NaN/Inf → null (port unbounded ou non spécifié dans TTL). */
+	if (n < len - 16)
+		n += snprintf(buf + n, len - n, "},\"ranges\":{");
+	for (int i = 0; i < st->n_ctrl_in && n < len - 80; i++) {
+		n += snprintf(buf + n, len - n, "%s\"%s\":{\"min\":",
+		              i == 0 ? "" : ",", st->ctrl_in_name[i]);
+		n += json_float(buf + n, len - n, st->ctrl_in_min[i]);
+		n += snprintf(buf + n, len - n, ",\"max\":");
+		n += json_float(buf + n, len - n, st->ctrl_in_max[i]);
+		n += snprintf(buf + n, len - n, ",\"def\":");
+		n += json_float(buf + n, len - n, st->ctrl_in_default[i]);
+		n += snprintf(buf + n, len - n, "}");
 	}
 	if (n < len - 2) n += snprintf(buf + n, len - n, "}");
 	return n;
@@ -1141,9 +1169,13 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 		fprintf(stderr, "LV2: %s worker thread spawned\n", uri);
 	}
 
-	/* Get default control values */
+	/* Get default + min + max control values (V9.3.3 : ranges pour NPU).
+	 * Si min/max manquent dans le TTL, lilv met NaN → on garde NaN qui se
+	 * sérialise en "null" JSON pour signaler "unbounded" au NPU. */
 	float *defaults = calloc(st->n_ports, sizeof(float));
-	lilv_plugin_get_port_ranges_float(plug, NULL, NULL, defaults);
+	float *mins = calloc(st->n_ports, sizeof(float));
+	float *maxs = calloc(st->n_ports, sizeof(float));
+	lilv_plugin_get_port_ranges_float(plug, mins, maxs, defaults);
 
 	/* Scan + connect ports */
 	int audio_in_n = 0, audio_out_n = 0;
@@ -1191,7 +1223,7 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 			if (*cnt >= LV2_MAX_ATOM_PORTS) {
 				fprintf(stderr, "LV2: %s too many atom ports (>%d) — refused\n",
 				        uri, LV2_MAX_ATOM_PORTS);
-				free(defaults);
+				free(defaults); free(mins); free(maxs);
 				/* cleanup partial alloc + return */
 				for (int k = 0; k < st->n_atom_in; k++)  free(st->atom_in_bufs[k]);
 				for (int k = 0; k < st->n_atom_out; k++) free(st->atom_out_bufs[k]);
@@ -1226,7 +1258,10 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 		} else if (is_ctrl && is_input && st->n_ctrl_in < LV2_MAX_CTRL_PORTS) {
 			int idx = st->n_ctrl_in++;
 			st->ctrl_in_idx[idx] = i;
-			st->ctrl_values[idx] = defaults[i];
+			st->ctrl_values[idx]     = defaults[i];
+			st->ctrl_in_min[idx]     = mins[i];
+			st->ctrl_in_max[idx]     = maxs[i];
+			st->ctrl_in_default[idx] = defaults[i];
 			LilvNode *sym = (LilvNode *)lilv_port_get_symbol(plug, port);
 			const char *sym_str = sym ? lilv_node_as_string(sym) : "?";
 			strncpy(st->ctrl_in_name[idx], sym_str, LV2_MAX_NAME_LEN - 1);
@@ -1239,6 +1274,8 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 		}
 	}
 	free(defaults);
+	free(mins);
+	free(maxs);
 
 	/* Stéréo natif (2/2) : OK direct.
 	 * Mono (1/1) : instancier une 2e fois pour le canal R, partageant
