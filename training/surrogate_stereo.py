@@ -44,33 +44,38 @@ class CalfStereoToolsSurrogate(nn.Module):
                 mid_gain: torch.Tensor = None,
                 side_gain: torch.Tensor = None,
                 sm_swap: torch.Tensor = None) -> torch.Tensor:
-        """x : (..., 2, N) stereo. Returns same shape."""
+        """x : (..., 2, N) stereo. Supports unbatched (2, N) ou batched (B, 2, N)."""
         bal = self.balance   if balance   is None else balance
         mg  = self.mid_gain  if mid_gain  is None else mid_gain
         sg  = self.side_gain if side_gain is None else side_gain
         sw  = self.sm_swap   if sm_swap   is None else sm_swap
 
+        batched = (x.dim() >= 3 and bal.dim() >= 1 and bal.shape[0] > 1)
+
         L = x[..., 0, :]
         R = x[..., 1, :]
 
-        # Balance : -1 = full L, +1 = full R
-        gL = (1.0 - bal.clamp(-1.0, 1.0)).clamp(min=0.0)
-        gR = (1.0 + bal.clamp(-1.0, 1.0)).clamp(min=0.0)
+        if batched:
+            B = bal.shape[0]
+            bal_c = bal.clamp(-1.0, 1.0).view(B, 1)
+            gL = (1.0 - bal_c).clamp(min=0.0)
+            gR = (1.0 + bal_c).clamp(min=0.0)
+            mg_b = mg.view(B, 1)
+            sg_b = sg.view(B, 1)
+            sw_b = sw.view(B, 1)
+        else:
+            gL = (1.0 - bal.clamp(-1.0, 1.0)).clamp(min=0.0)
+            gR = (1.0 + bal.clamp(-1.0, 1.0)).clamp(min=0.0)
+            mg_b, sg_b, sw_b = mg, sg, sw
+
         L = L * gL
         R = R * gR
-
-        # Mid/Side decompose
         mid  = 0.5 * (L + R)
         side = 0.5 * (L - R)
-
-        # Apply gains
-        mid_p  = mid  * mg
-        side_p = side * sg
-
-        # Optional M/S swap fraction
-        mid_out  = (1.0 - sw) * mid_p  + sw * side_p
-        side_out = (1.0 - sw) * side_p + sw * mid_p
-
+        mid_p  = mid  * mg_b
+        side_p = side * sg_b
+        mid_out  = (1.0 - sw_b) * mid_p  + sw_b * side_p
+        side_out = (1.0 - sw_b) * side_p + sw_b * mid_p
         L_out = mid_out + side_out
         R_out = mid_out - side_out
         return torch.stack([L_out, R_out], dim=-2)

@@ -151,6 +151,48 @@ class MasteringMLP(nn.Module):
         return self.net(features)
 
 
+def denormalize_params_batched(params_norm: torch.Tensor) -> dict:
+    """V9.5.3-v4 : version batchée de denormalize_params.
+
+    params_norm : (B, 62) tensor → dict de tensors batchés (B, ...) ou (B,).
+    Tous les sub-engines surrogate acceptent ces tensors batched directement.
+    """
+    assert params_norm.dim() == 2 and params_norm.shape[1] == N_PARAMS_OUT, \
+        f"expected (B, {N_PARAMS_OUT}), got {params_norm.shape}"
+
+    def lookup(key, slot):
+        mn, mx = PARAM_RANGES[key]
+        return params_norm[:, slot] * (mx - mn) + mn   # (B,) ou (B, k)
+
+    return {
+        'eq': {
+            'freq':    lookup('eq.freq',    PARAM_LAYOUT['eq.freq']),
+            'gain_db': lookup('eq.gain_db', PARAM_LAYOUT['eq.gain_db']),
+            'q':       lookup('eq.q',       PARAM_LAYOUT['eq.q']),
+        },
+        'exciter': {
+            'amount':  lookup('exciter.amount',  PARAM_LAYOUT['exciter.amount']),
+            'drive':   lookup('exciter.drive',   PARAM_LAYOUT['exciter.drive']),
+            'freq_hz': lookup('exciter.freq_hz', PARAM_LAYOUT['exciter.freq_hz']),
+            'ceiling': lookup('exciter.ceiling', PARAM_LAYOUT['exciter.ceiling']),
+        },
+        'stereo': {
+            'balance':   lookup('stereo.balance',   PARAM_LAYOUT['stereo.balance']),
+            'mid_gain':  lookup('stereo.mid_gain',  PARAM_LAYOUT['stereo.mid_gain']),
+            'side_gain': lookup('stereo.side_gain', PARAM_LAYOUT['stereo.side_gain']),
+            'sm_swap':   lookup('stereo.sm_swap',   PARAM_LAYOUT['stereo.sm_swap']),
+        },
+        'limiter': {
+            'threshold_db': lookup('limiter.threshold_db', PARAM_LAYOUT['limiter.threshold_db']),
+            'ceiling_lin':  lookup('limiter.ceiling_lin',  PARAM_LAYOUT['limiter.ceiling_lin']),
+            'attack_ms':    lookup('limiter.attack_ms',    PARAM_LAYOUT['limiter.attack_ms']),
+            'release_ms':   lookup('limiter.release_ms',   PARAM_LAYOUT['limiter.release_ms']),
+            'input_db':     lookup('limiter.input_db',     PARAM_LAYOUT['limiter.input_db']),
+            'output_db':    lookup('limiter.output_db',    PARAM_LAYOUT['limiter.output_db']),
+        },
+    }
+
+
 class MasteringConv1D(nn.Module):
     """V9.5.3-v2 : modèle Conv1D temporel sur features par frame.
 

@@ -109,7 +109,8 @@ except ImportError:
 
 TFLITE_PATH = '/etc/mastering_npu.tflite'
 API_URL     = 'http://127.0.0.1:8080/api/cmd'
-INFER_HZ    = 5.0   # 200 ms par cycle
+INFER_HZ    = 10.0  # 100 ms par cycle (sliding window 1s analyse)
+ANALYSIS_WINDOW_SEC = 1.0   # le modèle a été entraîné sur 1s chunks
 
 # Param layout (must match training/model.py PARAM_LAYOUT)
 N_PARAMS = 62

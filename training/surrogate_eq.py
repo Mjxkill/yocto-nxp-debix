@@ -36,6 +36,25 @@ import torch.nn as nn
 import torchaudio.functional as TAF
 
 
+def lfilter_batched(x: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """V9.5.3-v4 : applique des coefs IIR différents par batch item.
+
+    x : (B, C, N) audio multi-batch multi-channel
+    a, b : (B, num_taps) coefs IIR par batch
+    Returns : (B, C, N)
+
+    torchaudio.lfilter avec batching=True attend
+    waveform (..., M, N) + coefs (M, taps) → applique filter[i] à waveform[..., i, :].
+    On reshape (B, C, N) → (B*C, N) et duplique coefs C fois.
+    """
+    B, C, N = x.shape
+    x_flat = x.reshape(B * C, N)
+    a_flat = a.repeat_interleave(C, dim=0)
+    b_flat = b.repeat_interleave(C, dim=0)
+    out_flat = TAF.lfilter(x_flat, a_flat, b_flat, clamp=False, batching=True)
+    return out_flat.reshape(B, C, N)
+
+
 def biquad_peak_coefs(freq_hz: torch.Tensor,
                       gain_db: torch.Tensor,
                       q: torch.Tensor,
@@ -98,20 +117,25 @@ class ParaEQx16Surrogate(nn.Module):
                 q: torch.Tensor = None) -> torch.Tensor:
         """Apply 16 biquads à x.
 
-        x : (C, N) ou (B, C, N) audio float32, C=channels
-        freq, gain_db, q : (16,) — si None, use self.{...}
-
-        Returns : same shape as x.
+        Modes :
+          - Unbatched : x (C, N), params (16,) → identique original
+          - Batched   : x (B, C, N), params (B, 16) → V9.5.3-v4
         """
         f = self.freq    if freq    is None else freq
         g = self.gain_db if gain_db is None else gain_db
         Q = self.q       if q       is None else q
 
+        batched = (f.dim() == 2)   # (B, 16) batched / (16,) unbatched
+
         out = x
-        for i in range(16):
-            b, a = biquad_peak_coefs(f[i], g[i], Q[i], self.sr)
-            # lfilter expects 1D coefs ; broadcasts on batch & channels
-            out = TAF.lfilter(out, a, b, clamp=False)
+        if batched:
+            for i in range(16):
+                b, a = biquad_peak_coefs(f[:, i], g[:, i], Q[:, i], self.sr)  # (B, 3)
+                out = lfilter_batched(out, a, b)
+        else:
+            for i in range(16):
+                b, a = biquad_peak_coefs(f[i], g[i], Q[i], self.sr)            # (3,)
+                out = TAF.lfilter(out, a, b, clamp=False)
         return out
 
 

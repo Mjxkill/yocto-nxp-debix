@@ -20,6 +20,7 @@ import math
 import torch
 import torch.nn as nn
 import torchaudio.functional as TAF
+from surrogate_eq import lfilter_batched
 
 
 def highpass_biquad(freq_hz: torch.Tensor, q: torch.Tensor, sr: float):
@@ -84,15 +85,22 @@ class CalfExciterSurrogate(nn.Module):
         f    = self.freq_hz if freq_hz is None else freq_hz
         clip = self.ceiling if ceiling is None else ceiling
 
-        # 1) HPF pour isoler la bande haute
-        b, a_coefs = highpass_biquad(f, self.q, self.sr)
-        high = TAF.lfilter(x, a_coefs, b, clamp=False)
+        batched = (a.dim() >= 1 and a.shape[0] > 1)   # heuristique : tensor (B,)
 
-        # 2) Saturation tanh sur la bande haute
-        wet = torch.tanh(d * high)
-
-        # 3) Mix wet × amount + dry × 1
-        mix = x + a * wet
-
-        # 4) Soft ceiling
-        return clip * torch.tanh(mix / clip.clamp(min=1e-6))
+        if batched:
+            B = a.shape[0]
+            q_b = self.q.expand_as(f)
+            b_co, a_co = highpass_biquad(f, q_b, self.sr)   # (B, 3)
+            high = lfilter_batched(x, a_co, b_co)
+            d_b   = d.view(B, 1, 1)
+            a_b   = a.view(B, 1, 1)
+            cl_b  = clip.view(B, 1, 1).clamp(min=1e-6)
+            wet = torch.tanh(d_b * high)
+            mix = x + a_b * wet
+            return cl_b * torch.tanh(mix / cl_b)
+        else:
+            b, a_coefs = highpass_biquad(f, self.q, self.sr)
+            high = TAF.lfilter(x, a_coefs, b, clamp=False)
+            wet  = torch.tanh(d * high)
+            mix  = x + a * wet
+            return clip * torch.tanh(mix / clip.clamp(min=1e-6))
