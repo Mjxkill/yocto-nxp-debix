@@ -30,7 +30,10 @@ SR_DEFAULT     = 48000
 FRAME_SIZE     = 1024
 HOP_SIZE       = 512
 N_BANDS        = 5
-N_FEATURES     = N_BANDS * 3 + 2          # 5 mid + 5 side + 5 centroïdes + 2 niveaux globaux = 17
+N_FEATURES     = N_BANDS * 3 + 2          # 5 mid + 5 side + 5 centroïdes + 2 niveaux globaux = 17 (v1 legacy)
+# V9.5.3-v2 : drop side features (artifact dataset raw mono → master stéréo).
+# Mid-only = 5 mid_rms + 5 mid_centroid + 1 mid_global = 11 features.
+N_FEATURES_MID_ONLY = N_BANDS * 2 + 1     # 11
 
 BAND_HZ = np.array([
     (   20.0,   200.0),
@@ -134,6 +137,34 @@ def feature_names() -> list:
         names.append(f"mid_b{b}_centroid_hz")
     names.append("mid_global_db")
     names.append("side_global_db")
+    return names
+
+
+def compute_features_mid_only(audio: np.ndarray, sr: int = SR_DEFAULT) -> np.ndarray:
+    """V9.5.3-v2 : extrait features mid-only (drop side, qui sont artifact
+    dataset raw mono → master stéréo).
+
+    Returns : (n_frames, N_FEATURES_MID_ONLY=11) float32
+    Layout : [mid_b0..b4_rms_db, mid_b0..b4_centroid_hz, mid_global_db]
+    """
+    full = compute_features(audio, sr=sr)
+    if len(full) == 0:
+        return np.zeros((0, N_FEATURES_MID_ONLY), dtype=np.float32)
+    # Indices : mid_b0..b4 = [0..4], mid_centroid_b0..b4 = [10..14], mid_global = [15]
+    out = np.zeros((len(full), N_FEATURES_MID_ONLY), dtype=np.float32)
+    out[:, 0:5]   = full[:, 0:5]      # mid_b0..b4_rms_db
+    out[:, 5:10]  = full[:, 10:15]    # mid_b0..b4_centroid_hz
+    out[:, 10]    = full[:, 15]       # mid_global_db
+    return out
+
+
+def feature_names_mid_only() -> list:
+    names = []
+    for b in range(N_BANDS):
+        names.append(f"mid_b{b}_rms_db")
+    for b in range(N_BANDS):
+        names.append(f"mid_b{b}_centroid_hz")
+    names.append("mid_global_db")
     return names
 
 

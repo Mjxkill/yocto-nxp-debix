@@ -18,8 +18,9 @@ import torch
 import torch.nn as nn
 
 
-N_FEATURES_IN  = 17
-N_PARAMS_OUT   = 62
+N_FEATURES_IN     = 17               # v1 legacy
+N_FEATURES_IN_V2  = 11               # v2 : mid-only features
+N_PARAMS_OUT      = 62
 
 # Param indices dans le vecteur 62-D :
 PARAM_LAYOUT = {
@@ -147,6 +148,42 @@ class MasteringMLP(nn.Module):
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """features : (B, N_FEATURES_IN). Returns (B, N_PARAMS_OUT) ∈ [0,1]."""
+        return self.net(features)
+
+
+class MasteringConv1D(nn.Module):
+    """V9.5.3-v2 : modèle Conv1D temporel sur features par frame.
+
+    Input  : (B, N_FEATURES_IN_V2=11, N_frames) — features par frame
+    Output : (B, N_PARAMS_OUT=62)                — params par chunk (global)
+
+    Architecture :
+      Conv1D 11 → 64  (kernel 5)
+      ReLU
+      Conv1D 64 → 128 (kernel 5)
+      ReLU
+      AdaptiveAvgPool1D → (B, 128, 1)
+      Linear 128 → 62
+      Sigmoid
+
+    ~25K params, quantizable INT8.
+    """
+
+    def __init__(self, n_input: int = N_FEATURES_IN_V2):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv1d(n_input, 64, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.Conv1d(64, 128, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(128, N_PARAMS_OUT),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """features : (B, N_FEATURES_IN_V2, N_frames). Returns (B, 62)."""
         return self.net(features)
 
 
