@@ -679,7 +679,9 @@ static int lv2_host_supports_feature(const char *uri)
 	return 0;
 }
 
-#define LV2_MAX_CTRL_PORTS 64
+/* V9.5.12 : 64 → 256 pour LSP Para EQ x16 stereo (~158 ports : globals +
+ * 9 params × 16 bands). Cap à 64 = seules les ~5 premières bandes visibles. */
+#define LV2_MAX_CTRL_PORTS 256
 #define LV2_MAX_NAME_LEN   32
 
 /* V9.2-step5d : LV2 worker support (1 thread non-RT per plugin instance).
