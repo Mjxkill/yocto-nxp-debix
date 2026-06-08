@@ -26,7 +26,7 @@
 
 #include <stdint.h>
 
-#define MIXER_VERSION  "v9.4.3-alsa-bytes"
+#define MIXER_VERSION  "v9.5.5-fast-smooth"
 
 /* E6.g Phase 2 + E6.h tuning : ring buffer SPSC entre thread audio (cap+mix)
  * et thread play DSP. Taille = N_RING_PERIODS périodes × 18 ch × 4 B.

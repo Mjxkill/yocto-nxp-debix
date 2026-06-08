@@ -1,5 +1,14 @@
 # ARCHI V10 — NPU mastering autonome
 
+> ⚠ **OBSOLÈTE depuis 2026-06-08** — Ce document décrit l'architecture
+> initiale V9.5.3 (MasteringMLP 17 features). Le modèle a évolué vers
+> **MasteringConv1D 11 features avec window 200 ms + loss delta-matching**.
+>
+> **Document à jour** : `ARCHI/ARCHI_V9.5.12.md`
+>
+> Conservé ici comme historique de la direction initiale et choix
+> d'architecture parents (insert mixer-pro, smoothing externe, etc.).
+
 **Branche** : `feature/v7.0-multiband-drc-tap` (commits V9.4 → V9.6)
 **Date d'init** : 2026-06-05
 

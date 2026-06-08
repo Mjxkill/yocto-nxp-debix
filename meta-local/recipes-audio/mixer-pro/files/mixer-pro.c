@@ -2242,6 +2242,64 @@ static void handle_cmd(int fd, const char *line)
 			        slot, param, value);
 		}
 
+	} else if (json_has_op(line, "set_insert_params_bulk")) {
+		/* V9.5.5 : set N params en 1 seule call HTTP pour 50 Hz update NPU.
+		 *
+		 * Format : {"op":"set_insert_params_bulk","params":[
+		 *   [slot, "name", value],
+		 *   [slot, "name", value],
+		 *   ...
+		 * ]}
+		 *
+		 * Parser ad-hoc : itère sur les `[slot,"name",value]` entre `"params":[`
+		 * et le matching `]` final. Pour chaque triple, set le param.
+		 * Tous les sets sont effectués sous un seul lock pour cohérence atomic. */
+		if (!atomic_load(&g_insert_active)) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"insert not active\"}\n"); return;
+		}
+		const char *p = strstr(line, "\"params\"");
+		if (!p) { dprintf(fd, "{\"ok\":false,\"err\":\"missing params\"}\n"); return; }
+		p = strchr(p, '[');
+		if (!p) { dprintf(fd, "{\"ok\":false,\"err\":\"bad params array\"}\n"); return; }
+		p++;
+		int n_set = 0, n_fail = 0;
+		pthread_mutex_lock(&g_st.target_lock);
+		while (*p && *p != ']') {
+			/* Find next `[slot,"name",value]` */
+			while (*p == ' ' || *p == ',') p++;
+			if (*p != '[') break;
+			p++;   /* skip '[' */
+			while (*p == ' ') p++;
+			int slot = atoi(p);
+			while (*p && *p != ',') p++;
+			if (*p == ',') p++;
+			while (*p == ' ') p++;
+			if (*p != '"') break;
+			p++;
+			char pname[32];
+			int i_name = 0;
+			while (*p && *p != '"' && i_name < (int)sizeof(pname) - 1)
+				pname[i_name++] = *p++;
+			pname[i_name] = 0;
+			if (*p == '"') p++;
+			while (*p == ' ' || *p == ',') p++;
+			float value = (float)atof(p);
+			/* Skip value digits */
+			while (*p && *p != ']' && *p != ',') p++;
+			while (*p && *p != ']') p++;
+			if (*p == ']') p++;
+			/* Apply */
+			char composite[64];
+			snprintf(composite, sizeof(composite), "%d/%s", slot, pname);
+			int rc = g_insert_chain.set_param(&g_insert_chain, composite, value);
+			if (rc < 0) n_fail++;
+			else n_set++;
+		}
+		pthread_mutex_unlock(&g_st.target_lock);
+		if (n_set > 0) atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_insert_params_bulk\","
+		            "\"set\":%d,\"fail\":%d}\n", n_set, n_fail);
+
 	} else if (json_has_op(line, "get_insert")) {
 		/* Dump JSON full : type + n + chain[] avec slot/state/ranges */
 		if (!atomic_load(&g_insert_active)) {

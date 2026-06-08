@@ -48,3 +48,5 @@ backup/
 # Auto-generated reports (kept locally for reference)
 rapport_run-*.md
 rapport_run-*.pdf
+.venv-mastering/
+training/lv2_chain_host.so

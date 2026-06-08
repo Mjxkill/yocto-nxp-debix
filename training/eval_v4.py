@@ -38,35 +38,68 @@ CHAIN_URIS = [
 
 
 def apply_params_to_real_lv2(real_chain, params):
-    """Set params on real LV2 chain (best-effort name mapping)."""
+    """Set params on real LV2 chain — vraie noms LV2 (vérifiés par lilv).
+    Pas de try/except : un crash veut dire mapping faux et doit être fixé.
+    """
+    # === Slot 0 : LSP Para EQ x16 stereo ===
+    # Par défaut ft_X = 0 (OFF). On set ft_X = 2 (bell/peak) pour activer.
+    # g_X est en linéaire (0.0158 = -36 dB ... 63 = +36 dB ; def 1.0 = 0 dB)
+    # q_X range 0-100 dans LSP (Q standard biquad ~0.3-4 chez nous suffit)
     eq = params['eq']
     for b in range(16):
-        try: real_chain.set_param(0, f'f_{b}', float(eq['freq'][b].item()))
-        except: pass
-        try:
-            g_lin = float(10.0 ** (eq['gain_db'][b].item() / 20.0))
-            real_chain.set_param(0, f'g_{b}', g_lin)
-        except: pass
-        try: real_chain.set_param(0, f'q_{b}', float(eq['q'][b].item()))
-        except: pass
+        real_chain.set_param(0, f'ft_{b}', 1.0)             # 1 = Bell (= peak)
+        real_chain.set_param(0, f'f_{b}', float(eq['freq'][b].item()))
+        g_lin = float(10.0 ** (eq['gain_db'][b].item() / 20.0))
+        real_chain.set_param(0, f'g_{b}', g_lin)
+        real_chain.set_param(0, f'q_{b}', float(eq['q'][b].item()))
+
+    # === Slot 1 : Calf Exciter ===
     ex = params['exciter']
-    for our, real in [('amount', 'amount'), ('drive', 'drive'),
-                      ('freq_hz', 'freq'), ('ceiling', 'ceil')]:
-        try: real_chain.set_param(1, real, float(ex[our].item()))
-        except: pass
+    real_chain.set_param(1, 'amount', float(ex['amount'].item()))
+    real_chain.set_param(1, 'drive',  float(ex['drive'].item()))
+    real_chain.set_param(1, 'freq',   float(ex['freq_hz'].item()))
+    real_chain.set_param(1, 'ceil',   float(ex['ceiling'].item()))
+
+    # === Slot 2 : Calf StereoTools ===
     st = params['stereo']
-    for our, real in [('balance', 'balance'), ('mid_gain', 'mlevel'),
-                      ('side_gain', 'slevel')]:
-        try: real_chain.set_param(2, real, float(st[our].item()))
-        except: pass
+    real_chain.set_param(2, 'balance_in', float(st['balance'].item()))
+    real_chain.set_param(2, 'mlev',       float(st['mid_gain'].item()))
+    real_chain.set_param(2, 'slev',       float(st['side_gain'].item()))
+
+    # === Slot 3 : LSP Limiter Stereo ===
     lm = params['limiter']
-    try:
-        th_lin = float(10.0 ** (lm['threshold_db'].item() / 20.0))
-        real_chain.set_param(3, 'th', th_lin)
-    except: pass
+    real_chain.set_param(3, 'th',    float(10.0 ** (lm['threshold_db'].item() / 20.0)))
+    real_chain.set_param(3, 'g_in',  float(10.0 ** (lm['input_db'].item()    / 20.0)))
+    real_chain.set_param(3, 'g_out', float(10.0 ** (lm['output_db'].item()   / 20.0)))
+    real_chain.set_param(3, 'at',    float(lm['attack_ms'].item()))
+    real_chain.set_param(3, 'rt',    float(lm['release_ms'].item()))
 
 
-def evaluate(ckpt_tag, n_pairs=3):
+def cap_params(params, cap_eq_db=3.0, cap_limiter_in_db=3.0,
+               force_drive=None, force_balance=None):
+    """V9.5.3-v4 — Post-process cap pour réduire le loudness war / boost
+    spectral excessif appris par le modèle. Applied à l'inférence (pas au
+    training).
+
+    force_drive   : override exciter.drive (range LV2 1..6).
+    force_balance : override stereo.balance (range -1..+1, 0 = centre).
+    """
+    params['eq']['gain_db'] = torch.clamp(params['eq']['gain_db'],
+                                          -cap_eq_db, +cap_eq_db)
+    params['limiter']['input_db'] = torch.clamp(params['limiter']['input_db'],
+                                                 0.0, cap_limiter_in_db)
+    if force_drive is not None:
+        params['exciter']['drive'] = torch.full_like(
+            params['exciter']['drive'], float(force_drive))
+    if force_balance is not None:
+        params['stereo']['balance'] = torch.full_like(
+            params['stereo']['balance'], float(force_balance))
+    return params
+
+
+def evaluate(ckpt_tag, n_pairs=3, max_seconds=20,
+             cap_eq_db=3.0, cap_limiter_in_db=3.0,
+             force_drive=None, force_balance=None):
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     ckpt_path = CKPT_DIR / f"conv_{ckpt_tag}.pt"
     print(f"Loading {ckpt_path.name}...")
@@ -95,8 +128,11 @@ def evaluate(ckpt_tag, n_pairs=3):
         raw, _ = load_audio(pair.raw_path)
         tgt, _ = load_audio(pair.master_path)
 
-        # Process first 20s for listening test
-        n_full = min(len(raw), len(tgt), 20 * SR)
+        # Limit to max_seconds (negative = full track)
+        if max_seconds > 0:
+            n_full = min(len(raw), len(tgt), max_seconds * SR)
+        else:
+            n_full = min(len(raw), len(tgt))
         raw = raw[:n_full].astype(np.float32)
         tgt = tgt[:n_full].astype(np.float32)
 
@@ -107,6 +143,8 @@ def evaluate(ckpt_tag, n_pairs=3):
         with torch.no_grad():
             params_norm = model(feats_t)
             params = denormalize_params(params_norm[0])
+            params = cap_params(params, cap_eq_db, cap_limiter_in_db,
+                                force_drive, force_balance)
 
         # Surrogate
         raw_t = torch.from_numpy(raw.T).to(DEVICE)
@@ -139,5 +177,17 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--ckpt', type=str, required=True)
     ap.add_argument('--n_pairs', type=int, default=3)
+    ap.add_argument('--seconds', type=int, default=20,
+                    help='Limit each track to N seconds (-1 = full track)')
+    ap.add_argument('--cap_eq_db', type=float, default=3.0,
+                    help='Clamp EQ gain_db to ±X dB (post-process cap)')
+    ap.add_argument('--force_drive', type=float, default=None,
+                    help='Override exciter drive [1..6]. None = utilise param prédit')
+    ap.add_argument('--force_balance', type=float, default=None,
+                    help='Override stereo balance [-1..+1]. 0 = centre.')
+    ap.add_argument('--cap_limiter_in_db', type=float, default=3.0,
+                    help='Clamp limiter input_db to [0, X] dB (post-process cap)')
     args = ap.parse_args()
-    evaluate(args.ckpt, n_pairs=args.n_pairs)
+    evaluate(args.ckpt, n_pairs=args.n_pairs, max_seconds=args.seconds,
+             cap_eq_db=args.cap_eq_db, cap_limiter_in_db=args.cap_limiter_in_db,
+             force_drive=args.force_drive, force_balance=args.force_balance)

@@ -902,11 +902,14 @@ static void *lv2_worker_thread_fn(void *arg)
  *   → Gain attendu 30-60× sur plugins lourds.
  *
  * Worker response commit + atom reset : 1 fois par block (vs 96 fois). */
-/* V9.4.1 : smoothing alpha pour ctrl params LV2 (interpolation linéaire vers
- * target). Calculé une fois pour tau=50ms à 48kHz/period=96.
+/* V9.4.1 / V9.5.5 / V9.5.12 : smoothing alpha pour ctrl params LV2.
+ * V9.4.1  = tau 50 ms (alpha 0.039, 95% en ~150 ms) — update NPU 5-10 Hz.
+ * V9.5.5  = tau 10 ms (alpha 0.18,  95% en ~30 ms)  — update NPU 50 Hz fast.
+ * V9.5.12 = tau 50 ms (alpha 0.039, 95% en ~150 ms) — update NPU 100 Hz
+ *           SLOW SMOOTH : updates fréquents mais smoothing lent absorbe le
+ *           vibrato des paramètres dû aux transients (trompette etc.).
  * Formule : alpha = 1 - expf(-PERIOD_FRAMES / (tau * SAMPLE_RATE))
- *         = 1 - expf(-96 / (0.05 * 48000)) = 1 - expf(-0.04) ≈ 0.0392.
- * 95% convergence en ~150 ms = 75 cycles. */
+ *         = 1 - expf(-96 / (0.050 * 48000)) = 1 - expf(-0.04) ≈ 0.0392. */
 #define LV2_CTRL_SMOOTH_ALPHA  0.0392f
 
 static void lv2_process_block(fx_engine_t *fx,

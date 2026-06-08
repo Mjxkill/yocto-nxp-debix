@@ -52,12 +52,13 @@ PARAM_RANGES = {
     'eq.q':                 (0.3,      4.0),
     'exciter.amount':       (0.0,      1.0),
     'exciter.drive':        (1.0,      6.0),
-    'exciter.freq_hz':      (1000.0,   12000.0),
+    'exciter.freq_hz':      (5000.0,   12000.0),    # V5.9 : min 5 kHz pour vrai "air"
     'exciter.ceiling':      (0.5,      1.0),
-    'stereo.balance':       (-0.5,     +0.5),
-    'stereo.mid_gain':      (0.5,      1.5),
-    'stereo.side_gain':     (0.3,      2.0),
-    'stereo.sm_swap':       (0.0,      0.5),
+    # V9.5.3-v5 : ranges plus serrées sur stéréo pour éviter loudness war
+    'stereo.balance':       (-0.2,     +0.2),    # centré (vs -0.5..+0.5 v4)
+    'stereo.mid_gain':      (0.7,      1.4),    # ~ -3 à +3 dB (vs 0.5..1.5 = -6..+3.5)
+    'stereo.side_gain':     (0.5,      1.7),    # ~ -6 à +4.6 dB (vs 0.3..2.0 = -10..+6)
+    'stereo.sm_swap':       (0.0,      0.3),    # moins de swap (vs 0..0.5)
     'limiter.threshold_db': (-12.0,    0.0),
     'limiter.ceiling_lin':  (0.85,     0.99),
     'limiter.attack_ms':    (0.3,      10.0),
