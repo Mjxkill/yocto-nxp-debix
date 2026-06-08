@@ -16,6 +16,9 @@ SRC_URI = " \
     file://effects.h \
     file://analyzer.c \
     file://analyzer.h \
+    file://ml_features.c \
+    file://ml_features.h \
+    file://ml_features_test.c \
     file://mixerctl.c \
     file://Makefile \
     file://mixer-pro.service \
@@ -25,12 +28,9 @@ S = "${WORKDIR}"
 
 inherit systemd pkgconfig
 
-DEPENDS = "alsa-lib lilv"
-# V9.2 — lilv = LV2 host library. RDEPENDS sur lilv + lv2 (core spec)
-# pour avoir libraries + core LV2 namespaces dispo au runtime. Plugins LV2
-# tiers (Calf, x42, …) optionnels — l'utilisateur installe via dpkg / Yocto
-# IMAGE_INSTALL selon ses besoins ; mixer-pro charge dynamiquement.
-RDEPENDS:${PN} = "alsa-lib lilv lv2"
+# V9.5.12 — fftw = FFT lib pour ml_features.c (FFT 1024 float32).
+DEPENDS = "alsa-lib lilv fftw"
+RDEPENDS:${PN} = "alsa-lib lilv lv2 fftw"
 
 do_compile() {
     oe_runmake CC="${CC}" CFLAGS="${CFLAGS}" LDFLAGS="${LDFLAGS}"
@@ -38,8 +38,9 @@ do_compile() {
 
 do_install() {
     install -d ${D}${bindir}
-    install -m 0755 ${B}/mixer-pro ${D}${bindir}/mixer-pro
-    install -m 0755 ${B}/mixerctl  ${D}${bindir}/mixerctl
+    install -m 0755 ${B}/mixer-pro        ${D}${bindir}/mixer-pro
+    install -m 0755 ${B}/mixerctl         ${D}${bindir}/mixerctl
+    install -m 0755 ${B}/ml_features_test ${D}${bindir}/ml_features_test
 
     install -d ${D}${systemd_unitdir}/system
     install -m 0644 ${WORKDIR}/mixer-pro.service ${D}${systemd_unitdir}/system/mixer-pro.service
@@ -48,6 +49,7 @@ do_install() {
 FILES:${PN} = " \
     ${bindir}/mixer-pro \
     ${bindir}/mixerctl \
+    ${bindir}/ml_features_test \
     ${systemd_unitdir}/system/mixer-pro.service \
 "
 
