@@ -8,6 +8,7 @@ LILV_CFLAGS := $(shell pkg-config --cflags lilv-0 2>/dev/null)
 LILV_LIBS   := $(shell pkg-config --libs   lilv-0 2>/dev/null)
 # V9.5.12 — fftw3f pour ml_features.c (FFT 1024 float32).
 FFTW_LIBS := -lfftw3f
+# V9.5.12 — librt = shm_open/mmap pour SHM tap audio export.
 LIBS     = -lasound -lpthread -lm -lrt
 
 PREFIX  ?= /usr
@@ -15,8 +16,14 @@ BINDIR  ?= $(PREFIX)/bin
 
 all: mixer-pro mixerctl ml_features_test
 
-mixer-pro: mixer-pro.c mixer-pro.h effects.c effects.h analyzer.c analyzer.h ml_features.c ml_features.h
-	$(CC) $(CFLAGS) $(LILV_CFLAGS) $(LDFLAGS) -o $@ mixer-pro.c effects.c analyzer.c ml_features.c $(LIBS) $(LILV_LIBS) $(FFTW_LIBS)
+# V9.5.12 — mixer-pro NE link plus tensorflow-lite (TFLite causait freeze
+# kernel via VX delegate + galcore + audio_thread RT99). L'inférence ML
+# est faite par le daemon mixer-ml-inference (process séparé).
+mixer-pro: mixer-pro.c mixer-pro.h effects.c effects.h analyzer.c analyzer.h \
+           mixer_pro_shm_tap.c mixer_pro_shm_tap.h
+	$(CC) $(CFLAGS) $(LILV_CFLAGS) $(LDFLAGS) -o $@ \
+	    mixer-pro.c effects.c analyzer.c mixer_pro_shm_tap.c \
+	    $(LIBS) $(LILV_LIBS)
 
 mixerctl: mixerctl.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ mixerctl.c

@@ -19,6 +19,8 @@ SRC_URI = " \
     file://ml_features.c \
     file://ml_features.h \
     file://ml_features_test.c \
+    file://mixer_pro_shm_tap.c \
+    file://mixer_pro_shm_tap.h \
     file://mixerctl.c \
     file://Makefile \
     file://mixer-pro.service \
@@ -28,7 +30,9 @@ S = "${WORKDIR}"
 
 inherit systemd pkgconfig
 
-# V9.5.12 — fftw = FFT lib pour ml_features.c (FFT 1024 float32).
+# V9.5.12 — fftw pour ml_features.c (utilisé par programme test + daemon ML).
+# tensorflow-lite RETIRÉ : l'inférence NPU est dans mixer-ml-inference (daemon
+# séparé, voir meta-local/recipes-audio/mixer-ml-inference).
 DEPENDS = "alsa-lib lilv fftw"
 RDEPENDS:${PN} = "alsa-lib lilv lv2 fftw"
 

@@ -1150,6 +1150,14 @@ static atomic_int g_presets_dirty = 0;
  * Init/swap protégé par target_lock (cohérent avec mix_block). */
 static fx_engine_t g_insert_chain;
 static atomic_int  g_insert_active = 0;
+/* V9.5.12 — état Mixer Assistant (consommé par daemon mixer-ml-inference
+ * via socket get_assistant). mixer-pro ne fait PAS d'inférence TFLite
+ * (process séparé pour éviter conflit galcore + audio_thread RT99).
+ *  - mode  : 0=passthrough, 1=mastering
+ *  - source: 0=HW IN, 1=USB IN
+ */
+static _Atomic int g_assistant_mode   = 0;
+static _Atomic int g_assistant_source = 0;
 /* g_no_asrc déclaré plus haut près de g_shift_ppm */
 
 /* ============================== Logging ============================ */
@@ -1578,6 +1586,15 @@ static void *audio_thread(void *arg)
 
 		/* MIX BLOCK — 1 appel pour 96 frames (vs 96 calls × 1 frame) */
 		mix_block(in_block, out_block, bus_pre_block, ret_post_block, PERIOD_FRAMES);
+
+		/* V9.5.12 — Export SHM tap USB IN [8,9] pour daemon mixer-ml-inference
+		 * (process séparé). Le daemon lit ce tap pour faire l'inférence NPU
+		 * sans toucher au process audio RT. Toujours actif (overhead ~768 B
+		 * memcpy par période = trivial). */
+		extern void mixer_pro_shm_tap_write(const float *L, const float *R, int n);
+		mixer_pro_shm_tap_write(in_block[N_INPUT_MICS],
+		                        in_block[N_INPUT_MICS + 1],
+		                        PERIOD_FRAMES);
 
 		/* V9.4 — Insert mastering post-master sur out_0+out_1 DSP.
 		 * In-place : out_block[0/1] modifié si insert actif. Autres out
@@ -2310,6 +2327,36 @@ static void handle_cmd(int fd, const char *line)
 		int n = g_insert_chain.get_state(&g_insert_chain, insert_buf, sizeof(insert_buf));
 		pthread_mutex_unlock(&g_st.target_lock);
 		dprintf(fd, "{\"ok\":true,\"active\":true,%s}\n", n > 0 ? insert_buf : "");
+
+	} else if (json_has_op(line, "set_assistant_mode")) {
+		/* V9.5.12 — Stocke l'état Mixer Assistant. mixer-pro ne fait PAS
+		 * d'inférence (process séparé mixer-ml-inference s'en charge,
+		 * pour éviter freeze kernel TFLite+galcore+RT99). Le daemon poll
+		 * get_assistant pour savoir quoi faire.
+		 *
+		 * Format : {"op":"set_assistant_mode","mode":"mastering"|"passthrough",
+		 *          "source":"hw"|"usb"}    (source optionnel, défaut hw)
+		 */
+		char mode_str[32] = "", src_str[8] = "";
+		(void)json_get_str(line, "mode",   mode_str, sizeof(mode_str));
+		(void)json_get_str(line, "source", src_str,  sizeof(src_str));
+		int mode = (strcmp(mode_str, "mastering") == 0) ? 1 : 0;
+		int src  = (strcmp(src_str,  "usb")       == 0) ? 1 : 0;
+		atomic_store_explicit(&g_assistant_mode,   mode, memory_order_release);
+		atomic_store_explicit(&g_assistant_source, src,  memory_order_release);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_assistant_mode\","
+		            "\"mode\":\"%s\",\"source\":\"%s\"}\n",
+		        mode ? "mastering" : "passthrough",
+		        src  ? "usb"       : "hw");
+
+	} else if (json_has_op(line, "get_assistant")) {
+		/* Renvoie état Mixer Assistant. Le daemon mixer-ml-inference
+		 * poll cet endpoint pour savoir source/mode actuels. */
+		int mode = atomic_load_explicit(&g_assistant_mode,   memory_order_relaxed);
+		int src  = atomic_load_explicit(&g_assistant_source, memory_order_relaxed);
+		dprintf(fd, "{\"ok\":true,\"mode\":\"%s\",\"source\":\"%s\"}\n",
+		        mode ? "mastering" : "passthrough",
+		        src  ? "usb"       : "hw");
 
 	} else if (json_has_op(line, "insert_bypass")) {
 		/* Format : {"op":"insert_bypass","bypass":true|false}.
@@ -3105,6 +3152,10 @@ int main(int argc, char **argv)
 	pthread_create(&th_analyzer, NULL, analyzer_thread, NULL);  /* E7.5 */
 	/* V9.3.5 : thread persistence presets (debounced 1s) */
 	pthread_create(&th_persist, NULL, persistence_thread, NULL);
+	/* V9.5.12 : SHM tap USB IN pour daemon mixer-ml-inference (process séparé).
+	 * Crée /dev/shm/mixer-pro-tap-usb. audio_thread y écrit en continu. */
+	extern int mixer_pro_shm_tap_init(void);
+	mixer_pro_shm_tap_init();
 	/* V8.1 : threads UAC2 dédiés (isolation USB ↔ DSP) */
 	if (!g_skip_uac2) {
 		pthread_create(&th_cap_uac2,  NULL, cap_uac2_thread,  NULL);
