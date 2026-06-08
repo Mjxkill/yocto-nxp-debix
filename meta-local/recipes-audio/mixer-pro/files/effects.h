@@ -60,6 +60,8 @@ int fx_init_compressor(fx_engine_t *fx, float sample_rate);
 int fx_init_reverb    (fx_engine_t *fx, float sample_rate);
 int fx_init_delay     (fx_engine_t *fx, float sample_rate);
 int fx_init_eq        (fx_engine_t *fx, float sample_rate);
+/* V9.5.12 — 16 biquads peak stéréo lock-free (mastering ML). */
+int fx_init_para_eq_x16(fx_engine_t *fx, float sample_rate);
 
 /* V9.2 — LV2 plugin host (lilv-0).
  * Charge dynamiquement un plugin LV2 par son URI, vérifie hardRTCapable,

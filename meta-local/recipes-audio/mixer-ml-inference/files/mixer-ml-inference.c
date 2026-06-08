@@ -56,8 +56,12 @@
 
 #define N_PARAMS                62
 #define N_FRAMES                19      /* 19 × 10.7 ms = 200 ms context */
-#define LOOP_PERIOD_NS          (20 * 1000 * 1000)   /* 20 ms = 50 Hz */
-#define POLL_STATE_NS           (200 * 1000 * 1000)  /* 200 ms = 5 Hz poll */
+/* V9.5.12 fix : 50 Hz écrase mixer-pro control_thread + target_lock (3800
+ * set_param/s × strcmp lookup = audio_thread xrun). 10 Hz = 100 ms entre
+ * pushes = ample respiration pour audio. Le smoothing dans effects.c
+ * (tau 50 ms) absorbe le step entre push. */
+#define LOOP_PERIOD_NS          (100 * 1000 * 1000)  /* 100 ms = 10 Hz push */
+#define POLL_STATE_NS           (500 * 1000 * 1000)  /* 500 ms = 2 Hz poll */
 
 #define SRC_PASSTHROUGH         0
 #define SRC_HW_IN               1
@@ -101,6 +105,18 @@ static const range_t PARAM_RANGES[N_PARAMS] = {
 /* Force drive max + balance neutre (validés écoute PC v5.12). */
 #define FORCE_DRIVE   6.0f
 #define FORCE_BALANCE 0.0f
+
+/* V9.5.12 debug : ML_PUSH_ONLY env filter pour isoler le plugin coupable.
+ *   eq      : push juste les 64 params EQ x16
+ *   exciter : push juste les 4 params Exciter
+ *   stereo  : push juste les 3 params StereoTools
+ *   limiter : push juste les 5 params Limiter
+ *   all     : push tout (défaut)
+ */
+static int g_push_eq      = 1;
+static int g_push_exciter = 1;
+static int g_push_stereo  = 1;
+static int g_push_limiter = 1;
 
 /* ---------- Globals ---------- */
 
@@ -342,23 +358,47 @@ static void push_params(const float *params_norm)
     P[49] = FORCE_DRIVE;
     P[52] = FORCE_BALANCE;
 
-    /* Build JSON bulk : ~76 entries. Buffer 4 KB suffit. */
+    /* Build JSON bulk avec filtres ML_PUSH_ONLY. Buffer 4 KB suffit. */
     static char buf[4096];
     int n = snprintf(buf, sizeof(buf), "{\"op\":\"set_insert_params_bulk\",\"params\":[");
-    for (int b = 0; b < 16; b++) {
-        n += snprintf(buf + n, sizeof(buf) - n,
-                      "[0,\"ft_%d\",1],[0,\"f_%d\",%.2f],[0,\"g_%d\",%.4f],[0,\"q_%d\",%.3f],",
-                      b, b, P[0 + b], b, powf(10.0f, P[16 + b] / 20.0f), b, P[32 + b]);
+    int first = 1;
+    if (g_push_eq) {
+        /* V9.5.12 V1 — para_eq_x16 natif mixer-pro (lock-free, 16 biquads).
+         * Push les 16 freq + 16 gain + 16 q = 48 params. Le modèle prédit
+         * tout (la signature mastering = combinaison freq×gain×Q).
+         * target_lock retiré donc 48 set_params en bulk = OK. */
+        for (int b = 0; b < 16; b++) {
+            n += snprintf(buf + n, sizeof(buf) - n,
+                          "%s[0,\"b%d_freq\",%.1f],[0,\"b%d_gain_db\",%.3f],[0,\"b%d_q\",%.3f]",
+                          first ? "" : ",",
+                          b, P[0 + b],     /* freq */
+                          b, P[16 + b],    /* gain_db */
+                          b, P[32 + b]);   /* Q */
+            first = 0;
+        }
     }
-    n += snprintf(buf + n, sizeof(buf) - n,
-                  "[1,\"amount\",%.4f],[1,\"drive\",%.2f],[1,\"freq\",%.1f],[1,\"ceil\",%.4f],"
-                  "[2,\"balance_in\",%.4f],[2,\"mlev\",%.4f],[2,\"slev\",%.4f],"
-                  "[3,\"th\",%.4f],[3,\"g_in\",%.4f],[3,\"g_out\",%.4f],"
-                  "[3,\"at\",%.2f],[3,\"rt\",%.1f]]}\n",
-                  P[48], P[49], P[50], P[51],
-                  P[52], P[53], P[54],
-                  powf(10.0f, P[56] / 20.0f), powf(10.0f, P[60] / 20.0f),
-                  powf(10.0f, P[61] / 20.0f), P[58], P[59]);
+    if (g_push_exciter) {
+        n += snprintf(buf + n, sizeof(buf) - n,
+                      "%s[1,\"amount\",%.4f],[1,\"drive\",%.2f],[1,\"freq\",%.1f],[1,\"ceil\",%.4f]",
+                      first ? "" : ",", P[48], P[49], P[50], P[51]);
+        first = 0;
+    }
+    if (g_push_stereo) {
+        n += snprintf(buf + n, sizeof(buf) - n,
+                      "%s[2,\"balance_in\",%.4f],[2,\"mlev\",%.4f],[2,\"slev\",%.4f]",
+                      first ? "" : ",", P[52], P[53], P[54]);
+        first = 0;
+    }
+    if (g_push_limiter) {
+        n += snprintf(buf + n, sizeof(buf) - n,
+                      "%s[3,\"th\",%.4f],[3,\"g_in\",%.4f],[3,\"g_out\",%.4f],[3,\"at\",%.2f],[3,\"rt\",%.1f]",
+                      first ? "" : ",",
+                      powf(10.0f, P[56] / 20.0f), powf(10.0f, P[60] / 20.0f),
+                      powf(10.0f, P[61] / 20.0f), P[58], P[59]);
+        first = 0;
+    }
+    n += snprintf(buf + n, sizeof(buf) - n, "]}\n");
+    if (first) return;   /* rien à push */
     char resp[256];
     sock_send_recv(buf, resp, sizeof(resp));
 }
@@ -403,6 +443,17 @@ int main(int argc, char **argv)
 
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
+
+    /* V9.5.12 debug : ML_PUSH_ONLY=eq|exciter|stereo|limiter|all (par défaut). */
+    const char *only = getenv("ML_PUSH_ONLY");
+    if (only && strcmp(only, "all") != 0) {
+        g_push_eq = g_push_exciter = g_push_stereo = g_push_limiter = 0;
+        if      (strcmp(only, "eq")      == 0) g_push_eq      = 1;
+        else if (strcmp(only, "exciter") == 0) g_push_exciter = 1;
+        else if (strcmp(only, "stereo")  == 0) g_push_stereo  = 1;
+        else if (strcmp(only, "limiter") == 0) g_push_limiter = 1;
+        fprintf(stderr, "ml-inf: DEBUG ML_PUSH_ONLY=%s\n", only);
+    }
 
     if (ml_features_init() < 0) { fprintf(stderr, "ml-inf: features init failed\n"); return 1; }
     if (tflite_load(model_path) < 0) { fprintf(stderr, "ml-inf: tflite load failed\n"); return 1; }

@@ -513,6 +513,112 @@ int fx_init_eq(fx_engine_t *fx, float sample_rate)
 }
 
 /* ========================================================================
+ *   4b. V9.5.12 — para_eq_x16 : 16 biquads peak stéréo (mastering ML).
+ *
+ *   Lock-free, RT-safe. Pas de worker thread (vs LV2 LSP/Calf).
+ *   Params : bN_freq, bN_gain_db, bN_q (N=0..15) — atomic write.
+ *   Biquad recompute déclenché par set_param (cheap : ~50 FLOPs per band).
+ * ====================================================================== */
+
+#define PARA_EQ_N_BANDS 16
+
+struct para_eq_state {
+	float sr;
+	float freq[PARA_EQ_N_BANDS];
+	float gain_db[PARA_EQ_N_BANDS];
+	float q[PARA_EQ_N_BANDS];
+	struct biquad bq[PARA_EQ_N_BANDS];
+};
+
+static void para_eq_recalc_band(struct para_eq_state *e, int b)
+{
+	biquad_set(&e->bq[b], BQ_PEAK, e->sr, e->freq[b], e->q[b], e->gain_db[b]);
+}
+
+static void para_eq_process_block(fx_engine_t *fx,
+				   const float *in_l, const float *in_r,
+				   float *out_l, float *out_r,
+				   uint32_t N)
+{
+	struct para_eq_state *e = fx->state;
+	for (uint32_t s = 0; s < N; s++) {
+		float l = in_l[s];
+		float r = in_r[s];
+		for (int b = 0; b < PARA_EQ_N_BANDS; b++) {
+			l = biquad_step(&e->bq[b], 0, l);
+			r = biquad_step(&e->bq[b], 1, r);
+		}
+		out_l[s] = l;
+		out_r[s] = r;
+	}
+}
+
+static int para_eq_set_param(fx_engine_t *fx, const char *name, float value)
+{
+	struct para_eq_state *e = fx->state;
+	/* Format : bN_freq / bN_gain_db / bN_q  (N = 0..15) */
+	if (name[0] != 'b') return -1;
+	const char *p = name + 1;
+	int b = 0;
+	while (*p >= '0' && *p <= '9') { b = b * 10 + (*p - '0'); p++; }
+	if (b < 0 || b >= PARA_EQ_N_BANDS) return -1;
+	if (*p != '_') return -1;
+	p++;
+	if      (!strcmp(p, "freq"))    e->freq[b]    = CLAMP(value, 20.0f, 20000.0f);
+	else if (!strcmp(p, "gain_db")) e->gain_db[b] = CLAMP(value, -18.0f, 18.0f);
+	else if (!strcmp(p, "q"))       e->q[b]       = CLAMP(value, 0.1f, 10.0f);
+	else return -1;
+	para_eq_recalc_band(e, b);
+	return 0;
+}
+
+static void para_eq_reset(fx_engine_t *fx)
+{
+	struct para_eq_state *e = fx->state;
+	for (int b = 0; b < PARA_EQ_N_BANDS; b++) {
+		memset(&e->bq[b].x1, 0, sizeof(e->bq[b].x1));
+		memset(&e->bq[b].x2, 0, sizeof(e->bq[b].x2));
+		memset(&e->bq[b].y1, 0, sizeof(e->bq[b].y1));
+		memset(&e->bq[b].y2, 0, sizeof(e->bq[b].y2));
+	}
+}
+
+static int para_eq_get_state(fx_engine_t *fx, char *buf, int len)
+{
+	struct para_eq_state *e = fx->state;
+	int n = snprintf(buf, len, "\"type\":\"para_eq_x16\",\"bands\":[");
+	for (int b = 0; b < PARA_EQ_N_BANDS && n < len - 80; b++) {
+		n += snprintf(buf + n, len - n,
+		              "%s{\"f\":%.1f,\"g\":%.2f,\"q\":%.2f}",
+		              b == 0 ? "" : ",", e->freq[b], e->gain_db[b], e->q[b]);
+	}
+	if (n < len - 4) n += snprintf(buf + n, len - n, "]");
+	return n;
+}
+
+int fx_init_para_eq_x16(fx_engine_t *fx, float sample_rate)
+{
+	struct para_eq_state *e = calloc(1, sizeof(*e));
+	if (!e) return 0;
+	e->sr = sample_rate;
+	/* Default : 16 bandes log-spaced 20-20000 Hz, gain 0 dB, Q 1.0 */
+	for (int b = 0; b < PARA_EQ_N_BANDS; b++) {
+		float t = (float)b / (float)(PARA_EQ_N_BANDS - 1);   /* 0..1 */
+		e->freq[b]    = 20.0f * powf(1000.0f, t);            /* 20..20000 log */
+		e->gain_db[b] = 0.0f;
+		e->q[b]       = 1.0f;
+		para_eq_recalc_band(e, b);
+	}
+	fx->type_name = "para_eq_x16";
+	fx->state = e;
+	fx->process_block = para_eq_process_block;
+	fx->set_param = para_eq_set_param;
+	fx->reset = para_eq_reset;
+	fx->get_state = para_eq_get_state;
+	return 1;
+}
+
+/* ========================================================================
  *   5. LV2 plugin host (V9.2) — lilv-0
  * ======================================================================
  *
@@ -1529,6 +1635,7 @@ int fx_init_chain(fx_engine_t *fx, float sample_rate,
 		else if (!strcmp(s->engine, "reverb"))     ok = fx_init_reverb    (&c->plugins[i], sample_rate);
 		else if (!strcmp(s->engine, "delay"))      ok = fx_init_delay     (&c->plugins[i], sample_rate);
 		else if (!strcmp(s->engine, "eq"))         ok = fx_init_eq        (&c->plugins[i], sample_rate);
+		else if (!strcmp(s->engine, "para_eq_x16")) ok = fx_init_para_eq_x16(&c->plugins[i], sample_rate);
 		else if (!strcmp(s->engine, "lv2") && s->uri && *s->uri)
 			ok = fx_init_lv2(&c->plugins[i], sample_rate, s->uri);
 		if (!ok) {

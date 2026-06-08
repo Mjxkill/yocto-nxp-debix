@@ -2244,12 +2244,14 @@ static void handle_cmd(int fd, const char *line)
 		if (!atomic_load(&g_insert_active)) {
 			dprintf(fd, "{\"ok\":false,\"err\":\"insert not active\"}\n"); return;
 		}
-		/* Construit "<slot>/<param>" pour chain_set_param */
+		/* Construit "<slot>/<param>" pour chain_set_param.
+		 * V9.5.12 — PAS de target_lock : chain.set_param est interne
+		 * lock-free (LV2 = atomic ctrl_target write, para_eq_x16 = direct
+		 * struct write + biquad recalc). Lock contention avec audio_thread
+		 * RT99 causait xrun + kernel freeze sous flux dense (50+ Hz). */
 		char composite[64];
 		snprintf(composite, sizeof(composite), "%d/%s", slot, param);
-		pthread_mutex_lock(&g_st.target_lock);
 		int rc = g_insert_chain.set_param(&g_insert_chain, composite, value);
-		pthread_mutex_unlock(&g_st.target_lock);
 		if (rc < 0) {
 			dprintf(fd, "{\"ok\":false,\"err\":\"unknown param or slot\"}\n");
 		} else {
@@ -2280,7 +2282,9 @@ static void handle_cmd(int fd, const char *line)
 		if (!p) { dprintf(fd, "{\"ok\":false,\"err\":\"bad params array\"}\n"); return; }
 		p++;
 		int n_set = 0, n_fail = 0;
-		pthread_mutex_lock(&g_st.target_lock);
+		/* V9.5.12 — PAS de target_lock : chain.set_param est lock-free
+		 * en interne (cf set_insert_param ci-dessus). Évite contention
+		 * avec audio_thread RT99 sous flux dense (10+ Hz × 76 params). */
 		while (*p && *p != ']') {
 			/* Find next `[slot,"name",value]` */
 			while (*p == ' ' || *p == ',') p++;
@@ -2312,7 +2316,7 @@ static void handle_cmd(int fd, const char *line)
 			if (rc < 0) n_fail++;
 			else n_set++;
 		}
-		pthread_mutex_unlock(&g_st.target_lock);
+		/* (target_lock retiré V9.5.12 — voir commentaire avant la boucle) */
 		if (n_set > 0) atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_insert_params_bulk\","
 		            "\"set\":%d,\"fail\":%d}\n", n_set, n_fail);

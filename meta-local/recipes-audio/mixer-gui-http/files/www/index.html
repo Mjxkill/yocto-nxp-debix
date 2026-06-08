@@ -909,6 +909,12 @@ html, body {
   <button class="btn-header"
           @click="resetDriftStats()"
           title="V8.32 — Reset shift, drift, compteurs xruns/drops/events + min/max wr/rd timing">Reset Stats</button>
+  <!-- V9.5.12 — Mixer Assistant : ML mastering live -->
+  <button class="btn-header"
+          :class="assistant.mode === 'mastering' ? 'busy' : ''"
+          @click="assistant.panelOpen = !assistant.panelOpen"
+          :title="'Mixer Assistant — mastering ML temps réel\\nMode: ' + assistant.mode + ' / source: ' + assistant.source"
+          x-text="'🎚 Assistant' + (assistant.mode === 'mastering' ? ' ●' : '')">🎚 Assistant</button>
   <button class="btn-header"
           @click="applyDriftAsShift()"
           title="V8.14 — Force shift_ppm = drift_ppm mesuré (round). Évite d'attendre que shift_controller_thread accumule.">Apply Drift</button>
@@ -1746,10 +1752,144 @@ html, body {
   </template>
 </div>
 
+<!-- ===== V9.5.12 — Mixer Assistant overlay panel ===== -->
+<div class="assist-overlay" x-show="assistant.panelOpen" @click.self="assistant.panelOpen = false"
+     style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1500; display:flex; align-items:center; justify-content:center;">
+  <div class="assist-panel" @click.stop
+       style="background:var(--bg-panel); border:1px solid var(--border-hi); border-radius:8px; padding:18px 22px; width:min(880px, 96vw); max-height:90vh; overflow-y:auto; box-shadow:0 12px 40px rgba(0,0,0,0.55);">
+    <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px;">
+      <div>
+        <h2 style="margin:0; font-size:16px; letter-spacing:0.5px; color:var(--text-bright);">🎚 Mixer Assistant — Mastering ML</h2>
+        <div style="font-size:11px; color:var(--text-sec); margin-top:3px;">
+          Modèle v5.12 INT8 NPU @ daemon isolé · push <span x-text="assistant.last_inference_ms + ' ms'"></span>
+        </div>
+      </div>
+      <button @click="assistant.panelOpen = false"
+              style="background:none; border:none; color:var(--text-sec); cursor:pointer; font-size:18px;">✕</button>
+    </div>
+
+    <!-- Mode + source selectors -->
+    <div style="display:flex; gap:12px; margin-bottom:14px;">
+      <div style="flex:1;">
+        <label style="display:block; font-size:10px; color:var(--text-sec); margin-bottom:4px;">Mode</label>
+        <select x-model="assistant.mode" @change="setAssistantMode()"
+                style="width:100%; padding:6px 8px; background:rgba(0,0,0,0.3); color:var(--text-pri); border:1px solid var(--border-hi); border-radius:4px;">
+          <option value="passthrough">Passthrough (pas d'inference)</option>
+          <option value="mastering">Mastering (NPU live)</option>
+        </select>
+      </div>
+      <div style="flex:1;">
+        <label style="display:block; font-size:10px; color:var(--text-sec); margin-bottom:4px;">Source audio</label>
+        <select x-model="assistant.source" @change="setAssistantMode()"
+                :disabled="assistant.mode !== 'mastering'"
+                style="width:100%; padding:6px 8px; background:rgba(0,0,0,0.3); color:var(--text-pri); border:1px solid var(--border-hi); border-radius:4px;">
+          <option value="hw">HW IN 0,1 (DSP cap ADC)</option>
+          <option value="usb">USB IN 0,1 (UAC2 stem)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- LV2 chain status -->
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px; color:var(--text-sec); margin-bottom:6px;">Chain LV2 insert (out_0+out_1 DSP)</div>
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px;">
+        <template x-for="(p, idx) in assistant.chain_slots" :key="idx">
+          <div style="background:rgba(255,255,255,0.04); padding:6px 8px; border-radius:4px; border:1px solid var(--border-lo);">
+            <div style="font-size:9px; color:var(--text-sec);" x-text="'slot ' + idx"></div>
+            <div style="font-size:11px; color:var(--text-pri); font-weight:600; line-height:1.2;" x-text="p.short"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 62 live params : EQ 16 bands + exciter + stereo + limiter -->
+    <div style="margin-bottom:6px; font-size:10px; color:var(--text-sec);">Params live (refresh 5 Hz)</div>
+
+    <!-- EQ curve canvas (somme des 16 biquads) -->
+    <div style="margin-bottom:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;">
+        <span style="font-size:9px; color:var(--text-sec);">EQ x16 — courbe transfert (somme cascades biquads peak)</span>
+        <span style="font-size:9px; color:var(--text-sec);">±24 dB / 20 Hz – 20 kHz log</span>
+      </div>
+      <canvas id="eq-curve" width="840" height="272"
+              style="width:100%; height:272px; background:rgba(0,0,0,0.35); border:1px solid var(--border-lo); border-radius:4px; display:block;"></canvas>
+      <!-- Légende compacte : f / g / Q par bande triée -->
+      <div style="display:grid; grid-template-columns:repeat(16, 1fr); gap:2px; margin-top:6px;">
+        <template x-for="b in 16" :key="b">
+          <div :title="'band sorted ' + (b-1) + ' : ' + (assistant.eq_gains[b-1] || 0).toFixed(2) + ' dB @ ' + (assistant.eq_freqs[b-1] || 0).toFixed(0) + ' Hz / Q=' + (assistant.eq_qs[b-1] || 0).toFixed(2)"
+               style="background:rgba(0,0,0,0.25); padding:2px 0; border-radius:2px; border:1px solid var(--border-lo);">
+            <div style="font-size:9px; color:var(--accent-2); text-align:center; font-variant-numeric:tabular-nums; line-height:1.1;"
+                 x-text="(assistant.eq_freqs[b-1]||0) >= 1000 ? ((assistant.eq_freqs[b-1]||0)/1000).toFixed(1)+'k' : (assistant.eq_freqs[b-1]||0).toFixed(0)"></div>
+            <div :style="'font-size:9px; text-align:center; font-variant-numeric:tabular-nums; line-height:1.1; color:' + ((assistant.eq_gains[b-1]||0) >= 0 ? 'var(--accent-2)' : 'var(--accent)')"
+                 x-text="((assistant.eq_gains[b-1]||0) >= 0 ? '+' : '') + (assistant.eq_gains[b-1]||0).toFixed(1)"></div>
+            <div style="font-size:8px; color:var(--text-sec); text-align:center; line-height:1.1;"
+                 x-text="'Q'+(assistant.eq_qs[b-1]||0).toFixed(2)"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Exciter + Stereo + Limiter dials -->
+    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:10px;">
+      <div class="assist-grp">
+        <div class="assist-grp-title">Exciter</div>
+        <div class="assist-dial" :title="'amount = ' + (assistant.params.exciter_amount||0).toFixed(3)">
+          <span>amount</span><span x-text="(assistant.params.exciter_amount||0).toFixed(3)"></span>
+        </div>
+        <div class="assist-dial"><span>drive</span><span x-text="(assistant.params.exciter_drive||0).toFixed(1)"></span></div>
+        <div class="assist-dial"><span>freq</span><span x-text="((assistant.params.exciter_freq||0)/1000).toFixed(1) + ' kHz'"></span></div>
+        <div class="assist-dial"><span>ceil</span><span x-text="(assistant.params.exciter_ceiling||0).toFixed(3)"></span></div>
+      </div>
+      <div class="assist-grp">
+        <div class="assist-grp-title">Stereo</div>
+        <div class="assist-dial"><span>balance</span><span x-text="(assistant.params.stereo_balance||0).toFixed(3)"></span></div>
+        <div class="assist-dial"><span>mid</span><span x-text="(assistant.params.stereo_mid||0).toFixed(3)"></span></div>
+        <div class="assist-dial"><span>side</span><span x-text="(assistant.params.stereo_side||0).toFixed(3)"></span></div>
+      </div>
+      <div class="assist-grp">
+        <div class="assist-grp-title">Limiter</div>
+        <div class="assist-dial"><span>th</span><span x-text="(assistant.params.limiter_th||0).toFixed(3)"></span></div>
+        <div class="assist-dial"><span>g_in</span><span x-text="(assistant.params.limiter_g_in||0).toFixed(3)"></span></div>
+        <div class="assist-dial"><span>g_out</span><span x-text="(assistant.params.limiter_g_out||0).toFixed(3)"></span></div>
+        <div class="assist-dial"><span>at</span><span x-text="(assistant.params.limiter_at||0).toFixed(2) + ' ms'"></span></div>
+        <div class="assist-dial"><span>rt</span><span x-text="(assistant.params.limiter_rt||0).toFixed(1) + ' ms'"></span></div>
+      </div>
+      <div class="assist-grp">
+        <div class="assist-grp-title">State</div>
+        <div class="assist-dial"><span>insert</span><span x-text="assistant.insert_active ? 'ON' : 'off'"></span></div>
+        <div class="assist-dial"><span>plugins</span><span x-text="assistant.chain_n"></span></div>
+        <div class="assist-dial"><span>poll</span><span x-text="assistant.poll_ms + ' ms'"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.assist-grp { background:rgba(0,0,0,0.25); border:1px solid var(--border-lo); border-radius:4px; padding:6px 8px; }
+.assist-grp-title { font-size:9px; color:var(--accent-2); font-weight:700; letter-spacing:0.7px; text-transform:uppercase; margin-bottom:4px; }
+.assist-dial { display:flex; justify-content:space-between; font-size:10px; color:var(--text-pri); padding:2px 0; }
+.assist-dial span:last-child { color:var(--text-bright); font-variant-numeric:tabular-nums; }
+</style>
+
 <script>
 function mixerApp() {
   return {
     state: { version:'?', frames:0, xrun:0, xrun_delta:0, latency_us_one_way:0, prof_iter_us:0 },
+    /* V9.5.12 — Mixer Assistant ML state (live polled depuis mixer-pro). */
+    assistant: {
+      panelOpen: false,
+      mode: 'passthrough',       /* 'passthrough' | 'mastering' */
+      source: 'hw',              /* 'hw' | 'usb' */
+      insert_active: false,
+      chain_n: 0,
+      chain_slots: [],           /* [{slot, short}, ...] */
+      eq_gains: Array(16).fill(0),
+      eq_freqs: Array(16).fill(0),
+      eq_qs:    Array(16).fill(0),
+      params: {},                /* live params from get_insert */
+      last_inference_ms: 0,
+      poll_ms: 200,
+    },
     drift: { ppm: 0, valid: 0, shift_ppm: 0, shift_ppm_cap: 0, shift_ppm_play: 0,
              xruns_cap: 0, xruns_play: 0, drops_play: 0,
              cap_full_evt: 0, cap_empty_evt: 0,
@@ -1859,6 +1999,210 @@ function mixerApp() {
       /* V8.1.b — poll drift USB↔DSP toutes les 2 sec (mesure lente, pas SSE) */
       this.fetchDrift();
       setInterval(() => this.fetchDrift(), 2000);
+      /* V9.5.12 — poll Mixer Assistant state + insert params live à 5 Hz */
+      this.pollAssistant();
+      setInterval(() => this.pollAssistant(), 200);
+    },
+
+    /* V9.5.12 — Mixer Assistant : poll mode/source + chain params live. */
+    async pollAssistant() {
+      /* 1. mode + source via get_assistant */
+      try {
+        const r1 = await fetch('/api/cmd', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({op:'get_assistant'}),
+        });
+        const j1 = await r1.json();
+        if (j1.ok) {
+          this.assistant.mode   = j1.mode   || 'passthrough';
+          this.assistant.source = j1.source || 'hw';
+        }
+      } catch(e) {}
+      /* 2. chain + params live via get_insert */
+      try {
+        const r2 = await fetch('/api/cmd', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({op:'get_insert'}),
+        });
+        const j2 = await r2.json();
+        this.assistant.insert_active = !!j2.active;
+        if (j2.active && Array.isArray(j2.chain)) {
+          this.assistant.chain_n = j2.chain.length;
+          this.assistant.chain_slots = j2.chain.map((p, i) => {
+            const uri = (p.uri || '').toLowerCase();
+            let short = 'unknown';
+            if (uri.includes('para_equalizer_x16')) short = 'EQ x16';
+            else if (uri.includes('exciter'))       short = 'Exciter';
+            else if (uri.includes('stereotools'))   short = 'StereoTools';
+            else if (uri.includes('limiter'))       short = 'Limiter';
+            return { slot: i, short };
+          });
+          /* Extraire les paramètres clés depuis params de chaque slot. */
+          const slot0 = j2.chain[0] && j2.chain[0].params || {};
+          const slot1 = j2.chain[1] && j2.chain[1].params || {};
+          const slot2 = j2.chain[2] && j2.chain[2].params || {};
+          const slot3 = j2.chain[3] && j2.chain[3].params || {};
+          /* EQ gains + freqs + Q : selon type de slot0. */
+          const gains = [], freqs = [], qs = [];
+          const slot0Type = j2.chain[0] && j2.chain[0].type;
+          if (slot0Type === 'para_eq_x16') {
+            /* Format natif : bands=[{f,g,q}, ...] (g déjà en dB) */
+            const bands = j2.chain[0].bands || [];
+            for (let b = 0; b < 16; b++) {
+              gains.push(typeof bands[b]?.g === 'number' ? bands[b].g : 0);
+              freqs.push(typeof bands[b]?.f === 'number' ? bands[b].f : 0);
+              qs.push(typeof bands[b]?.q === 'number' ? bands[b].q : 0);
+            }
+          } else {
+            /* Fallback LSP/Calf : g_X linéaire → dB, f_X = Hz, q_X = Q */
+            for (let b = 0; b < 16; b++) {
+              const g = slot0['g_' + b];
+              gains.push(typeof g === 'number' ? 20 * Math.log10(Math.max(1e-6, g)) : 0);
+              freqs.push(typeof slot0['f_' + b] === 'number' ? slot0['f_' + b] : 0);
+              qs.push(typeof slot0['q_' + b] === 'number' ? slot0['q_' + b] : 0);
+            }
+          }
+          /* Tri par fréquence croissante (modèle prédit dans n'importe quel ordre). */
+          const idx = Array.from({length:16}, (_, i) => i)
+                          .sort((a, b) => freqs[a] - freqs[b]);
+          this.assistant.eq_gains = idx.map(i => gains[i]);
+          this.assistant.eq_freqs = idx.map(i => freqs[i]);
+          this.assistant.eq_qs    = idx.map(i => qs[i]);
+          /* Redraw EQ curve dès que data update. */
+          this.drawEqCurve();
+          this.assistant.params = {
+            exciter_amount:  slot1.amount,
+            exciter_drive:   slot1.drive,
+            exciter_freq:    slot1.freq,
+            exciter_ceiling: slot1.ceil,
+            stereo_balance:  slot2.balance_in,
+            stereo_mid:      slot2.mlev,
+            stereo_side:     slot2.slev,
+            limiter_th:      slot3.th,
+            limiter_g_in:    slot3.g_in,
+            limiter_g_out:   slot3.g_out,
+            limiter_at:      slot3.at,
+            limiter_rt:      slot3.rt,
+          };
+        }
+      } catch(e) {}
+    },
+
+    /* V9.5.12 — Trace la courbe EQ (somme des 16 biquads peak RBJ).
+     * Formule biquad peak (cookbook Audio EQ Cookbook par RBJ) :
+     *   A     = 10^(gain_dB / 40)
+     *   omega = 2*pi*f / sr
+     *   omega0= 2*pi*f0 / sr
+     *   alpha = sin(omega0) / (2*Q)
+     *   b0 = 1 + alpha*A ; b1 = -2*cos(omega0) ; b2 = 1 - alpha*A
+     *   a0 = 1 + alpha/A ; a1 = -2*cos(omega0) ; a2 = 1 - alpha/A
+     *   |H(omega)|^2 calculé en complexe puis converti en dB.
+     */
+    drawEqCurve() {
+      const canvas = document.getElementById('eq-curve');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      const sr = 48000;
+      const fmin = 20, fmax = 20000;
+      const dbmin = -24, dbmax = 24;
+
+      /* Grid : lignes Hz log + lignes dB. */
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 1;
+      ctx.font = '9px sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      const decadeHz = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+      for (const f of decadeHz) {
+        const x = Math.round((Math.log10(f) - Math.log10(fmin)) / (Math.log10(fmax) - Math.log10(fmin)) * W);
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+        const lbl = f >= 1000 ? (f/1000)+'k' : f+'';
+        ctx.fillText(lbl, x + 2, H - 2);
+      }
+      for (let db = dbmin + 6; db < dbmax; db += 6) {
+        const y = Math.round((1 - (db - dbmin) / (dbmax - dbmin)) * H);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+        if (db !== 0) ctx.fillText(((db>0?'+':'')+db)+'dB', 2, y - 2);
+      }
+      /* Ligne 0 dB plus marquée. */
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      const y0 = Math.round((1 - (0 - dbmin) / (dbmax - dbmin)) * H);
+      ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(W, y0); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.fillText('0 dB', 2, y0 - 2);
+
+      /* Cumule réponse des 16 biquads peak. */
+      const N = W;
+      const dB_curve = new Float32Array(N);
+      const freqs = this.assistant.eq_freqs;
+      const gains = this.assistant.eq_gains;
+      const qs    = this.assistant.eq_qs;
+      const logFmin = Math.log10(fmin), logFmax = Math.log10(fmax);
+
+      for (let b = 0; b < 16; b++) {
+        const f0 = freqs[b] || 0, G_dB = gains[b] || 0, Q = qs[b] || 1.0;
+        if (f0 < 10 || f0 > sr/2 || Q < 0.05 || Math.abs(G_dB) < 0.01) continue;
+        const A = Math.pow(10, G_dB / 40);
+        const omega0 = 2 * Math.PI * f0 / sr;
+        const cosw0 = Math.cos(omega0), sinw0 = Math.sin(omega0);
+        const alpha = sinw0 / (2 * Q);
+        const b0 = 1 + alpha*A,  b1 = -2*cosw0, b2 = 1 - alpha*A;
+        const a0 = 1 + alpha/A,  a1 = -2*cosw0, a2 = 1 - alpha/A;
+        /* normalisé : H(z) = (b0 + b1 z^-1 + b2 z^-2) / (a0 + a1 z^-1 + a2 z^-2) */
+        for (let i = 0; i < N; i++) {
+          const logF = logFmin + (logFmax - logFmin) * i / (N - 1);
+          const f = Math.pow(10, logF);
+          const w = 2 * Math.PI * f / sr;
+          const cosw = Math.cos(w), sinw = Math.sin(w);
+          const cos2w = Math.cos(2*w), sin2w = Math.sin(2*w);
+          /* num = b0 + b1*(cos(-w)+j sin(-w)) + b2*(cos(-2w)+j sin(-2w)) */
+          const num_re = b0 + b1*cosw + b2*cos2w;
+          const num_im = - b1*sinw - b2*sin2w;
+          const den_re = a0 + a1*cosw + a2*cos2w;
+          const den_im = - a1*sinw - a2*sin2w;
+          const num_mag2 = num_re*num_re + num_im*num_im;
+          const den_mag2 = den_re*den_re + den_im*den_im;
+          const mag2 = den_mag2 > 1e-20 ? num_mag2 / den_mag2 : 1.0;
+          dB_curve[i] += 10 * Math.log10(mag2 + 1e-20);
+        }
+      }
+
+      /* Courbe cumulée. */
+      ctx.strokeStyle = 'var(--accent-2)';
+      ctx.lineWidth = 2;
+      /* fallback color string (canvas n'aime pas les var()) */
+      ctx.strokeStyle = '#34d399';
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const dB = dB_curve[i];
+        const y = (1 - (dB - dbmin) / (dbmax - dbmin)) * H;
+        if (i === 0) ctx.moveTo(i, y); else ctx.lineTo(i, y);
+      }
+      ctx.stroke();
+
+      /* Markers : points sur f0 par bande, couleur selon gain. */
+      for (let b = 0; b < 16; b++) {
+        const f0 = freqs[b] || 0, G_dB = gains[b] || 0;
+        if (f0 < 10 || f0 > sr/2) continue;
+        const x = (Math.log10(f0) - logFmin) / (logFmax - logFmin) * W;
+        const idx = Math.round(x);
+        if (idx < 0 || idx >= N) continue;
+        const dB = dB_curve[idx];
+        const y = (1 - (dB - dbmin) / (dbmax - dbmin)) * H;
+        ctx.fillStyle = G_dB >= 0 ? '#34d399' : '#f59e0b';
+        ctx.beginPath(); ctx.arc(x, y, 3, 0, 2*Math.PI); ctx.fill();
+      }
+    },
+
+    /* V9.5.12 — Push mode + source vers mixer-pro (daemon ML poll cet état). */
+    async setAssistantMode() {
+      await this.sendCmd({
+        op: 'set_assistant_mode',
+        mode: this.assistant.mode,
+        source: this.assistant.source,
+      });
     },
 
     async fetchDrift() {
