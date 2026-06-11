@@ -75,6 +75,18 @@ class CalfExciterSurrogate(nn.Module):
             self.register_buffer('ceiling', f(self.DEFAULTS['ceiling']))
         self.register_buffer('q', f(self.DEFAULTS['q']))
 
+    # V5.18 — calibration sur le VRAI Calf Exciter (calibrate_exciter.py +
+    # fit_exciter_surrogate.py, 2026-06-10). L'ancien surrogate boostait les HF
+    # de +5 à +19 dB de TROP (wet = tanh(d·high) ≈ boost linéaire amount×drive
+    # en petit signal, alors que le vrai Calf ne mixe que les harmoniques).
+    # Correctifs fittés sur grille amount×drive (erreur résiduelle 2.15 dB) :
+    #   - HPF ordre 2 (pente plus raide, comme le vrai)
+    #   - freq_eff = freq × FREQ_MULT
+    #   - beta(drive) = B0 / (1 + B1·drive)  (compense la croissance linéaire)
+    CAL_FREQ_MULT = 1.05
+    CAL_B0        = 1.15
+    CAL_B1        = 0.70
+
     def forward(self, x: torch.Tensor,
                 amount: torch.Tensor = None,
                 drive: torch.Tensor = None,
@@ -89,18 +101,24 @@ class CalfExciterSurrogate(nn.Module):
 
         if batched:
             B = a.shape[0]
-            q_b = self.q.expand_as(f)
-            b_co, a_co = highpass_biquad(f, q_b, self.sr)   # (B, 3)
+            f_eff = f * self.CAL_FREQ_MULT
+            q_b = self.q.expand_as(f_eff)
+            b_co, a_co = highpass_biquad(f_eff, q_b, self.sr)   # (B, 3)
             high = lfilter_batched(x, a_co, b_co)
+            high = lfilter_batched(high, a_co, b_co)            # ordre 2
             d_b   = d.view(B, 1, 1)
+            beta  = (self.CAL_B0 / (1.0 + self.CAL_B1 * d)).view(B, 1, 1)
             a_b   = a.view(B, 1, 1)
             cl_b  = clip.view(B, 1, 1).clamp(min=1e-6)
             wet = torch.tanh(d_b * high)
-            mix = x + a_b * wet
+            mix = x + a_b * beta * wet
             return cl_b * torch.tanh(mix / cl_b)
         else:
-            b, a_coefs = highpass_biquad(f, self.q, self.sr)
+            f_eff = f * self.CAL_FREQ_MULT
+            b, a_coefs = highpass_biquad(f_eff, self.q, self.sr)
             high = TAF.lfilter(x, a_coefs, b, clamp=False)
+            high = TAF.lfilter(high, a_coefs, b, clamp=False)   # ordre 2
+            beta = self.CAL_B0 / (1.0 + self.CAL_B1 * d)
             wet  = torch.tanh(d * high)
-            mix  = x + a * wet
+            mix  = x + a * beta * wet
             return clip * torch.tanh(mix / clip.clamp(min=1e-6))
