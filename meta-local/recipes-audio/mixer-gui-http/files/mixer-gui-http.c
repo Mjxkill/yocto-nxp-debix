@@ -617,10 +617,20 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		}
 
 		if (!strcmp(url, "/api/sysload")) {
-			/* V9.5.20 — charge CPU0-3 (delta /proc/stat depuis l'appel
-			 * précédent), NPU + GPU (galcore debugfs gc/load). La charge
-			 * DSP n'est pas exposée par la fw SOF (perf counters Zephyr
-			 * non compilés) → -1. */
+			/* V9.5.20 — charge CPU0-3 (delta /proc/stat), NPU + GPU
+			 * (galcore gc/load), DSP (SW REGs fw SOF).
+			 * Cache 500 ms : l'état delta est partagé entre clients —
+			 * sans cache, 2 lecteurs simultanés (GUI + curl) rétrécissent
+			 * les fenêtres → pics artificiels et dsp=0 intermittent. */
+			static char cached[256];
+			static struct timespec last_ts;
+			struct timespec now_ts;
+			clock_gettime(CLOCK_MONOTONIC, &now_ts);
+			long age_ms = (now_ts.tv_sec - last_ts.tv_sec) * 1000
+				    + (now_ts.tv_nsec - last_ts.tv_nsec) / 1000000;
+			if (cached[0] && age_ms < 500)
+				return send_json(conn, 200, cached);
+			last_ts = now_ts;
 			static unsigned long long prev_busy[4], prev_total[4];
 			int cpu_pct[4] = {0, 0, 0, 0};
 			FILE *f = fopen("/proc/stat", "r");
@@ -675,13 +685,12 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 				}
 				fclose(f);
 			}
-			char reply[256];
-			snprintf(reply, sizeof(reply),
+			snprintf(cached, sizeof(cached),
 				 "{\"ok\":true,\"cpu\":[%d,%d,%d,%d],"
 				 "\"gpu\":%d,\"npu\":%d,\"dsp\":%d}",
 				 cpu_pct[0], cpu_pct[1], cpu_pct[2], cpu_pct[3],
 				 gpu, npu, dsp_pct);
-			return send_json(conn, 200, reply);
+			return send_json(conn, 200, cached);
 		}
 
 		if (!strcmp(url, "/api/drift")) {
