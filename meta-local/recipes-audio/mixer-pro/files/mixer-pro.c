@@ -2137,7 +2137,8 @@ static void handle_cmd(int fd, const char *line)
 
 		fx_engine_t new_eng = {0};
 		int ok = 0;
-		if (!strcmp(engine, "compressor")) ok = fx_init_compressor(&new_eng, (float)SAMPLE_RATE);
+		if (!strcmp(engine, "passthrough")) ok = fx_init_passthrough(&new_eng, (float)SAMPLE_RATE);
+		else if (!strcmp(engine, "compressor")) ok = fx_init_compressor(&new_eng, (float)SAMPLE_RATE);
 		else if (!strcmp(engine, "reverb"))     ok = fx_init_reverb    (&new_eng, (float)SAMPLE_RATE);
 		else if (!strcmp(engine, "delay"))      ok = fx_init_delay     (&new_eng, (float)SAMPLE_RATE);
 		else if (!strcmp(engine, "eq"))         ok = fx_init_eq        (&new_eng, (float)SAMPLE_RATE);

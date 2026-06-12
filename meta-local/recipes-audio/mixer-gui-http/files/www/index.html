@@ -899,6 +899,21 @@ html, body {
        :title="'Erreurs USB play : snd_pcm_avail_update / snd_pcm_writei retours négatifs (-EPIPE etc).'">
     errPlay <span class="v" x-text="drift.xruns_play || 0"></span>
   </div>
+  <!-- V9.5.20 — charge système : CPU0-3 / GPU / NPU / DSP -->
+  <div class="app-stat" :title="'Charge par core. C0-C1: daemon ML + système | C2: audio RT (isolé) | C3: USB gadget (isolé)'">
+    cpu <span class="v" x-text="(sysload.cpu||[0,0,0,0]).join('/')"></span> %
+  </div>
+  <div class="app-stat" :class="(sysload.npu > 80) ? 'warn' : ''"
+       :title="'NPU VIP8000 (inférence mastering ML, 2 invocations / 10 ms)'">
+    npu <span class="v" x-text="(sysload.npu < 0 ? '—' : sysload.npu + '%')"></span>
+  </div>
+  <div class="app-stat" :title="'GPU 3D Vivante GC7000'">
+    gpu <span class="v" x-text="(sysload.gpu < 0 ? '—' : sysload.gpu + '%')"></span>
+  </div>
+  <div class="app-stat" :class="(sysload.dsp > 85) ? 'warn' : ''"
+       :title="'DSP HiFi4 (SOF) : duty-cycle du traitement audio par période 2 ms (fw zephyr_dma_domain, moyenne 250 ms)'">
+    dsp <span class="v" x-text="(sysload.dsp < 0 ? '—' : sysload.dsp + '%')"></span>
+  </div>
   <div class="spacer"></div>
   <button class="btn-header"
           :class="tacResetBusy ? 'busy' : ''"
@@ -1832,7 +1847,12 @@ html, body {
     <!-- Exciter + Stereo + Limiter dials -->
     <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:10px;">
       <div class="assist-grp">
-        <div class="assist-grp-title">Exciter</div>
+        <div class="assist-grp-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>Exciter</span>
+          <button @click="toggleFxBypass(1)"
+                  :style="'font-size:9px; padding:1px 7px; border-radius:3px; cursor:pointer; border:1px solid var(--border-hi); background:' + (assistant.exc_bypass ? 'rgba(245,158,11,0.85); color:#000' : 'rgba(52,211,153,0.85); color:#000')"
+                  x-text="assistant.exc_bypass ? 'OFF' : 'ON'"></button>
+        </div>
         <div class="assist-dial" :title="'amount = ' + (assistant.params.exciter_amount||0).toFixed(3)">
           <span>amount</span><span x-text="(assistant.params.exciter_amount||0).toFixed(3)"></span>
         </div>
@@ -1847,10 +1867,15 @@ html, body {
         <div class="assist-dial"><span>side</span><span x-text="(assistant.params.stereo_side||0).toFixed(3)"></span></div>
       </div>
       <div class="assist-grp">
-        <div class="assist-grp-title">Limiter</div>
-        <div class="assist-dial"><span>th</span><span x-text="(assistant.params.limiter_th||0).toFixed(3)"></span></div>
-        <div class="assist-dial"><span>g_in</span><span x-text="(assistant.params.limiter_g_in||0).toFixed(3)"></span></div>
-        <div class="assist-dial"><span>g_out</span><span x-text="(assistant.params.limiter_g_out||0).toFixed(3)"></span></div>
+        <div class="assist-grp-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>Limiter</span>
+          <button @click="toggleFxBypass(2)"
+                  :style="'font-size:9px; padding:1px 7px; border-radius:3px; cursor:pointer; border:1px solid var(--border-hi); background:' + (assistant.lim_bypass ? 'rgba(245,158,11,0.85); color:#000' : 'rgba(52,211,153,0.85); color:#000')"
+                  x-text="assistant.lim_bypass ? 'OFF' : 'ON'"></button>
+        </div>
+        <div class="assist-dial"><span>th</span><span x-text="(assistant.params.limiter_th||0).toFixed(3) + ' (' + (20*Math.log10((assistant.params.limiter_th||1))).toFixed(1) + ' dB)'"></span></div>
+        <div class="assist-dial"><span>g_in</span><span x-text="(assistant.params.limiter_g_in||0).toFixed(2) + ' (' + (20*Math.log10((assistant.params.limiter_g_in||1))).toFixed(1) + ' dB)'"></span></div>
+        <div class="assist-dial"><span>g_out</span><span x-text="(assistant.params.limiter_g_out||0).toFixed(2)"></span></div>
         <div class="assist-dial"><span>at</span><span x-text="(assistant.params.limiter_at||0).toFixed(2) + ' ms'"></span></div>
         <div class="assist-dial"><span>rt</span><span x-text="(assistant.params.limiter_rt||0).toFixed(1) + ' ms'"></span></div>
       </div>
@@ -1886,10 +1911,16 @@ function mixerApp() {
       eq_gains: Array(16).fill(0),
       eq_freqs: Array(16).fill(0),
       eq_qs:    Array(16).fill(0),
+      env_l: Array(64).fill(0),       /* V5.20 : enveloppe spectrale par canal */
+      env_r: Array(64).fill(0),
+      limiter: {},                     /* th, g_in, g_out, at, rt, ceil */
+      exc_bypass: false,
+      lim_bypass: false,
       params: {},                /* live params from get_insert */
       last_inference_ms: 0,
       poll_ms: 200,
     },
+    sysload: { cpu: [0,0,0,0], gpu: -1, npu: -1, dsp: -1 },   /* V9.5.20 */
     drift: { ppm: 0, valid: 0, shift_ppm: 0, shift_ppm_cap: 0, shift_ppm_play: 0,
              xruns_cap: 0, xruns_play: 0, drops_play: 0,
              cap_full_evt: 0, cap_empty_evt: 0,
@@ -1999,13 +2030,33 @@ function mixerApp() {
       /* V8.1.b — poll drift USB↔DSP toutes les 2 sec (mesure lente, pas SSE) */
       this.fetchDrift();
       setInterval(() => this.fetchDrift(), 2000);
+      /* V9.5.20 — charge CPU/GPU/NPU à 1 Hz */
+      this.fetchSysload();
+      setInterval(() => this.fetchSysload(), 1000);
       /* V9.5.12 — poll Mixer Assistant state + insert params live à 5 Hz */
       this.pollAssistant();
       setInterval(() => this.pollAssistant(), 200);
     },
 
+    _assistTapsSet: false,
     /* V9.5.12 — Mixer Assistant : poll mode/source + chain params live. */
     async pollAssistant() {
+      /* V5.20 — FFT IN/OUT : configure les taps analyzer 2 et 3 quand le
+       * panel est ouvert (tap2 = USB IN 8/9 pré-chaîne, tap3 = OUT 0/1
+       * post-insert = post-mastering). */
+      /* resync : si mixer-pro a redémarré, les taps retombent à kind 0 */
+      if (this._assistTapsSet && this.assistant.panelOpen
+          && this.analyzerTaps[2].kind !== 1) this._assistTapsSet = false;
+      if (this.assistant.panelOpen && !this._assistTapsSet) {
+        await this.sendCmd({ op:'set_tap', tap:2, kind:1, a:8, b:9 });
+        await this.sendCmd({ op:'set_tap', tap:3, kind:3, a:0, b:1 });
+        this._assistTapsSet = true;
+      } else if (!this.assistant.panelOpen && this._assistTapsSet) {
+        /* panel fermé → libère les taps (FFT analyzer 3/4 OFF) */
+        await this.sendCmd({ op:'set_tap', tap:2, kind:0, a:0, b:-1 });
+        await this.sendCmd({ op:'set_tap', tap:3, kind:0, a:0, b:-1 });
+        this._assistTapsSet = false;
+      }
       /* 1. mode + source via get_assistant */
       try {
         const r1 = await fetch('/api/cmd', {
@@ -2045,6 +2096,29 @@ function mixerApp() {
           /* EQ gains + freqs + Q : selon type de slot0. */
           const gains = [], freqs = [], qs = [];
           const slot0Type = j2.chain[0] && j2.chain[0].type;
+          if (slot0Type === 'spectral_env') {
+            /* V5.20 : enveloppe 64 pts par canal (l/r), gains déjà en dB */
+            this.assistant.env_l = j2.chain[0].l || Array(64).fill(0);
+            this.assistant.env_r = j2.chain[0].r || Array(64).fill(0);
+            const exc = j2.chain[1] || {};
+            const lim = j2.chain[2] || {};
+            this.assistant.params = {
+              exciter_amount:  exc.amount,
+              exciter_drive:   exc.drive,
+              exciter_freq:    exc.freq,
+              exciter_ceiling: exc.ceil,
+              limiter_th:      lim.th,
+              limiter_g_in:    lim.g_in,
+              limiter_g_out:   lim.g_out,
+              limiter_at:      lim.at,
+              limiter_rt:      lim.rt,
+            };
+            this.assistant.limiter = lim;
+            this.assistant.exc_bypass = !!exc.bypass;
+            this.assistant.lim_bypass = !!lim.bypass;
+            this.drawEnvCurve();
+            return;       /* format v5.20 traité — skip le legacy */
+          }
           if (slot0Type === 'para_eq_x16') {
             /* Format natif : bands=[{f,g,q}, ...] (g déjà en dB) */
             const bands = j2.chain[0].bands || [];
@@ -2196,6 +2270,82 @@ function mixerApp() {
       }
     },
 
+    /* V5.20 — Trace l'enveloppe spectrale 64 pts par canal (gains dB directs,
+     * interpolation log-fréquence — exactement ce que la FIR applique). */
+    drawEnvCurve() {
+      const canvas = document.getElementById('eq-curve');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      const fmin = 20, fmax = 20000, dbmin = -14, dbmax = 14;
+      /* grid */
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+      ctx.font = '9px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      for (const f of [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]) {
+        const x = Math.round((Math.log10(f) - Math.log10(fmin)) / (Math.log10(fmax) - Math.log10(fmin)) * W);
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+        ctx.fillText(f >= 1000 ? (f/1000)+'k' : ''+f, x + 2, H - 2);
+      }
+      for (let db = -12; db <= 12; db += 6) {
+        const y = Math.round((1 - (db - dbmin) / (dbmax - dbmin)) * H);
+        ctx.strokeStyle = db === 0 ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)';
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+        ctx.fillText((db>0?'+':'')+db+'dB', 2, y - 2);
+      }
+      /* fond : FFT IN (tap2, remplissage bleu-gris) et FFT OUT (tap3,
+       * ligne ambre) — échelle -90..0 dBFS sur toute la hauteur.
+       * Les bins analyzer sont linéaires 0..24 kHz → mapping log en X. */
+      const drawSpec = (spec, fillStyle, strokeStyle) => {
+        if (!spec || !spec.length) return;
+        const N = spec.length;
+        ctx.beginPath();
+        let started = false;
+        for (let k = 0; k < N; k++) {
+          /* V9.5.20 : bins LOG 20 Hz - 20 kHz (analyzer build_log_bins) */
+          const f = 20 * Math.pow(1000, (k + 0.5) / N);
+          if (f < fmin || f > fmax) continue;
+          const x = (Math.log10(f) - Math.log10(fmin)) / (Math.log10(fmax) - Math.log10(fmin)) * W;
+          const db = Math.max(-90, spec[k]);
+          const y = (1 - (db + 90) / 90) * H;
+          if (!started) { ctx.moveTo(x, H); ctx.lineTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+        }
+        if (!started) return;
+        if (fillStyle) {
+          ctx.lineTo(W, H); ctx.closePath();
+          ctx.fillStyle = fillStyle; ctx.fill();
+        }
+        if (strokeStyle) { ctx.strokeStyle = strokeStyle; ctx.lineWidth = 1; ctx.stroke(); }
+      };
+      drawSpec(this.analyzerTaps[2].spec, 'rgba(96,140,200,0.25)', null);     /* IN  */
+      drawSpec(this.analyzerTaps[3].spec, null, 'rgba(245,158,11,0.8)');      /* OUT */
+
+      /* courbes L et R : 64 pts log-spaced 20 Hz - 20 kHz */
+      const drawCurve = (env, color) => {
+        ctx.strokeStyle = color; ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let b = 0; b < 64; b++) {
+          const f = 20 * Math.pow(1000, b / 63);
+          const x = (Math.log10(f) - Math.log10(fmin)) / (Math.log10(fmax) - Math.log10(fmin)) * W;
+          const y = (1 - ((env[b]||0) - dbmin) / (dbmax - dbmin)) * H;
+          if (b === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      };
+      drawCurve(this.assistant.env_l, '#34d399');   /* L vert */
+      drawCurve(this.assistant.env_r, '#f59e0b');   /* R orange */
+    },
+
+    /* V5.20 — M/A par effet (A/B oreille) : bypass natif lock-free. */
+    async toggleFxBypass(slot) {
+      const cur = slot === 1 ? this.assistant.exc_bypass : this.assistant.lim_bypass;
+      await this.sendCmd({ op:'set_insert_param', slot, param:'bypass',
+                           value: cur ? 0 : 1 });
+      if (slot === 1) this.assistant.exc_bypass = !cur;
+      else this.assistant.lim_bypass = !cur;
+    },
+
     /* V9.5.12 — Push mode + source vers mixer-pro (daemon ML poll cet état). */
     async setAssistantMode() {
       await this.sendCmd({
@@ -2203,6 +2353,14 @@ function mixerApp() {
         mode: this.assistant.mode,
         source: this.assistant.source,
       });
+    },
+
+    async fetchSysload() {
+      try {
+        const r = await fetch('/api/sysload');
+        const j = await r.json();
+        if (j && j.ok) this.sysload = j;
+      } catch(e) {}
     },
 
     async fetchDrift() {

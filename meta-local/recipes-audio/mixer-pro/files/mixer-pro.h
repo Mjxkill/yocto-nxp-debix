@@ -117,7 +117,7 @@
  *   ANALYZER_PERIOD_US : 33 ms = ~30 Hz refresh.
  */
 #define N_TAPS                4
-#define TAP_FFT_N          1024
+#define TAP_FFT_N          4096   /* V9.5.20 : fenêtre 85 ms ≈ fenêtre modèle (100 ms), résolution 11.7 Hz */
 #define TAP_BINS_OUT        128
 #define TAP_SCOPE_N          64
 #define ANALYZER_PERIOD_US 33000

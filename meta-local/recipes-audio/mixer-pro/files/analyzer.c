@@ -34,6 +34,29 @@ extern atomic_int g_running_flag_for_analyzer; /* set by mixer-pro.c */
 /* Precomputed Hann window (symmetric, length FFT_N). Built once. */
 static float s_hann[TAP_FFT_N];
 
+/* V9.5.20 — bins de sortie LOG-spaced 20 Hz - 20 kHz (avant : linéaire
+ * 187 Hz/bin → tout le sub écrasé dans le 1er bin). Table start/count
+ * par bin out, précalculée. */
+static int s_log_start[TAP_BINS_OUT];
+static int s_log_count[TAP_BINS_OUT];
+
+static void build_log_bins(void)
+{
+	const float sr = 48000.0f;
+	const float fmin = 20.0f, fmax = 20000.0f;
+	const float bin_hz = sr / (float)TAP_FFT_N;
+	for (int b = 0; b < TAP_BINS_OUT; b++) {
+		float lo = fmin * powf(fmax / fmin, (float)b / TAP_BINS_OUT);
+		float hi = fmin * powf(fmax / fmin, (float)(b + 1) / TAP_BINS_OUT);
+		int k0 = (int)(lo / bin_hz);
+		int k1 = (int)(hi / bin_hz);
+		if (k1 <= k0) k1 = k0 + 1;            /* ≥ 1 bin FFT par bin out */
+		if (k1 > TAP_FFT_N / 2) k1 = TAP_FFT_N / 2;
+		s_log_start[b] = k0;
+		s_log_count[b] = k1 - k0;
+	}
+}
+
 static void build_hann(void)
 {
 	for (int n = 0; n < TAP_FFT_N; n++) {
@@ -156,15 +179,14 @@ static void analyze_tap(mixer_tap_t *t)
 	}
 	fft_radix2(re, im, TAP_FFT_N);
 
-	/* Downsample : 512 useful bins → TAP_BINS_OUT (128) via 4:1 peak hold.
-	 * Magnitude → dB, clipped [-120 .. 0]. */
-	const int group = (TAP_FFT_N / 2) / TAP_BINS_OUT;   /* 4 */
+	/* V9.5.20 — Downsample LOG : bins 20 Hz - 20 kHz log-spaced, peak hold
+	 * dans chaque plage (cf build_log_bins). Magnitude → dB [-120..0]. */
 	const float norm = 2.0f / (float)TAP_FFT_N;          /* one-sided fft scale */
 	int8_t out_spec_tmp[TAP_BINS_OUT];
 	for (int b = 0; b < TAP_BINS_OUT; b++) {
 		float mag_max = 0.0f;
-		for (int g = 0; g < group; g++) {
-			int k = b * group + g;
+		for (int g = 0; g < s_log_count[b]; g++) {
+			int k = s_log_start[b] + g;
 			float m = sqrtf(re[k] * re[k] + im[k] * im[k]) * norm;
 			if (m > mag_max) mag_max = m;
 		}
@@ -198,24 +220,26 @@ void *analyzer_thread(void *arg)
 {
 	(void)arg;
 	build_hann();
+	build_log_bins();
 
-	/* Low-RT priority : run on the same core but never preempt audio. */
-	struct sched_param sp = { .sched_priority = RT_PRIO_ANALYZER };
-	if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) != 0) {
-		fprintf(stderr, "analyzer thread: SCHED_FIFO prio %d failed, "
-				"running SCHED_OTHER\n", RT_PRIO_ANALYZER);
-	}
-	/* V9.0 — pin sur cores 0,1 (non-RT critique, hors des cores audio isolés) */
+	/* V9.5.20 — SCHED_OTHER nice 10, core 0 UNIQUEMENT : la FFT 4096 par
+	 * bursts en RT60 sur cores 0-1 entrait en compétition avec cap/play
+	 * (core 1, RT80) et polluait le L2 → glitchs. L analyse est cosmétique :
+	 * best-effort, jamais prioritaire. */
 	{
-		cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(0, &cs); CPU_SET(1, &cs);
+		struct sched_param sp = { .sched_priority = 0 };
+		pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp);
+		nice(10);
+		cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(0, &cs);
 		pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
 	}
 
+	int rr = 0;   /* round-robin : 1 tap par passe (étale les FFT 4096) */
 	while (atomic_load_explicit(&g_running_flag_for_analyzer,
 				    memory_order_acquire)) {
-		for (int t = 0; t < N_TAPS; t++)
-			analyze_tap(&g_taps_for_analyzer[t]);
-		usleep(ANALYZER_PERIOD_US);
+		analyze_tap(&g_taps_for_analyzer[rr]);
+		rr = (rr + 1) % N_TAPS;
+		usleep(ANALYZER_PERIOD_US / N_TAPS);
 	}
 	return NULL;
 }

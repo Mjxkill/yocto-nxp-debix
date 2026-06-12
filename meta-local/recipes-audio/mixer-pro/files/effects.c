@@ -618,6 +618,472 @@ int fx_init_para_eq_x16(fx_engine_t *fx, float sample_rate)
 	return 1;
 }
 
+
+/* ========================================================================
+ *   4b2. V9.5.20 — fx_passthrough : engine neutre pour les bus FX send.
+ *   La GUI proposait "passthrough" mais aucun init n'existait → erreur.
+ * ====================================================================== */
+
+static void passthrough_process_block(fx_engine_t *fx,
+				       const float *in_l, const float *in_r,
+				       float *out_l, float *out_r,
+				       uint32_t N)
+{
+	(void)fx;
+	if (out_l != in_l) memcpy(out_l, in_l, N * sizeof(float));
+	if (out_r != in_r) memcpy(out_r, in_r, N * sizeof(float));
+}
+
+static int passthrough_set_param(fx_engine_t *fx, const char *name, float value)
+{
+	(void)fx; (void)name; (void)value;
+	return -1;
+}
+
+static void passthrough_reset(fx_engine_t *fx) { (void)fx; }
+
+static int passthrough_get_state(fx_engine_t *fx, char *buf, int len)
+{
+	(void)fx;
+	return snprintf(buf, len, "\"type\":\"passthrough\"");
+}
+
+int fx_init_passthrough(fx_engine_t *fx, float sample_rate)
+{
+	(void)sample_rate;
+	fx->type_name = "passthrough";
+	fx->state = NULL;
+	fx->process_block = passthrough_process_block;
+	fx->set_param = passthrough_set_param;
+	fx->reset = passthrough_reset;
+	fx->get_state = passthrough_get_state;
+	return 1;
+}
+
+/* ========================================================================
+ *   4c. V9.5.20 — fx_spectral_env : enveloppe spectrale 64 pts → FIR 256.
+ *
+ *   Le modèle ML (daemon mixer-ml-inference) pousse 64 gains dB par canal
+ *   (bandes log 20 Hz - 20 kHz). Application par FIR 256 taps phase
+ *   linéaire (latence 128 samples = 2.67 ms), reconstruite quand les gains
+ *   changent, avec interpolation linéaire des taps entre l'ancienne et la
+ *   nouvelle FIR (lissage temporel, pas de clics).
+ *
+ *   Lock-free : set_param écrit les gains cible (floats), l'audio_thread
+ *   détecte le changement (compteur), reconstruit et interpole.
+ *
+ *   Params : l_g0..l_g63 (canal L), r_g0..r_g63 (canal R), en dB ±12.
+ *   Parité avec training/surrogate_spectral_env.py : interp log-fréquence
+ *   de l'enveloppe vers |H(f)|, irfft, shift centre, fenêtre Hann.
+ * ====================================================================== */
+
+#include <fftw3.h>
+
+#define SENV_N        64
+#define SENV_TAPS     256
+#define SENV_NBINS    (SENV_TAPS / 2 + 1)
+#define SENV_FMIN     20.0f
+#define SENV_FMAX     20000.0f
+#define SENV_XFADE_BLOCKS 5    /* interpolation des taps sur 5 blocs (10 ms) */
+
+struct senv_chan {
+	float target_db[SENV_N];      /* écrit par control_thread (set_param) */
+	unsigned target_seq;          /* incrémenté à chaque set complet */
+	unsigned applied_seq;
+	float h_old[SENV_TAPS];
+	float h_new[SENV_TAPS];
+	float h_cur[SENV_TAPS];
+	int   fade_pos;               /* 0..SENV_XFADE_BLOCKS ; >=X = stable */
+	float dline[SENV_TAPS - 1];   /* delay line (état conv) */
+};
+
+struct senv_state {
+	float sr;
+	float log_env_f[SENV_N];      /* log des fréqs centrales */
+	float bin_w[SENV_NBINS];      /* poids interp précalculés */
+	int   bin_i[SENV_NBINS];      /* index bande gauche par bin */
+	float win[SENV_TAPS];         /* Hann */
+	fftwf_plan plan;              /* c2r SENV_TAPS */
+	fftwf_complex *Hbuf;
+	float *hbuf;
+	struct senv_chan ch[2];
+};
+
+static void senv_rebuild_fir(struct senv_state *s, struct senv_chan *c)
+{
+	/* enveloppe (dB) → |H| par bin (interp log-freq) → irfft → shift+win */
+	for (int k = 0; k < SENV_NBINS; k++) {
+		const int i = s->bin_i[k];
+		const float w = s->bin_w[k];
+		const float g_db = c->target_db[i] + (c->target_db[i + 1 < SENV_N ? i + 1 : i]
+		                    - c->target_db[i]) * w;
+		const float g = powf(10.0f, g_db / 20.0f);
+		s->Hbuf[k][0] = g;
+		s->Hbuf[k][1] = 0.0f;
+	}
+	fftwf_execute(s->plan);                        /* → hbuf[SENV_TAPS], phase 0 */
+	/* normalisation irfft (FFTW c2r est non normalisée) + shift centre + win */
+	const float inv_n = 1.0f / (float)SENV_TAPS;
+	memcpy(c->h_old, c->h_cur, sizeof(c->h_old));
+	for (int n = 0; n < SENV_TAPS; n++) {
+		const int src = (n + SENV_TAPS / 2) % SENV_TAPS;   /* np.roll(h, N/2) */
+		c->h_new[n] = s->hbuf[src] * inv_n * s->win[n];
+	}
+	c->fade_pos = 0;
+}
+
+static void senv_process_block(fx_engine_t *fx,
+				const float *in_l, const float *in_r,
+				float *out_l, float *out_r,
+				uint32_t N)
+{
+	struct senv_state *s = fx->state;
+	const float *ins[2] = { in_l, in_r };
+	float *outs[2] = { out_l, out_r };
+
+	for (int chn = 0; chn < 2; chn++) {
+		struct senv_chan *c = &s->ch[chn];
+		/* nouveaux gains ? → rebuild + démarre l'interpolation */
+		if (c->target_seq != c->applied_seq) {
+			c->applied_seq = c->target_seq;
+			senv_rebuild_fir(s, c);
+		}
+		/* interpolation des taps (lissage 10 ms) */
+		if (c->fade_pos < SENV_XFADE_BLOCKS) {
+			c->fade_pos++;
+			const float w = (float)c->fade_pos / SENV_XFADE_BLOCKS;
+			for (int n = 0; n < SENV_TAPS; n++)
+				c->h_cur[n] = c->h_old[n] + (c->h_new[n] - c->h_old[n]) * w;
+		}
+		/* convolution FIR avec delay line (overlap-save) */
+		const float *x = ins[chn];
+		float *y = outs[chn];
+		float seg[SENV_TAPS - 1 + 256];              /* N <= 256 garanti (96) */
+		memcpy(seg, c->dline, (SENV_TAPS - 1) * sizeof(float));
+		memcpy(seg + SENV_TAPS - 1, x, N * sizeof(float));
+		for (uint32_t i = 0; i < N; i++) {
+			float acc = 0.0f;
+			const float *sp = seg + i;
+			const float *hp = c->h_cur;
+			for (int t = 0; t < SENV_TAPS; t++)
+				acc += sp[t] * hp[SENV_TAPS - 1 - t];
+			y[i] = acc;
+		}
+		memcpy(c->dline, seg + N, (SENV_TAPS - 1) * sizeof(float));
+	}
+}
+
+static int senv_set_param(fx_engine_t *fx, const char *name, float value)
+{
+	struct senv_state *s = fx->state;
+	/* l_gN / r_gN ; "commit" sur g63 (incrémente seq → rebuild une fois) */
+	int chn;
+	if (name[0] == 'l' && name[1] == '_') chn = 0;
+	else if (name[0] == 'r' && name[1] == '_') chn = 1;
+	else return -1;
+	if (name[2] != 'g') return -1;
+	int b = atoi(name + 3);
+	if (b < 0 || b >= SENV_N) return -1;
+	struct senv_chan *c = &s->ch[chn];
+	c->target_db[b] = value < -12.0f ? -12.0f : (value > 12.0f ? 12.0f : value);
+	if (b == SENV_N - 1)
+		c->target_seq++;            /* dernier gain du jeu → applique */
+	return 0;
+}
+
+static void senv_reset(fx_engine_t *fx)
+{
+	struct senv_state *s = fx->state;
+	for (int chn = 0; chn < 2; chn++)
+		memset(s->ch[chn].dline, 0, sizeof(s->ch[chn].dline));
+}
+
+static int senv_get_state(fx_engine_t *fx, char *buf, int len)
+{
+	struct senv_state *s = fx->state;
+	int n = snprintf(buf, len, "\"type\":\"spectral_env\",\"l\":[");
+	for (int b = 0; b < SENV_N && n < len - 16; b++)
+		n += snprintf(buf + n, len - n, "%s%.1f", b ? "," : "",
+		              s->ch[0].target_db[b]);
+	if (n < len - 8) n += snprintf(buf + n, len - n, "],\"r\":[");
+	for (int b = 0; b < SENV_N && n < len - 16; b++)
+		n += snprintf(buf + n, len - n, "%s%.1f", b ? "," : "",
+		              s->ch[1].target_db[b]);
+	if (n < len - 4) n += snprintf(buf + n, len - n, "]");
+	return n;
+}
+
+int fx_init_spectral_env(fx_engine_t *fx, float sample_rate)
+{
+	struct senv_state *s = calloc(1, sizeof(*s));
+	if (!s) return 0;
+	s->sr = sample_rate;
+	/* fréqs centrales log + précalcul interp par bin */
+	float env_f[SENV_N];
+	for (int b = 0; b < SENV_N; b++) {
+		const float t = (float)b / (SENV_N - 1);
+		env_f[b] = SENV_FMIN * powf(SENV_FMAX / SENV_FMIN, t);
+		s->log_env_f[b] = logf(env_f[b]);
+	}
+	for (int k = 0; k < SENV_NBINS; k++) {
+		const float f = (float)k * sample_rate / 2.0f / (SENV_NBINS - 1);
+		const float lf = logf(f < 1.0f ? 1.0f : f);
+		if (lf <= s->log_env_f[0]) { s->bin_i[k] = 0; s->bin_w[k] = 0.0f; }
+		else if (lf >= s->log_env_f[SENV_N - 1]) {
+			s->bin_i[k] = SENV_N - 1; s->bin_w[k] = 0.0f;
+		} else {
+			int i = 0;
+			while (i < SENV_N - 2 && s->log_env_f[i + 1] < lf) i++;
+			s->bin_i[k] = i;
+			s->bin_w[k] = (lf - s->log_env_f[i])
+			            / (s->log_env_f[i + 1] - s->log_env_f[i]);
+		}
+	}
+	for (int n = 0; n < SENV_TAPS; n++)
+		s->win[n] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * n / (SENV_TAPS - 1));
+	s->Hbuf = fftwf_alloc_complex(SENV_NBINS);
+	s->hbuf = fftwf_alloc_real(SENV_TAPS);
+	s->plan = fftwf_plan_dft_c2r_1d(SENV_TAPS, s->Hbuf, s->hbuf, FFTW_MEASURE);
+	/* gains 0 dB → FIR identité initiale, pour les 2 canaux */
+	for (int chn = 0; chn < 2; chn++) {
+		senv_rebuild_fir(s, &s->ch[chn]);
+		memcpy(s->ch[chn].h_cur, s->ch[chn].h_new, sizeof(s->ch[chn].h_cur));
+		s->ch[chn].fade_pos = SENV_XFADE_BLOCKS;
+	}
+	fx->type_name = "spectral_env";
+	fx->state = s;
+	fx->process_block = senv_process_block;
+	fx->set_param = senv_set_param;
+	fx->reset = senv_reset;
+	fx->get_state = senv_get_state;
+	return 1;
+}
+
+
+/* ========================================================================
+ *   4d. V9.5.20 — fx_exciter_native : exciter natif (parité surrogate
+ *   calibré sur le vrai Calf — fit 2026-06-10, erreur 2.15 dB).
+ *
+ *     high = HPF2(x, freq × 1.05, Q 0.707)     (2 biquads RBJ cascadés)
+ *     wet  = tanh(drive × high)
+ *     y    = x + amount × β(drive) × wet,  β = 1.15 / (1 + 0.7·drive)
+ *     y    = ceil × tanh(y / ceil)
+ *
+ *   Params (mêmes noms que Calf pour compat daemon) : amount, drive,
+ *   freq, ceil. Lock-free : floats écrits par le control_thread, biquads
+ *   recalculés dans process_block sur changement de freq.
+ *   Coût ≈ 30 µs / période (96 frames × 2 ch).
+ * ====================================================================== */
+
+#define EXC_CAL_FREQ_MULT 1.05f
+#define EXC_CAL_B0        1.15f
+#define EXC_CAL_B1        0.70f
+
+struct exciter_state {
+	float sr;
+	int   bypass;                  /* M/A GUI : 1 = traverse sans effet */
+	float amount, drive, freq, ceil;
+	float cfg_freq;                 /* freq des biquads courants */
+	struct biquad hp1, hp2;        /* HPF ordre 2 (état stéréo dans biquad) */
+};
+
+static void exciter_recalc(struct exciter_state *e)
+{
+	/* RBJ highpass, freq × calibration, Q 0.707 */
+	const float f = e->freq * EXC_CAL_FREQ_MULT;
+	const float w = 2.0f * (float)M_PI * f / e->sr;
+	const float cw = cosf(w), sw = sinf(w);
+	const float alpha = sw / (2.0f * 0.707f);
+	const float b0 = (1.0f + cw) / 2.0f, b1 = -(1.0f + cw), b2 = (1.0f + cw) / 2.0f;
+	const float a0 = 1.0f + alpha, a1 = -2.0f * cw, a2 = 1.0f - alpha;
+	e->hp1.b0 = b0 / a0; e->hp1.b1 = b1 / a0; e->hp1.b2 = b2 / a0;
+	e->hp1.a1 = a1 / a0; e->hp1.a2 = a2 / a0;
+	e->hp2.b0 = e->hp1.b0; e->hp2.b1 = e->hp1.b1; e->hp2.b2 = e->hp1.b2;
+	e->hp2.a1 = e->hp1.a1; e->hp2.a2 = e->hp1.a2;
+	e->cfg_freq = e->freq;
+}
+
+static void exciter_process_block(fx_engine_t *fx,
+				   const float *in_l, const float *in_r,
+				   float *out_l, float *out_r,
+				   uint32_t N)
+{
+	struct exciter_state *e = fx->state;
+	if (e->bypass) {
+		if (out_l != in_l) memcpy(out_l, in_l, N * sizeof(float));
+		if (out_r != in_r) memcpy(out_r, in_r, N * sizeof(float));
+		return;
+	}
+	if (e->cfg_freq != e->freq)
+		exciter_recalc(e);
+	const float a = e->amount;
+	const float d = e->drive;
+	const float beta = EXC_CAL_B0 / (1.0f + EXC_CAL_B1 * d);
+	const float cl = e->ceil < 1e-6f ? 1e-6f : e->ceil;
+	const float ab = a * beta;
+	for (uint32_t s = 0; s < N; s++) {
+		const float xl = in_l[s], xr = in_r[s];
+		float hl = biquad_step(&e->hp2, 0, biquad_step(&e->hp1, 0, xl));
+		float hr = biquad_step(&e->hp2, 1, biquad_step(&e->hp1, 1, xr));
+		const float yl = xl + ab * tanhf(d * hl);
+		const float yr = xr + ab * tanhf(d * hr);
+		out_l[s] = cl * tanhf(yl / cl);
+		out_r[s] = cl * tanhf(yr / cl);
+	}
+}
+
+static int exciter_set_param(fx_engine_t *fx, const char *name, float value)
+{
+	struct exciter_state *e = fx->state;
+	if      (!strcmp(name, "bypass")) e->bypass = value > 0.5f;
+	else if (!strcmp(name, "amount")) e->amount = CLAMP(value, 0.0f, 1.0f);
+	else if (!strcmp(name, "drive"))  e->drive  = CLAMP(value, 0.1f, 10.0f);
+	else if (!strcmp(name, "freq"))   e->freq   = CLAMP(value, 1000.0f, 16000.0f);
+	else if (!strcmp(name, "ceil"))   e->ceil   = CLAMP(value, 0.1f, 1.0f);
+	else return -1;
+	return 0;
+}
+
+static void exciter_reset(fx_engine_t *fx)
+{
+	struct exciter_state *e = fx->state;
+	memset(&e->hp1.x1, 0, 8 * sizeof(float));
+	memset(&e->hp2.x1, 0, 8 * sizeof(float));
+}
+
+static int exciter_get_state(fx_engine_t *fx, char *buf, int len)
+{
+	struct exciter_state *e = fx->state;
+	return snprintf(buf, len,
+		"\"type\":\"exciter_native\",\"bypass\":%d,\"amount\":%.4f,"
+		"\"drive\":%.2f,\"freq\":%.1f,\"ceil\":%.4f",
+		e->bypass, e->amount, e->drive, e->freq, e->ceil);
+}
+
+int fx_init_exciter_native(fx_engine_t *fx, float sample_rate)
+{
+	struct exciter_state *e = calloc(1, sizeof(*e));
+	if (!e) return 0;
+	e->sr = sample_rate;
+	e->amount = 0.0f; e->drive = 1.0f; e->freq = 8000.0f; e->ceil = 1.0f;
+	exciter_recalc(e);
+	fx->type_name = "exciter_native";
+	fx->state = e;
+	fx->process_block = exciter_process_block;
+	fx->set_param = exciter_set_param;
+	fx->reset = exciter_reset;
+	fx->get_state = exciter_get_state;
+	return 1;
+}
+
+/* ========================================================================
+ *   4e. V9.5.20 — fx_limiter_native : limiter natif (parité surrogate
+ *   limiter du training — envelope follower + hard knee + soft ceiling).
+ *
+ *     x   *= g_in
+ *     env  = follower(max(|L|,|R|), attack at, release rt)
+ *     gain = env > th ? th / env : 1
+ *     y    = (x × gain), soft-clip ceil × tanh(y/ceil), × g_out
+ *
+ *   Params (mêmes noms/unités que le push daemon, LSP-compatibles) :
+ *   th (lin), g_in (lin), g_out (lin), at (ms), rt (ms), ceil (lin).
+ *   Coût ≈ 60 µs / période.
+ * ====================================================================== */
+
+struct limiter_state {
+	float sr;
+	int   bypass;                  /* M/A GUI : 1 = traverse sans effet */
+	float th, g_in, g_out, at_ms, rt_ms, ceil;
+	float env;
+	float a_a, a_r;
+	float cfg_at, cfg_rt;
+};
+
+static void limiter_recalc(struct limiter_state *l)
+{
+	l->a_a = 1.0f - expf(-1.0f / (CLAMP(l->at_ms, 0.1f, 100.0f) * l->sr / 1000.0f));
+	l->a_r = 1.0f - expf(-1.0f / (CLAMP(l->rt_ms, 1.0f, 1000.0f) * l->sr / 1000.0f));
+	l->cfg_at = l->at_ms; l->cfg_rt = l->rt_ms;
+}
+
+static void limiter_process_block(fx_engine_t *fx,
+				   const float *in_l, const float *in_r,
+				   float *out_l, float *out_r,
+				   uint32_t N)
+{
+	struct limiter_state *l = fx->state;
+	if (l->bypass) {
+		if (out_l != in_l) memcpy(out_l, in_l, N * sizeof(float));
+		if (out_r != in_r) memcpy(out_r, in_r, N * sizeof(float));
+		return;
+	}
+	if (l->cfg_at != l->at_ms || l->cfg_rt != l->rt_ms)
+		limiter_recalc(l);
+	const float th = l->th;
+	const float gi = l->g_in, go = l->g_out;
+	const float cl = l->ceil < 1e-6f ? 1e-6f : l->ceil;
+	float env = l->env;
+	for (uint32_t s = 0; s < N; s++) {
+		const float xl = in_l[s] * gi;
+		const float xr = in_r[s] * gi;
+		const float al = fabsf(xl), ar = fabsf(xr);
+		const float am = al > ar ? al : ar;
+		env += (am > env ? l->a_a : l->a_r) * (am - env);
+		const float gain = env > th ? th / (env + 1e-12f) : 1.0f;
+		const float yl = xl * gain;
+		const float yr = xr * gain;
+		out_l[s] = cl * tanhf(yl / cl) * go;
+		out_r[s] = cl * tanhf(yr / cl) * go;
+	}
+	l->env = env;
+}
+
+static int limiter_set_param(fx_engine_t *fx, const char *name, float value)
+{
+	struct limiter_state *l = fx->state;
+	if      (!strcmp(name, "bypass")) l->bypass = value > 0.5f;
+	else if (!strcmp(name, "th"))    l->th    = CLAMP(value, 0.05f, 1.0f);
+	else if (!strcmp(name, "g_in"))  l->g_in  = CLAMP(value, 0.1f, 16.0f);
+	else if (!strcmp(name, "g_out")) l->g_out = CLAMP(value, 0.1f, 2.0f);
+	else if (!strcmp(name, "at"))    l->at_ms = CLAMP(value, 0.1f, 100.0f);
+	else if (!strcmp(name, "rt"))    l->rt_ms = CLAMP(value, 1.0f, 1000.0f);
+	else if (!strcmp(name, "ceil"))  l->ceil  = CLAMP(value, 0.5f, 1.0f);
+	else return -1;
+	return 0;
+}
+
+static void limiter_reset(fx_engine_t *fx)
+{
+	struct limiter_state *l = fx->state;
+	l->env = 0.0f;
+}
+
+static int limiter_get_state(fx_engine_t *fx, char *buf, int len)
+{
+	struct limiter_state *l = fx->state;
+	return snprintf(buf, len,
+		"\"type\":\"limiter_native\",\"bypass\":%d,\"th\":%.4f,"
+		"\"g_in\":%.4f,\"g_out\":%.4f,\"at\":%.2f,\"rt\":%.1f,\"ceil\":%.4f",
+		l->bypass, l->th, l->g_in, l->g_out, l->at_ms, l->rt_ms, l->ceil);
+}
+
+int fx_init_limiter_native(fx_engine_t *fx, float sample_rate)
+{
+	struct limiter_state *l = calloc(1, sizeof(*l));
+	if (!l) return 0;
+	l->sr = sample_rate;
+	l->th = 1.0f; l->g_in = 1.0f; l->g_out = 1.0f;
+	l->at_ms = 4.0f; l->rt_ms = 100.0f; l->ceil = 0.99f;
+	limiter_recalc(l);
+	fx->type_name = "limiter_native";
+	fx->state = l;
+	fx->process_block = limiter_process_block;
+	fx->set_param = limiter_set_param;
+	fx->reset = limiter_reset;
+	fx->get_state = limiter_get_state;
+	return 1;
+}
+
 /* ========================================================================
  *   5. LV2 plugin host (V9.2) — lilv-0
  * ======================================================================
@@ -1636,6 +2102,9 @@ int fx_init_chain(fx_engine_t *fx, float sample_rate,
 		else if (!strcmp(s->engine, "delay"))      ok = fx_init_delay     (&c->plugins[i], sample_rate);
 		else if (!strcmp(s->engine, "eq"))         ok = fx_init_eq        (&c->plugins[i], sample_rate);
 		else if (!strcmp(s->engine, "para_eq_x16")) ok = fx_init_para_eq_x16(&c->plugins[i], sample_rate);
+		else if (!strcmp(s->engine, "spectral_env")) ok = fx_init_spectral_env(&c->plugins[i], sample_rate);
+		else if (!strcmp(s->engine, "exciter_native")) ok = fx_init_exciter_native(&c->plugins[i], sample_rate);
+		else if (!strcmp(s->engine, "limiter_native")) ok = fx_init_limiter_native(&c->plugins[i], sample_rate);
 		else if (!strcmp(s->engine, "lv2") && s->uri && *s->uri)
 			ok = fx_init_lv2(&c->plugins[i], sample_rate, s->uri);
 		if (!ok) {

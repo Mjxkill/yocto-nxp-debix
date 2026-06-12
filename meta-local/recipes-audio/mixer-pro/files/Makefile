@@ -9,7 +9,7 @@ LILV_LIBS   := $(shell pkg-config --libs   lilv-0 2>/dev/null)
 # V9.5.12 — fftw3f pour ml_features.c (FFT 1024 float32).
 FFTW_LIBS := -lfftw3f
 # V9.5.12 — librt = shm_open/mmap pour SHM tap audio export.
-LIBS     = -lasound -lpthread -lm -lrt
+LIBS     = -lasound -lpthread -lm -lrt $(FFTW_LIBS)   # V9.5.20 : fx_spectral_env (FIR irfft)
 
 PREFIX  ?= /usr
 BINDIR  ?= $(PREFIX)/bin

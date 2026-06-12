@@ -616,6 +616,74 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			return send_json(conn, n > 0 ? 200 : 503, reply);
 		}
 
+		if (!strcmp(url, "/api/sysload")) {
+			/* V9.5.20 — charge CPU0-3 (delta /proc/stat depuis l'appel
+			 * précédent), NPU + GPU (galcore debugfs gc/load). La charge
+			 * DSP n'est pas exposée par la fw SOF (perf counters Zephyr
+			 * non compilés) → -1. */
+			static unsigned long long prev_busy[4], prev_total[4];
+			int cpu_pct[4] = {0, 0, 0, 0};
+			FILE *f = fopen("/proc/stat", "r");
+			if (f) {
+				char ln[256];
+				while (fgets(ln, sizeof(ln), f)) {
+					int c;
+					unsigned long long u, ni, s, idle, iow, irq, sirq, st;
+					if (sscanf(ln, "cpu%d %llu %llu %llu %llu %llu %llu %llu %llu",
+						   &c, &u, &ni, &s, &idle, &iow, &irq, &sirq, &st) == 9
+					    && c >= 0 && c < 4) {
+						unsigned long long busy = u + ni + s + irq + sirq + st;
+						unsigned long long total = busy + idle + iow;
+						unsigned long long db = busy - prev_busy[c];
+						unsigned long long dt = total - prev_total[c];
+						if (prev_total[c] && dt > 0)
+							cpu_pct[c] = (int)(db * 100 / dt);
+						prev_busy[c] = busy;
+						prev_total[c] = total;
+					}
+				}
+				fclose(f);
+			}
+			/* DSP load : SW REG 0xE0 (%) + heartbeat 0xE4 publiés par
+			 * la fw SOF (zephyr_dma_domain, fenêtre DEBUG mailbox).
+			 * Heartbeat figé entre 2 appels = pipelines stoppés → 0%. */
+			static unsigned int prev_beat;
+			static int dsp_pct = -1;
+			f = fopen("/sys/kernel/debug/sof/debug", "rb");
+			if (f) {
+				unsigned int regs[2] = {0, 0};
+				if (fseek(f, 0xE0, SEEK_SET) == 0 &&
+				    fread(regs, 4, 2, f) == 2) {
+					dsp_pct = (regs[1] != prev_beat && regs[0] <= 100)
+						  ? (int)regs[0] : 0;
+					prev_beat = regs[1];
+				}
+				fclose(f);
+			}
+			int gpu = -1, npu = -1;
+			f = fopen("/sys/kernel/debug/gc/load", "r");
+			if (f) {
+				char ln[128];
+				int core = -1;
+				while (fgets(ln, sizeof(ln), f)) {
+					int v;
+					if (sscanf(ln, "core : %d", &v) == 1) core = v;
+					else if (sscanf(ln, "load : %d%%", &v) == 1) {
+						if (core == 0) gpu = v;
+						else if (core == 1) npu = v;
+					}
+				}
+				fclose(f);
+			}
+			char reply[256];
+			snprintf(reply, sizeof(reply),
+				 "{\"ok\":true,\"cpu\":[%d,%d,%d,%d],"
+				 "\"gpu\":%d,\"npu\":%d,\"dsp\":%d}",
+				 cpu_pct[0], cpu_pct[1], cpu_pct[2], cpu_pct[3],
+				 gpu, npu, dsp_pct);
+			return send_json(conn, 200, reply);
+		}
+
 		if (!strcmp(url, "/api/drift")) {
 			/* V8.1.b : drift USB↔DSP mesuré passivement par mixer-pro.
 			 * V8.30 : grand buffer pour les stats timing wr/rd. */

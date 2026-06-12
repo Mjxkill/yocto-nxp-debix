@@ -62,6 +62,14 @@ int fx_init_delay     (fx_engine_t *fx, float sample_rate);
 int fx_init_eq        (fx_engine_t *fx, float sample_rate);
 /* V9.5.12 — 16 biquads peak stéréo lock-free (mastering ML). */
 int fx_init_para_eq_x16(fx_engine_t *fx, float sample_rate);
+/* V9.5.20 — engine neutre (bus FX send "passthrough"). */
+int fx_init_passthrough(fx_engine_t *fx, float sample_rate);
+/* V9.5.20 — enveloppe spectrale 64 pts par canal → FIR 256 phase linéaire. */
+int fx_init_spectral_env(fx_engine_t *fx, float sample_rate);
+/* V9.5.20 — exciter natif (parité surrogate calibré Calf, fit 2026-06-10). */
+int fx_init_exciter_native(fx_engine_t *fx, float sample_rate);
+/* V9.5.20 — limiter natif (parité surrogate limiter du training). */
+int fx_init_limiter_native(fx_engine_t *fx, float sample_rate);
 
 /* V9.2 — LV2 plugin host (lilv-0).
  * Charge dynamiquement un plugin LV2 par son URI, vérifie hardRTCapable,

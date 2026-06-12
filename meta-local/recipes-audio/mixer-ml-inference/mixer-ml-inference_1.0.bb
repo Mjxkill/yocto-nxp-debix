@@ -1,4 +1,4 @@
-SUMMARY = "V9.5.12 mixer-ml-inference — daemon ML mastering NPU"
+SUMMARY = "V9.5.20 mixer-ml-inference — daemon ML mastering enveloppe spectrale NPU"
 DESCRIPTION = "Process séparé qui lit l'audio (NPU TAP IN /dev/imx-audio-tap-in \
 pour HW IN, ou /dev/shm/mixer-pro-tap-usb pour USB IN), calcule les features \
 (FFT 1024 + 11 floats), invoque le modèle TFLite INT8 sur NPU via VX delegate, \
@@ -8,12 +8,13 @@ que les threads RT99 de mixer-pro provoque un freeze kernel (galcore + IRQ \
 storm vs audio_thread). Process séparé = pas d'interférence."
 HOMEPAGE = "https://github.com/Mjxkill/yocto-nxp-debix"
 LICENSE = "GPL-2.0-or-later"
-LIC_FILES_CHKSUM = "file://mixer-ml-inference.c;beginline=1;endline=2;md5=cfa333c28b94c54d228eecd95f238319"
+LIC_FILES_CHKSUM = "file://mixer-ml-inference.c;beginline=1;endline=2;md5=7eded808ddbf99a9e00fc0258990e9da"
 
 SRC_URI = " \
     file://mixer-ml-inference.c \
-    file://ml_features.c \
-    file://ml_features.h \
+    file://ml_features_v3.c \
+    file://ml_features_v3.h \
+    file://ml_features_v3_tables.h \
     file://mixer_pro_shm_tap.h \
     file://imx-audio-tap-uapi.h \
     file://Makefile \

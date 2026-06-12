@@ -5,7 +5,7 @@ Requires=mixer-pro.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/mixer-ml-inference /etc/mixer-pro/mastering_v5_12_int8.tflite
+ExecStart=/usr/bin/mixer-ml-inference /etc/mixer-pro/mastering_v5_20_int8.tflite
 Restart=on-failure
 RestartSec=5s
 # Process séparé non-RT (TFLite NPU dans même process que mixer-pro RT99
