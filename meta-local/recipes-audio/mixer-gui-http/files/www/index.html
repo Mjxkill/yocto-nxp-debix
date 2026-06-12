@@ -900,7 +900,7 @@ html, body {
     errPlay <span class="v" x-text="drift.xruns_play || 0"></span>
   </div>
   <!-- V9.5.20 — charge système : CPU0-3 / GPU / NPU / DSP -->
-  <div class="app-stat" :title="'Charge par core. C0-C1: daemon ML + système | C2: audio RT (isolé) | C3: USB gadget (isolé)'">
+  <div class="app-stat" :title="'Charge par core. C0-C1: daemon ML + système (/proc/stat) | C2: audio RT = (prof_mix+prof_play)/2ms mesuré par mixer-pro (le /proc/stat est faux sur core isolé RT) | C3: USB gadget (isolé)'">
     cpu <span class="v" x-text="(sysload.cpu||[0,0,0,0]).join('/')"></span> %
   </div>
   <div class="app-stat" :class="(sysload.npu > 80) ? 'warn' : ''"

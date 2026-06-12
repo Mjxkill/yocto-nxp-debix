@@ -670,6 +670,24 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 				}
 				fclose(f);
 			}
+			/* C2 (core audio RT isolé) : /proc/stat est faux (aliasing
+			 * tick NO_HZ_IDLE vs période RT 2 ms → 0 % ou 57 % fantômes).
+			 * Vraie charge = timestamps internes de mixer-pro :
+			 * (prof_mix + prof_play) / période 2000 µs. */
+			{
+				char st[2048];
+				if (mixer_request("{\"op\":\"get_state\"}\n", st, sizeof(st)) > 0) {
+					long mix_us = 0, play_us = 0;
+					char *p = strstr(st, "\"prof_mix_us\":");
+					if (p) mix_us = atol(p + 14);
+					p = strstr(st, "\"prof_play_us\":");
+					if (p) play_us = atol(p + 15);
+					if (mix_us > 0) {
+						int c2 = (int)((mix_us + play_us) / 20);
+						cpu_pct[2] = c2 > 100 ? 100 : c2;
+					}
+				}
+			}
 			int gpu = -1, npu = -1;
 			f = fopen("/sys/kernel/debug/gc/load", "r");
 			if (f) {
