@@ -13,7 +13,14 @@ Baseline insert vide : **126.0 µs**.  345 plugins RT, 316 testés (hors multi-c
 | instrument (synthés/samplers) | 9 | non (pas d'entrée audio) |
 | midi (séquenceurs) | 4 | non (pas d'audio) |
 
-## ⚠ Crashes mixer-pro (5)
+## ⚠ Crashes mixer-pro (2 réels + 3 faux positifs)
+
+Re-test individuel (2026-06-17) : **seuls les 2 meters crashent vraiment**.
+Les 3 LSP étaient des FAUX POSITIFS du bench — plugins si lourds (1400-1500 µs)
+que `get_state` dépassait le timeout 3 s → le bench croyait à un crash. Re-testés
+seuls : `sc_mb_gate_mono` 1499 µs OK, `mb_compressor_stereo` 1397 µs OK,
+`multisampler_x24_stereo` refusé proprement. Aucun ne plante.
+
 
 | Plugin | Quand | Cause racine |
 |---|---|---|
@@ -23,8 +30,9 @@ Baseline insert vide : **126.0 µs**.  345 plugins RT, 316 testés (hors multi-c
 | LSP Multi-Sampler x24 Stereo | run | sampler lourd, SIGSEGV/alloc |
 | LSP Sidechain Multiband Gate Mono x8 | run | plugin lourd, SIGSEGV/alloc |
 
-Meters (Histogram, Bit Meter) → déjà non-sélectionnables (catégorie graphique).
-3 LSP restent sélectionnables (à traiter).
+Meters (Histogram, Bit Meter) → déjà non-sélectionnables (catégorie graphique)
+→ **② résolu par la catégorisation**. Bug host résiduel : assertion atom out
+`capacity>920` (n'affecte que ces meters, non utilisables en insert de toute façon).
 
 ## Top 25 CPU (effets)
 
