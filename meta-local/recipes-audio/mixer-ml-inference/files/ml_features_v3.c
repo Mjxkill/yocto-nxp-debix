@@ -110,10 +110,17 @@ void mlf3_push_frame(mlf3_state_t *st, const float *audio480)
         feats[MLF3_N_MEL_SHORT + m] = acc;
     }
 
-    /* --- long terme : FFT 8192 sur la fenêtre 100 ms ---
+    /* --- long terme : FFT 8192 sur la fenêtre 100 ms (décimée 1 cycle/2) ---
      * Parité features_v3.py : si le ring n'est pas plein, le segment plus
-     * court est fenêtré par la FIN de la fenêtre Hann longue. */
-    {
+     * court est fenêtré par la FIN de la fenêtre Hann longue.
+     * V9.5.21 : calculée seulement 1 cycle sur 2 (long_phase) ; le cycle
+     * sauté réutilise cached_bf. Au 1er cycle (pas de cache) on calcule. */
+    st->long_phase = (st->long_phase + 1) % MLF3_LONG_DECIM;
+    if (st->long_phase != 0 && st->has_cached_bf) {
+        /* cycle sauté : réutilise les BF cachées */
+        for (int b = 0; b < MLF3_N_BF; b++)
+            feats[64 + b] = st->cached_bf[b];
+    } else {
         int avail = st->ring_filled < MLF3_WIN_LONG ? st->ring_filled
                                                      : MLF3_WIN_LONG;
         const float *seg = st->ring100 + (MLF3_WIN_LONG - avail);
@@ -132,7 +139,9 @@ void mlf3_push_frame(mlf3_state_t *st, const float *audio480)
                 acc += re * re + im * im;
             }
             feats[64 + b] = log10f(acc / (float)(c > 0 ? c : 1) + 1e-10f);
+            st->cached_bf[b] = feats[64 + b];
         }
+        st->has_cached_bf = 1;
     }
 
     /* --- delta-Mel --- */

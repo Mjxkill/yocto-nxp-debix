@@ -7,6 +7,7 @@
 #include "ml_features_v3_tables.h"
 
 #define MLF3_N_WINDOW 10     /* fenêtre modèle : 10 trames de 10 ms */
+#define MLF3_LONG_DECIM 2    /* V9.5.21 : FFT 8192 calculée 1 cycle/2 (50 Hz) */
 
 typedef struct {
     /* ring audio 100 ms pour la FFT longue */
@@ -15,6 +16,13 @@ typedef struct {
     /* mel précédent pour delta */
     float prev_mel[MLF3_N_MEL_SHORT];
     int   has_prev_mel;
+    /* V9.5.21 — cache des 16 bandes BF : la FFT 8192 (fenêtre 100 ms) est
+     * décimée à 1 cycle/2 (un estimé basses sur 100 ms n'a pas besoin de
+     * 100 Hz). Réduit le CPU/trafic mémoire du daemon → moins de stalls
+     * capture. La valeur cachée est réutilisée le cycle sauté. */
+    float cached_bf[MLF3_N_BF];
+    int   has_cached_bf;
+    int   long_phase;
     /* ring de 10 trames de features (fenêtre modèle) */
     float window[MLF3_N_WINDOW * MLF3_N_FEATURES];
     int   n_frames;
