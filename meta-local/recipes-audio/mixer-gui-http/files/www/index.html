@@ -1242,12 +1242,17 @@ html, body {
              @click="openStripDetail(o+15, 'P'+o, 'Phone out', true)">
           <div class="label" x-text="'P' + o"></div>
           <div class="sublabel">aloop</div>
-          <div class="fader-meter-pair" style="justify-content:center;">
-            <div class="meter" style="width:8px">
+          <div class="fader-meter-pair">
+            <div class="fader-track">
+              <input type="range" class="fader" min="-60" max="12" step="0.5"
+                     x-init="$el.value = outGainDb(o+15)"
+                     @input="setOutGain(o+15, $event.target.value)">
+            </div>
+            <div class="meter">
               <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o+15]) + '%'"></div>
             </div>
           </div>
-          <div class="db-readout" x-text="peakDb(peakOut[o+15]).toFixed(0) + ' dB'"></div>
+          <div class="db-readout" x-text="outGainDb(o+15).toFixed(1) + ' dB'"></div>
         </div>
       </template>
     </div>
