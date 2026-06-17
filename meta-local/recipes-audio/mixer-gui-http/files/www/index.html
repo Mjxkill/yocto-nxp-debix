@@ -850,6 +850,32 @@ html, body {
   background: linear-gradient(180deg, rgba(245,158,11,0.32), rgba(245,158,11,0.12));
   border-color: rgba(245,158,11,0.6);
 }
+/* ===== V9.5.21 — UI riche paramètres LV2 ===== */
+.fxp-groups { display:flex; flex-direction:column; gap:10px; }
+.fxp-card { background:rgba(255,255,255,0.03); border:1px solid var(--border);
+  border-left:3px solid var(--accent); border-radius:7px; padding:8px 10px; }
+.fxp-card-title { font-size:10px; font-weight:700; letter-spacing:.5px;
+  text-transform:uppercase; color:var(--accent); margin-bottom:8px;
+  display:flex; align-items:center; gap:6px; }
+.fxp-card-title .n { color:var(--text-mute); font-weight:400; }
+.fxp-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+  gap:10px 12px; }
+.fxp-ctrl { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.fxp-lbl { font-size:10px; color:var(--text); display:flex; justify-content:space-between;
+  gap:6px; align-items:baseline; }
+.fxp-lbl .val { color:var(--accent); font-variant-numeric:tabular-nums; font-size:10px; }
+.fxp-ctrl input[type=range] { width:100%; height:4px; accent-color:var(--accent);
+  background:rgba(255,255,255,0.08); border-radius:2px; }
+.fxp-ctrl select { width:100%; font-size:10px; padding:3px 4px; background:#1a1a1a;
+  color:#fff; border:1px solid #444; border-radius:4px; }
+.fxp-sw { position:relative; width:38px; height:20px; border-radius:11px; cursor:pointer;
+  border:1px solid #555; transition:background .15s; flex:0 0 auto; }
+.fxp-sw.on { background:var(--accent); border-color:var(--accent); }
+.fxp-sw.off { background:#333; }
+.fxp-sw .knob { position:absolute; top:1px; left:1px; width:16px; height:16px;
+  border-radius:50%; background:#fff; transition:transform .15s; }
+.fxp-sw.on .knob { transform:translateX(18px); }
+.fxp-ctrl.toggle { flex-direction:row; align-items:center; justify-content:space-between; }
 </style>
 </head>
 <body x-data="mixerApp()" x-init="init()">
@@ -1774,22 +1800,79 @@ html, body {
         </div>
       </template>
 
-      <!-- Params LV2 dynamiques depuis fxState[b].params{} avec heuristique slider spec -->
+      <!-- V9.5.21 — Params LV2 : groupés en cartes, widget adapté au type -->
       <template x-if="fxState[selectedFxBus].type === 'lv2' && fxState[selectedFxBus].params">
-        <div class="alsa-ctrls">
-          <template x-for="(val, key) in fxState[selectedFxBus].params" :key="key">
-            <div class="alsa-ctrl">
-              <div class="alsa-ctrl-label" x-text="key"></div>
-              <div class="alsa-ctrl-int">
-                <input type="range"
-                       :min="fxLv2SliderSpec(key, val).min"
-                       :max="fxLv2SliderSpec(key, val).max"
-                       :step="fxLv2SliderSpec(key, val).step"
-                       :value="val"
-                       @input.debounce.40ms="setFxParam(selectedFxBus, key, $event.target.value)">
-                <span class="alsa-ctrl-val"
-                      x-text="Number(val).toFixed(fxLv2SliderSpec(key, val).step < 1 ? 2 : 0)
-                              + ' ' + fxLv2SliderSpec(key, val).unit"></span>
+        <div class="fxp-groups">
+          <template x-for="grp in fxGroupedParams()" :key="grp.name">
+            <div class="fxp-card">
+              <div class="fxp-card-title">
+                <span x-text="grp.name"></span>
+                <span class="n" x-text="'· ' + grp.items.length"></span>
+              </div>
+              <div class="fxp-grid">
+                <template x-for="it in grp.items" :key="it.key">
+                  <div class="fxp-ctrl" :class="fxWidget(it.m)==='toggle' ? 'toggle' : ''">
+
+                    <!-- TOGGLE : switch on/off -->
+                    <template x-if="fxWidget(it.m)==='toggle'">
+                      <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+                        <span class="fxp-lbl" style="flex:1" x-text="it.m.label || it.key"></span>
+                        <div class="fxp-sw" :class="(Number(it.val)>0.5)?'on':'off'"
+                             @click="setFxParam(selectedFxBus, it.key, Number(it.val)>0.5?0:1)">
+                          <div class="knob"></div>
+                        </div>
+                      </div>
+                    </template>
+
+                    <!-- ENUM : menu déroulant nommé -->
+                    <template x-if="fxWidget(it.m)==='enum'">
+                      <div>
+                        <div class="fxp-lbl"><span x-text="it.m.label || it.key"></span></div>
+                        <select @change="setFxParam(selectedFxBus, it.key, $event.target.value)">
+                          <template x-for="o in fxEnumOpts(it.m)" :key="o.value">
+                            <option :value="o.value" :selected="Math.round(Number(it.val))===o.value"
+                                    x-text="o.label"></option>
+                          </template>
+                        </select>
+                      </div>
+                    </template>
+
+                    <!-- INT : slider entier -->
+                    <template x-if="fxWidget(it.m)==='int'">
+                      <div>
+                        <div class="fxp-lbl">
+                          <span x-text="it.m.label || it.key"></span>
+                          <span class="val" x-text="Math.round(Number(it.val)) + ' ' + fxUnit(it.key,it.m)"></span>
+                        </div>
+                        <input type="range" :min="fxLv2SliderSpec(it.key,it.val).min"
+                               :max="fxLv2SliderSpec(it.key,it.val).max" step="1" :value="it.val"
+                               @input.debounce.40ms="setFxParam(selectedFxBus, it.key, $event.target.value)">
+                      </div>
+                    </template>
+
+                    <!-- SLIDER continu (log si flag) -->
+                    <template x-if="fxWidget(it.m)==='slider'">
+                      <div>
+                        <div class="fxp-lbl">
+                          <span x-text="it.m.label || it.key"></span>
+                          <span class="val" x-text="Number(it.val).toFixed(fxLv2SliderSpec(it.key,it.val).step<1?2:0) + ' ' + fxUnit(it.key,it.m) + (fxIsLog(it.m)?' ~':'')"></span>
+                        </div>
+                        <template x-if="fxIsLog(it.m)">
+                          <input type="range" min="0" max="1000" step="1"
+                                 :value="fxLogPos(Number(it.val), fxLv2SliderSpec(it.key,it.val))"
+                                 @input.debounce.40ms="setFxParam(selectedFxBus, it.key, fxLogVal($event.target.value, fxLv2SliderSpec(it.key,it.val)))">
+                        </template>
+                        <template x-if="!fxIsLog(it.m)">
+                          <input type="range" :min="fxLv2SliderSpec(it.key,it.val).min"
+                                 :max="fxLv2SliderSpec(it.key,it.val).max" :step="fxLv2SliderSpec(it.key,it.val).step"
+                                 :value="it.val"
+                                 @input.debounce.40ms="setFxParam(selectedFxBus, it.key, $event.target.value)">
+                        </template>
+                      </div>
+                    </template>
+
+                  </div>
+                </template>
               </div>
             </div>
           </template>
@@ -3893,6 +3976,66 @@ function mixerApp() {
         return { min: r.min, max: r.max, step, unit: heur.unit };
       }
       return heur;
+    },
+
+    /* ===== V9.5.21 — UI riche des paramètres LV2 ===== */
+    _fxMeta(key) {
+      const fx = this.fxState[this.selectedFxBus];
+      return (fx && fx.meta && fx.meta[key]) || {};
+    },
+    /* déduit un groupe : meta.grp déclaré > index de bande dans le nom > Général */
+    _fxInferGroup(key, m) {
+      if (m && m.grp) return m.grp;
+      const s = (m && m.label) || key;
+      const mb = s.match(/(?:^|[ _])(\d+)(?:[ _]|$)/);
+      if (mb) return 'Bande ' + mb[1];
+      return 'Général';
+    },
+    /* groupes ordonnés [{name, items:[{key,val,m}]}] pour le bus courant */
+    fxGroupedParams() {
+      const fx = this.fxState[this.selectedFxBus];
+      if (!fx || !fx.params) return [];
+      const meta = fx.meta || {};
+      const groups = {}, order = [];
+      for (const key in fx.params) {
+        const m = meta[key] || {};
+        const g = this._fxInferGroup(key, m);
+        if (!groups[g]) { groups[g] = []; order.push(g); }
+        groups[g].push({ key, val: fx.params[key], m });
+      }
+      /* "Général" en premier s'il existe */
+      order.sort((a,b) => (a==='Général'?-1:b==='Général'?1:0));
+      return order.map(g => ({ name: g, items: groups[g] }));
+    },
+    /* type de widget : 'toggle' | 'enum' | 'int' | 'slider' */
+    fxWidget(m) {
+      const k = (m && m.kind) || 0;
+      if ((k & 0x0f) === 1) return 'toggle';
+      if ((k & 0x0f) === 2) return 'enum';
+      if ((k & 0x0f) === 3) return 'int';
+      return 'slider';
+    },
+    fxIsLog(m) { return ((m && m.kind) & 0x10) !== 0; },
+    /* options enum depuis sp "v=Label;v=Label" → [{value,label}] triées */
+    fxEnumOpts(m) {
+      if (!m || !m.sp) return [];
+      return m.sp.split(';').map(s => {
+        const i = s.indexOf('=');
+        return { value: parseFloat(s.slice(0, i)), label: s.slice(i + 1) };
+      }).sort((a,b) => a.value - b.value);
+    },
+    fxUnit(key, m) {
+      if (m && m.unit) return m.unit;
+      return this.fxLv2ParamSpec(key, 0).unit;   /* fallback heuristique */
+    },
+    /* slider log : position 0..1000 ↔ valeur (freq/temps) */
+    fxLogPos(val, sp) {
+      const lo = Math.max(sp.min, 1e-6), hi = sp.max, v = Math.max(val, lo);
+      return Math.round(1000 * Math.log(v/lo) / Math.log(hi/lo));
+    },
+    fxLogVal(pos, sp) {
+      const lo = Math.max(sp.min, 1e-6), hi = sp.max;
+      return lo * Math.pow(hi/lo, pos/1000);
     },
 
     fxLv2ParamSpec(key, currentValue) {

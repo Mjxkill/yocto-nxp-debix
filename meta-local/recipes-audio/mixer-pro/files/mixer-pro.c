@@ -1934,7 +1934,7 @@ static int json_has_op(const char *s, const char *op)
 static void handle_cmd(int fd, const char *line)
 {
 	/* V9.3.3 : 16 KB pour get_fx avec params + ranges (NPU). */
-	static char reply[16384];
+	static char reply[49152];
 
 	if (json_has_op(line, "set_send")) {
 		int in, bus;
@@ -2122,7 +2122,7 @@ static void handle_cmd(int fd, const char *line)
 		}
 		/* V9.3.3 : 8 KB pour tenir params + ranges (NPU). LSP MB Comp x8
 		 * a ~200 params × ~30 chars = 6 KB + ranges 6 KB → 12 KB sécurité. */
-		static char body[16384];
+		static char body[49152];
 		g_st.fx_engines[bus].get_state(&g_st.fx_engines[bus], body, sizeof(body));
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"bus\":%d,%s}\n", bus, body);

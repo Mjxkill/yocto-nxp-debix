@@ -1123,6 +1123,15 @@ static LilvNode  *g_uri_hard_rt         = NULL;
 static LilvNode  *g_uri_atom_port       = NULL;
 static LV2_URID   g_urid_atom_sequence  = 0;
 static LV2_URID   g_urid_atom_chunk     = 0;
+/* V9.5.21 — métadonnées d'affichage des paramètres (UI riche) */
+static LilvNode  *g_uri_toggled         = NULL;
+static LilvNode  *g_uri_enumeration     = NULL;
+static LilvNode  *g_uri_integer         = NULL;
+static LilvNode  *g_uri_logarithmic     = NULL;
+static LilvNode  *g_uri_units_unit      = NULL;
+static LilvNode  *g_uri_units_symbol    = NULL;
+static LilvNode  *g_uri_pg_group        = NULL;
+static LilvNode  *g_uri_rdfs_label      = NULL;
 
 /* V9.2-step5d : LV2 options host feature globals.
  * Permet de passer maxBlockLength, sampleRate, etc. au plugin à init.
@@ -1195,6 +1204,14 @@ static int lv2_world_init(void)
 	g_uri_input_port    = lilv_new_uri(g_lv2_world, LV2_CORE__InputPort);
 	g_uri_output_port   = lilv_new_uri(g_lv2_world, LV2_CORE__OutputPort);
 	g_uri_hard_rt       = lilv_new_uri(g_lv2_world, LV2_CORE__hardRTCapable);
+	g_uri_toggled       = lilv_new_uri(g_lv2_world, LV2_CORE__toggled);
+	g_uri_enumeration   = lilv_new_uri(g_lv2_world, LV2_CORE__enumeration);
+	g_uri_integer       = lilv_new_uri(g_lv2_world, LV2_CORE__integer);
+	g_uri_logarithmic   = lilv_new_uri(g_lv2_world, "http://lv2plug.in/ns/ext/port-props#logarithmic");
+	g_uri_units_unit    = lilv_new_uri(g_lv2_world, "http://lv2plug.in/ns/extensions/units#unit");
+	g_uri_units_symbol  = lilv_new_uri(g_lv2_world, "http://lv2plug.in/ns/extensions/units#symbol");
+	g_uri_pg_group      = lilv_new_uri(g_lv2_world, "http://lv2plug.in/ns/ext/port-groups#group");
+	g_uri_rdfs_label    = lilv_new_uri(g_lv2_world, "http://www.w3.org/2000/01/rdf-schema#label");
 	g_uri_atom_port     = lilv_new_uri(g_lv2_world, LV2_ATOM__AtomPort);
 
 	/* Pre-map atom URIDs (utilisés à chaque cycle audio dans lv2_process) */
@@ -1351,6 +1368,15 @@ struct lv2_state {
 	 * Pour tau=50ms, period=96, sr=48k → alpha ≈ 0.0392 → 95% en ~150ms.
 	 * Évite clicks sur changes NPU rapides (peut sauter dB d'un coup). */
 	float          ctrl_target[LV2_MAX_CTRL_PORTS];
+	/* V9.5.21 — métadonnées d'affichage par param (UI riche dans la GUI) :
+	 * kind 0=continu 1=toggle 2=enum 3=entier ; flag log (bit 0x10).
+	 * scale points (enum "v=Label;...") en string optionnelle (NULL sinon).
+	 * group/unit : labels LV2 si déclarés (vides sinon). */
+	uint8_t        ctrl_kind[LV2_MAX_CTRL_PORTS];
+	char          *ctrl_sp[LV2_MAX_CTRL_PORTS];
+	char           ctrl_label[LV2_MAX_CTRL_PORTS][LV2_MAX_NAME_LEN];  /* rdfs:label (affichage) */
+	char           ctrl_group[LV2_MAX_CTRL_PORTS][LV2_MAX_NAME_LEN];
+	char           ctrl_unit[LV2_MAX_CTRL_PORTS][16];
 
 	/* Buffers I/O 1-sample (legacy V9.2 sample-by-sample, plus utilisés en V9.3). */
 	float          buf_in_l, buf_in_r, buf_out_l, buf_out_r;
@@ -1630,7 +1656,22 @@ static int lv2_get_state(fx_engine_t *fx, char *buf, int len)
 		n += json_float(buf + n, len - n, st->ctrl_in_default[i]);
 		n += snprintf(buf + n, len - n, "}");
 	}
-	if (n < len - 2) n += snprintf(buf + n, len - n, "}");
+	/* V9.5.21 — meta d'affichage : label, kind (0 cont/1 toggle/2 enum/3 int,
+	 * +0x10 log), unit, group, scale points. Pour UI riche groupée. */
+	if (n < len - 16)
+		n += snprintf(buf + n, len - n, "},\"meta\":{");
+	for (int i = 0; i < st->n_ctrl_in && n < len - 160; i++) {
+		n += snprintf(buf + n, len - n,
+		              "%s\"%s\":{\"label\":\"%s\",\"kind\":%d,\"unit\":\"%s\",\"grp\":\"%s\"",
+		              i == 0 ? "" : ",", st->ctrl_in_name[i],
+		              st->ctrl_label[i], st->ctrl_kind[i],
+		              st->ctrl_unit[i], st->ctrl_group[i]);
+		if (st->ctrl_sp[i] && n < len - 540) {
+			n += snprintf(buf + n, len - n, ",\"sp\":\"%s\"", st->ctrl_sp[i]);
+		}
+		n += snprintf(buf + n, len - n, "}");
+	}
+	if (n < len - 4) n += snprintf(buf + n, len - n, "}");
 	return n;
 }
 
@@ -1874,9 +1915,68 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 			st->ctrl_in_min[idx]     = mins[i];
 			st->ctrl_in_max[idx]     = maxs[i];
 			st->ctrl_in_default[idx] = defaults[i];
+			/* clé = symbol (unique, pour set_param + clé JSON) */
 			LilvNode *sym = (LilvNode *)lilv_port_get_symbol(plug, port);
-			const char *sym_str = sym ? lilv_node_as_string(sym) : "?";
-			strncpy(st->ctrl_in_name[idx], sym_str, LV2_MAX_NAME_LEN - 1);
+			strncpy(st->ctrl_in_name[idx], sym ? lilv_node_as_string(sym) : "?",
+			        LV2_MAX_NAME_LEN - 1);
+			/* label d'affichage = lilv_port_get_name (« Threshold ») */
+			LilvNode *pname = lilv_port_get_name(plug, port);
+			strncpy(st->ctrl_label[idx],
+			        pname ? lilv_node_as_string(pname) : st->ctrl_in_name[idx],
+			        LV2_MAX_NAME_LEN - 1);
+			if (pname) lilv_node_free(pname);
+
+			/* V9.5.21 — type du paramètre pour le bon widget GUI */
+			uint8_t kind = 0;   /* continu */
+			if (lilv_port_has_property(plug, port, g_uri_toggled))     kind = 1;
+			else if (lilv_port_has_property(plug, port, g_uri_enumeration)) kind = 2;
+			else if (lilv_port_has_property(plug, port, g_uri_integer)) kind = 3;
+			if (lilv_port_has_property(plug, port, g_uri_logarithmic))  kind |= 0x10;
+			st->ctrl_kind[idx] = kind;
+
+			/* scale points (valeurs nommées) → "v=Label;v=Label;..." */
+			st->ctrl_sp[idx] = NULL;
+			LilvScalePoints *sps = lilv_port_get_scale_points(plug, port);
+			if (sps) {
+				char spbuf[512]; int sn = 0; spbuf[0] = '\0';
+				LILV_FOREACH(scale_points, sit, sps) {
+					const LilvScalePoint *sp = lilv_scale_points_get(sps, sit);
+					const LilvNode *sv = lilv_scale_point_get_value(sp);
+					const LilvNode *sl = lilv_scale_point_get_label(sp);
+					if (!sv || !sl) continue;
+					sn += snprintf(spbuf + sn, sizeof(spbuf) - sn, "%s%g=%s",
+					               sn ? ";" : "",
+					               lilv_node_as_float(sv), lilv_node_as_string(sl));
+					if (sn >= (int)sizeof(spbuf) - 32) break;
+				}
+				if (sn > 0) st->ctrl_sp[idx] = strdup(spbuf);
+				lilv_scale_points_free(sps);
+			}
+
+			/* unité (symbole : dB, Hz, ms...) */
+			st->ctrl_unit[idx][0] = '\0';
+			LilvNodes *us = lilv_port_get_value(plug, port, g_uri_units_unit);
+			if (us && lilv_nodes_size(us) > 0) {
+				const LilvNode *u = lilv_nodes_get_first(us);
+				LilvNodes *sy = lilv_world_find_nodes(g_lv2_world, u, g_uri_units_symbol, NULL);
+				if (sy && lilv_nodes_size(sy) > 0)
+					strncpy(st->ctrl_unit[idx], lilv_node_as_string(lilv_nodes_get_first(sy)), 15);
+				if (sy) lilv_nodes_free(sy);
+			}
+			if (us) lilv_nodes_free(us);
+
+			/* groupe (section : Compressor, Band 1...) */
+			st->ctrl_group[idx][0] = '\0';
+			LilvNodes *gn = lilv_port_get_value(plug, port, g_uri_pg_group);
+			if (gn && lilv_nodes_size(gn) > 0) {
+				const LilvNode *g = lilv_nodes_get_first(gn);
+				LilvNodes *gl = lilv_world_find_nodes(g_lv2_world, g, g_uri_rdfs_label, NULL);
+				if (gl && lilv_nodes_size(gl) > 0)
+					strncpy(st->ctrl_group[idx], lilv_node_as_string(lilv_nodes_get_first(gl)), LV2_MAX_NAME_LEN - 1);
+				if (gl) lilv_nodes_free(gl);
+			}
+			if (gn) lilv_nodes_free(gn);
+
 			lilv_instance_connect_port(st->instance, i,
 				&st->ctrl_values[idx]);
 		} else if (is_ctrl) {
@@ -2229,6 +2329,8 @@ void fx_free(fx_engine_t *fx)
 		/* V9.2-step5c : libère les buffers atom alloués en fx_init_lv2 */
 		for (int k = 0; k < st->n_atom_in; k++)  free(st->atom_in_bufs[k]);
 		for (int k = 0; k < st->n_atom_out; k++) free(st->atom_out_bufs[k]);
+		/* V9.5.21 : libère les scale points strdup'd */
+		for (int k = 0; k < st->n_ctrl_in; k++)  free(st->ctrl_sp[k]);
 		free(st->uri);
 	}
 	free(fx->state);
