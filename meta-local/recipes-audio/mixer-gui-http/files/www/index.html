@@ -1817,8 +1817,8 @@ html, body {
                     <template x-if="fxWidget(it.m)==='toggle'">
                       <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
                         <span class="fxp-lbl" style="flex:1" x-text="it.m.label || it.key"></span>
-                        <div class="fxp-sw" :class="(Number(it.val)>0.5)?'on':'off'"
-                             @click="setFxParam(selectedFxBus, it.key, Number(it.val)>0.5?0:1)">
+                        <div class="fxp-sw" :class="(fxVal(it.key)>0.5)?'on':'off'"
+                             @click="setFxParamLive(selectedFxBus, it.key, fxVal(it.key)>0.5?0:1)">
                           <div class="knob"></div>
                         </div>
                       </div>
@@ -1828,9 +1828,9 @@ html, body {
                     <template x-if="fxWidget(it.m)==='enum'">
                       <div>
                         <div class="fxp-lbl"><span x-text="it.m.label || it.key"></span></div>
-                        <select @change="setFxParam(selectedFxBus, it.key, $event.target.value)">
+                        <select @change="setFxParamLive(selectedFxBus, it.key, $event.target.value)">
                           <template x-for="o in fxEnumOpts(it.m)" :key="o.value">
-                            <option :value="o.value" :selected="Math.round(Number(it.val))===o.value"
+                            <option :value="o.value" :selected="Math.round(fxVal(it.key))===o.value"
                                     x-text="o.label"></option>
                           </template>
                         </select>
@@ -1842,11 +1842,12 @@ html, body {
                       <div>
                         <div class="fxp-lbl">
                           <span x-text="it.m.label || it.key"></span>
-                          <span class="val" x-text="Math.round(Number(it.val)) + ' ' + fxUnit(it.key,it.m)"></span>
+                          <span class="val" x-text="Math.round(fxVal(it.key)) + ' ' + fxUnit(it.key,it.m)"></span>
                         </div>
-                        <input type="range" :min="fxLv2SliderSpec(it.key,it.val).min"
-                               :max="fxLv2SliderSpec(it.key,it.val).max" step="1" :value="it.val"
-                               @input.debounce.40ms="setFxParam(selectedFxBus, it.key, $event.target.value)">
+                        <input type="range" :min="fxLv2SliderSpec(it.key,fxVal(it.key)).min"
+                               :max="fxLv2SliderSpec(it.key,fxVal(it.key)).max" step="1"
+                               x-init="$el.value = fxVal(it.key)"
+                               @input="setFxParamLive(selectedFxBus, it.key, $event.target.value)">
                       </div>
                     </template>
 
@@ -1855,18 +1856,18 @@ html, body {
                       <div>
                         <div class="fxp-lbl">
                           <span x-text="it.m.label || it.key"></span>
-                          <span class="val" x-text="Number(it.val).toFixed(fxLv2SliderSpec(it.key,it.val).step<1?2:0) + ' ' + fxUnit(it.key,it.m) + (fxIsLog(it.m)?' ~':'')"></span>
+                          <span class="val" x-text="Number(fxVal(it.key)).toFixed(fxLv2SliderSpec(it.key,fxVal(it.key)).step<1?2:0) + ' ' + fxUnit(it.key,it.m) + (fxIsLog(it.m)?' ~':'')"></span>
                         </div>
                         <template x-if="fxIsLog(it.m)">
                           <input type="range" min="0" max="1000" step="1"
-                                 :value="fxLogPos(Number(it.val), fxLv2SliderSpec(it.key,it.val))"
-                                 @input.debounce.40ms="setFxParam(selectedFxBus, it.key, fxLogVal($event.target.value, fxLv2SliderSpec(it.key,it.val)))">
+                                 x-init="$el.value = fxLogPos(fxVal(it.key), fxLv2SliderSpec(it.key,fxVal(it.key)))"
+                                 @input="setFxParamLive(selectedFxBus, it.key, fxLogVal($event.target.value, fxLv2SliderSpec(it.key,fxVal(it.key))))">
                         </template>
                         <template x-if="!fxIsLog(it.m)">
-                          <input type="range" :min="fxLv2SliderSpec(it.key,it.val).min"
-                                 :max="fxLv2SliderSpec(it.key,it.val).max" :step="fxLv2SliderSpec(it.key,it.val).step"
-                                 :value="it.val"
-                                 @input.debounce.40ms="setFxParam(selectedFxBus, it.key, $event.target.value)">
+                          <input type="range" :min="fxLv2SliderSpec(it.key,fxVal(it.key)).min"
+                                 :max="fxLv2SliderSpec(it.key,fxVal(it.key)).max" :step="fxLv2SliderSpec(it.key,fxVal(it.key)).step"
+                                 x-init="$el.value = fxVal(it.key)"
+                                 @input="setFxParamLive(selectedFxBus, it.key, $event.target.value)">
                         </template>
                       </div>
                     </template>
@@ -3991,21 +3992,48 @@ function mixerApp() {
       if (mb) return 'Bande ' + mb[1];
       return 'Général';
     },
-    /* groupes ordonnés [{name, items:[{key,val,m}]}] pour le bus courant */
+    /* groupes ordonnés [{name, items:[{key,m}]}] — MÉMOÏSÉ sur (bus + clés).
+     * Les VALEURS ne sont PAS dans les items : le template les lit en direct
+     * via fxState[bus].params[key] → pas de re-groupement à chaque tick VU,
+     * et le slider ne saute pas pendant le drag. */
     fxGroupedParams() {
       const fx = this.fxState[this.selectedFxBus];
       if (!fx || !fx.params) return [];
+      const sig = this.selectedFxBus + '|' + Object.keys(fx.params).join(',');
+      if (this._fxGroupsSig === sig) return this._fxGroupsCache;
       const meta = fx.meta || {};
       const groups = {}, order = [];
       for (const key in fx.params) {
         const m = meta[key] || {};
         const g = this._fxInferGroup(key, m);
         if (!groups[g]) { groups[g] = []; order.push(g); }
-        groups[g].push({ key, val: fx.params[key], m });
+        groups[g].push({ key, m });
       }
-      /* "Général" en premier s'il existe */
       order.sort((a,b) => (a==='Général'?-1:b==='Général'?1:0));
-      return order.map(g => ({ name: g, items: groups[g] }));
+      this._fxGroupsSig = sig;
+      this._fxGroupsCache = order.map(g => ({ name: g, items: groups[g] }));
+      return this._fxGroupsCache;
+    },
+    /* valeur live d'un param (lue directement, pas via les items cachés) */
+    fxVal(key) {
+      const fx = this.fxState[this.selectedFxBus];
+      return (fx && fx.params && fx.params[key]) ?? 0;
+    },
+    /* MAJ slider : valeur locale immédiate (anti-saut) + envoi backend throttlé */
+    setFxParamLive(bus, key, value) {
+      const v = parseFloat(value);
+      const fx = this.fxState[bus];
+      if (fx && fx.params) fx.params[key] = v;   /* in place, pas de recréation */
+      this._fxTh = this._fxTh || {};
+      const id = bus + ':' + key, now = performance.now();
+      if (now - (this._fxTh[id] || 0) > 45) {
+        this._fxTh[id] = now;
+        this.sendCmd({ op:'set_fx_param', bus, param:key, value:v });
+      } else {
+        clearTimeout(this._fxTrail);
+        this._fxTrail = setTimeout(() =>
+          this.sendCmd({ op:'set_fx_param', bus, param:key, value:v }), 45);
+      }
     },
     /* type de widget : 'toggle' | 'enum' | 'int' | 'slider' */
     fxWidget(m) {
