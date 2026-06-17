@@ -1186,12 +1186,17 @@ html, body {
              @click="openStripDetail(o-1, 'S'+o, 'DSP play', true)">
           <div class="label" x-text="'S' + o"></div>
           <div class="sublabel">DSP</div>
-          <div class="fader-meter-pair" style="justify-content:center;">
-            <div class="meter" style="width:8px">
+          <div class="fader-meter-pair">
+            <div class="fader-track">
+              <input type="range" class="fader" min="-60" max="12" step="0.5"
+                     x-init="$el.value = outGainDb(o-1)"
+                     @input="setOutGain(o-1, $event.target.value)">
+            </div>
+            <div class="meter">
               <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o-1]) + '%'"></div>
             </div>
           </div>
-          <div class="db-readout" x-text="peakDb(peakOut[o-1]).toFixed(0) + ' dB'"></div>
+          <div class="db-readout" x-text="outGainDb(o-1).toFixed(1) + ' dB'"></div>
         </div>
       </template>
     </div>
@@ -1209,12 +1214,17 @@ html, body {
              @click="openStripDetail(o+7, 'U'+o, 'USB ASIO out', true)">
           <div class="label" x-text="'U' + o"></div>
           <div class="sublabel">UAC2</div>
-          <div class="fader-meter-pair" style="justify-content:center;">
-            <div class="meter" style="width:8px">
+          <div class="fader-meter-pair">
+            <div class="fader-track">
+              <input type="range" class="fader" min="-60" max="12" step="0.5"
+                     x-init="$el.value = outGainDb(o+7)"
+                     @input="setOutGain(o+7, $event.target.value)">
+            </div>
+            <div class="meter">
               <div class="meter-fill" :style="'height:' + peakDbPercent(peakOut[o+7]) + '%'"></div>
             </div>
           </div>
-          <div class="db-readout" x-text="peakDb(peakOut[o+7]).toFixed(0) + ' dB'"></div>
+          <div class="db-readout" x-text="outGainDb(o+7).toFixed(1) + ' dB'"></div>
         </div>
       </template>
     </div>
@@ -2039,6 +2049,7 @@ function mixerApp() {
     sysload: { cpu: [0,0,0,0], gpu: -1, npu: -1, dsp: -1 },   /* V9.5.20 */
     micMap: [0,1,2,3,4,5,6,7],   /* V9.5.21 — remap source slot par mic DSP */
     micMapOpen: false,
+    outGain: [],                 /* V9.5.21 — gain par sortie (milli ×1000) */
     drift: { ppm: 0, valid: 0, shift_ppm: 0, shift_ppm_cap: 0, shift_ppm_play: 0,
              xruns_cap: 0, xruns_play: 0, drops_play: 0,
              cap_full_evt: 0, cap_empty_evt: 0,
@@ -2152,6 +2163,7 @@ function mixerApp() {
       this.fetchSysload();
       setInterval(() => this.fetchSysload(), 1000);
       this.fetchMicMap();
+      this.fetchOutGain();
       /* V9.5.12 — poll Mixer Assistant state + insert params live à 5 Hz */
       this.pollAssistant();
       setInterval(() => this.pollAssistant(), 200);
@@ -2492,6 +2504,31 @@ function mixerApp() {
     async setMicMap(mic, slot) {
       const j = await this.sendCmd({ op:'set_input_map', mic, slot: Number(slot) });
       if (j && j.ok && Array.isArray(j.map)) this.micMap = j.map;
+    },
+
+    /* V9.5.21 — gains de sortie */
+    async fetchOutGain() {
+      const j = await this.sendCmd({ op:'get_output_gain' });
+      if (j && j.ok && Array.isArray(j.gains)) this.outGain = j.gains;
+    },
+    outGainDb(out) {
+      const m = this.outGain[out];
+      if (m == null) return 0;
+      return m <= 0 ? -60 : 20 * Math.log10(m / 1000);
+    },
+    setOutGain(out, db) {
+      const v = parseFloat(db);
+      /* MAJ locale immédiate (anti-saut) + envoi throttlé */
+      this.outGain[out] = v <= -60 ? 0 : Math.round(Math.pow(10, v/20) * 1000);
+      this._ogTh = this._ogTh || {};
+      const now = performance.now();
+      if (now - (this._ogTh[out] || 0) > 45) {
+        this._ogTh[out] = now;
+        this.sendCmd({ op:'set_output_gain', out, db: v });
+      } else {
+        clearTimeout(this._ogTrail);
+        this._ogTrail = setTimeout(() => this.sendCmd({ op:'set_output_gain', out, db: v }), 45);
+      }
     },
 
     async fetchDrift() {

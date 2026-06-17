@@ -1958,10 +1958,29 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 			LilvNodes *us = lilv_port_get_value(plug, port, g_uri_units_unit);
 			if (us && lilv_nodes_size(us) > 0) {
 				const LilvNode *u = lilv_nodes_get_first(us);
+				/* 1) symbole inline (units custom) */
 				LilvNodes *sy = lilv_world_find_nodes(g_lv2_world, u, g_uri_units_symbol, NULL);
 				if (sy && lilv_nodes_size(sy) > 0)
 					strncpy(st->ctrl_unit[idx], lilv_node_as_string(lilv_nodes_get_first(sy)), 15);
 				if (sy) lilv_nodes_free(sy);
+				/* 2) sinon mappe les units LV2 standard par leur URI (le symbole
+				 * est dans l'ontologie units, souvent non chargée). */
+				if (st->ctrl_unit[idx][0] == '\0' && lilv_node_is_uri(u)) {
+					const char *uu = lilv_node_as_uri(u);
+					const char *h = strchr(uu, '#');
+					const char *suf = h ? h + 1 : uu;
+					static const struct { const char *k, *v; } M[] = {
+						{"db","dB"},{"hz","Hz"},{"khz","kHz"},{"mhz","MHz"},
+						{"s","s"},{"ms","ms"},{"min","min"},{"pc","%"},
+						{"degree","°"},{"semitone12TET","st"},{"cent","ct"},
+						{"bpm","bpm"},{"oct","oct"},{"hz","Hz"},{"bel","B"},
+						{"m","m"},{"cm","cm"},{"mm","mm"},{"km","km"},
+						{"coef","x"},{"frame","fr"},{NULL,NULL}};
+					for (int mi = 0; M[mi].k; mi++)
+						if (!strcmp(suf, M[mi].k)) {
+							strncpy(st->ctrl_unit[idx], M[mi].v, 15); break;
+						}
+				}
 			}
 			if (us) lilv_nodes_free(us);
 

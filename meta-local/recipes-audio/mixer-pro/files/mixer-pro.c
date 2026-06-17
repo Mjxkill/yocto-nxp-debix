@@ -1148,6 +1148,11 @@ static atomic_int g_presets_dirty = 0;
  * Défaut identité (0..7). Corrige un ordre de slots/câblage TAC ≠ M1..M8. */
 static atomic_int g_mic_map[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
 
+/* V9.5.21 — gain de sortie par strip OUT (×1000, milli-linéaire). Trim final
+ * appliqué après l'insert, avant interleave. Défaut 1000 (= ×1.0). Initialisé
+ * dans main() (zero-init = silence sinon). */
+static atomic_int g_out_gain_m[N_OUTPUT_TOTAL];
+
 /* V9.4 — insert mastering : chaîne de N plugins sur out_0+out_1 DSP.
  * g_insert_active = 0 : bypass total, mix_block out directement vers convert.
  * g_insert_active = 1 : g_insert_chain.process_block sur out_block[0..1].
@@ -1614,6 +1619,16 @@ static void *audio_thread(void *arg)
 				out_block[0], out_block[1],
 				out_block[0], out_block[1],
 				PERIOD_FRAMES);
+		}
+
+		/* V9.5.21 — gain de sortie par strip OUT (trim final) */
+		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
+			int gm = atomic_load_explicit(&g_out_gain_m[o], memory_order_relaxed);
+			if (gm != 1000) {
+				float g = gm * 0.001f;
+				for (int f = 0; f < PERIOD_FRAMES; f++)
+					out_block[o][f] *= g;
+			}
 		}
 
 		/* Analyzer taps : push N samples par tap (lecture buffers block) */
@@ -2664,6 +2679,38 @@ static void handle_cmd(int fd, const char *line)
 			        atomic_load_explicit(&g_mic_map[i], memory_order_relaxed));
 		dprintf(fd, "]}\n");
 
+	} else if (json_has_op(line, "set_output_gain")) {
+		/* V9.5.21 — gain d'une sortie : {"op":"set_output_gain","out":O,"db":X}
+		 * out : 0..N_OUTPUT_TOTAL-1 (0-7 DSP, 8-15 USB, 16-17 phone).
+		 * db : -60..+12 dB (ou "gain" linéaire direct). */
+		int out;
+		float db, gain;
+		if (json_get_int(line, "out", &out) >= 0 &&
+		    out >= 0 && out < N_OUTPUT_TOTAL) {
+			float g = 1.0f;
+			if (json_get_float(line, "db", &db) >= 0)
+				g = (db <= -60.0f) ? 0.0f : powf(10.0f, db / 20.0f);
+			else if (json_get_float(line, "gain", &gain) >= 0)
+				g = gain;
+			int gm = (int)(g * 1000.0f + 0.5f);
+			if (gm < 0) gm = 0;
+			if (gm > 4000) gm = 4000;
+			atomic_store_explicit(&g_out_gain_m[out], gm, memory_order_relaxed);
+			atomic_store(&g_presets_dirty, 1);
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_output_gain\",\"gains\":[");
+		for (int o = 0; o < N_OUTPUT_TOTAL; o++)
+			dprintf(fd, "%s%d", o ? "," : "",
+			        atomic_load_explicit(&g_out_gain_m[o], memory_order_relaxed));
+		dprintf(fd, "]}\n");
+
+	} else if (json_has_op(line, "get_output_gain")) {
+		dprintf(fd, "{\"ok\":true,\"op\":\"get_output_gain\",\"gains\":[");
+		for (int o = 0; o < N_OUTPUT_TOTAL; o++)
+			dprintf(fd, "%s%d", o ? "," : "",
+			        atomic_load_explicit(&g_out_gain_m[o], memory_order_relaxed));
+		dprintf(fd, "]}\n");
+
 	} else if (json_has_op(line, "get_meters")) {
 		/* E7.1 + E7.5 : retourne peaks + analyzer (spectrum + scope) en
 		 * un seul round-trip, consommé par mixer-gui-http /api/stream.
@@ -3069,6 +3116,31 @@ static void load_mic_map(void)
 	fclose(f);
 }
 
+/* V9.5.21 — persistance des gains de sortie (×1000 milli-linéaire). */
+#define OUT_GAIN_PATH "/var/lib/mixer-pro/out_gain"
+static void save_out_gain(void)
+{
+	mkdir("/var/lib/mixer-pro", 0755);
+	FILE *f = fopen(OUT_GAIN_PATH, "w");
+	if (!f) return;
+	for (int o = 0; o < N_OUTPUT_TOTAL; o++)
+		fprintf(f, "%d%s", atomic_load_explicit(&g_out_gain_m[o],
+		        memory_order_relaxed), o < N_OUTPUT_TOTAL - 1 ? " " : "\n");
+	fclose(f);
+}
+static void load_out_gain(void)
+{
+	FILE *f = fopen(OUT_GAIN_PATH, "r");
+	if (!f) return;
+	for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
+		int v;
+		if (fscanf(f, "%d", &v) != 1) break;
+		if (v >= 0 && v <= 4000)
+			atomic_store_explicit(&g_out_gain_m[o], v, memory_order_relaxed);
+	}
+	fclose(f);
+}
+
 static void *persistence_thread(void *arg)
 {
 	(void)arg;
@@ -3076,13 +3148,15 @@ static void *persistence_thread(void *arg)
 		sleep(1);
 		if (atomic_exchange(&g_presets_dirty, 0)) {
 			save_presets();
-			save_mic_map();   /* V9.5.21 */
+			save_mic_map();    /* V9.5.21 */
+			save_out_gain();   /* V9.5.21 */
 		}
 	}
 	/* Final save au shutdown si dirty */
 	if (atomic_load(&g_presets_dirty)) {
 		save_presets();
 		save_mic_map();
+		save_out_gain();
 	}
 	return NULL;
 }
@@ -3140,7 +3214,10 @@ int main(int argc, char **argv)
 	mlog("mixer-pro " MIXER_VERSION " starting (skip_uac2=%d skip_phone=%d)",
 	     g_skip_uac2, g_skip_phone);
 
-	load_mic_map();   /* V9.5.21 — restaure le remap mic persisté */
+	for (int o = 0; o < N_OUTPUT_TOTAL; o++)
+		atomic_store(&g_out_gain_m[o], 1000);   /* gain sortie ×1.0 par défaut */
+	load_mic_map();    /* V9.5.21 — restaure le remap mic persisté */
+	load_out_gain();   /* V9.5.21 — restaure les gains de sortie persistés */
 
 	/* Reset matrices = identity (all 0, then fx_bus_target = 1.0) */
 	memset(&g_st.send_gain,     0, sizeof(g_st.send_gain));
