@@ -834,9 +834,11 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		if (req[n - 1] != '\n') req[n++] = '\n';
 		req[n] = '\0';
 
-		/* V9.2d-step5e : 32 KB pour supporter list_lv2_plugins avec 200+ plugins
-		 * (chaque entry ~80 octets). 8 KB tronquait à 88 plugins. */
-		static char reply[32768];
+		/* V9.2d-step5e : 32 KB pour list_lv2_plugins avec 200+ plugins.
+		 * V9.5.21 : 64 KB — l'ajout des champs cat/ai/ao/ins par plugin a
+		 * porté la liste (345 plugins) à ~42 KB → 32 KB tronquait le JSON
+		 * → 0 effet dans la GUI. Aligné sur le lv2_buf 65536 de mixer-pro. */
+		static char reply[65536];
 		int rc = mixer_request(req, reply, sizeof(reply));
 		return send_json(conn, rc > 0 ? 200 : 503, reply);
 	}
