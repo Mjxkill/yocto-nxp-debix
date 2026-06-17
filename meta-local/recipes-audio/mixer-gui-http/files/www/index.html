@@ -1715,9 +1715,29 @@ html, body {
             <option value="delay">Delay</option>
             <option value="eq">EQ 3-band</option>
           </optgroup>
-          <optgroup :label="'LV2 plugins (' + lv2Plugins.length + ' dispos)'">
-            <template x-for="p in lv2Plugins" :key="p.uri">
+          <optgroup :label="'Effets (' + lv2Plugins.filter(p => p.cat===\'effet\' && p.ins).length + ')'">
+            <template x-for="p in lv2Plugins.filter(p => p.cat===\'effet\' && p.ins)" :key="p.uri">
               <option :value="'lv2:' + p.uri" x-text="p.name || p.uri"></option>
+            </template>
+          </optgroup>
+          <optgroup :label="'Effets multi-canaux — non supportés en stéréo (' + lv2Plugins.filter(p => p.cat===\'effet\' && !p.ins).length + ')'">
+            <template x-for="p in lv2Plugins.filter(p => p.cat===\'effet\' && !p.ins)" :key="p.uri">
+              <option disabled :value="'lv2:' + p.uri" x-text="p.name + ' (' + p.ai + 'in/' + p.ao + 'out)'"></option>
+            </template>
+          </optgroup>
+          <optgroup :label="'Graphique / analyseurs — visualisation (' + lv2Plugins.filter(p => p.cat===\'graphique\').length + ')'">
+            <template x-for="p in lv2Plugins.filter(p => p.cat===\'graphique\')" :key="p.uri">
+              <option disabled :value="'lv2:' + p.uri" x-text="p.name"></option>
+            </template>
+          </optgroup>
+          <optgroup :label="'Instruments — non utilisables en insert (' + lv2Plugins.filter(p => p.cat===\'instrument\').length + ')'">
+            <template x-for="p in lv2Plugins.filter(p => p.cat===\'instrument\')" :key="p.uri">
+              <option disabled :value="'lv2:' + p.uri" x-text="p.name"></option>
+            </template>
+          </optgroup>
+          <optgroup :label="'MIDI / séquenceurs (' + lv2Plugins.filter(p => p.cat===\'midi\').length + ')'">
+            <template x-for="p in lv2Plugins.filter(p => p.cat===\'midi\')" :key="p.uri">
+              <option disabled :value="'lv2:' + p.uri" x-text="p.name"></option>
             </template>
           </optgroup>
         </select>
@@ -2525,13 +2545,29 @@ function mixerApp() {
     _onAnalyzerFrame(arr) {
       for (let i = 0; i < arr.length && i < 4; i++) {
         const t = arr[i];
+        const wasOff = this.analyzerTaps[i].kind === 0;
         this.analyzerTaps[i].kind  = t.k;
         this.analyzerTaps[i].a     = t.a;
         this.analyzerTaps[i].b     = t.b;
         this.analyzerTaps[i].rms   = t.rms;
         this.analyzerTaps[i].spec  = t.s;
         this.analyzerTaps[i].scope = t.x;
-        this._drawAnalyzer(i);
+        if (t.k === 0) {
+          /* V9.5.21 — tap OFF : effacer le canvas (sinon la dernière image
+           * reste figée, ex: analyzers 3/4 à la fermeture de l'assistant). */
+          this.analyzerTaps[i].spec = null;
+          this.analyzerTaps[i].scope = null;
+          if (!wasOff) this._clearAnalyzer(i);
+        } else {
+          this._drawAnalyzer(i);
+        }
+      }
+    },
+
+    _clearAnalyzer(i) {
+      for (const id of ['anfft' + i, 'anscope' + i]) {
+        const c = document.getElementById(id);
+        if (c) { const x = c.getContext('2d'); x.clearRect(0, 0, c.width, c.height); }
       }
     },
 

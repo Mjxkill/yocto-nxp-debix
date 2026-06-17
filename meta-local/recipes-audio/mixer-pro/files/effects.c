@@ -1972,6 +1972,54 @@ int fx_init_lv2(fx_engine_t *fx, float sample_rate, const char *uri)
 	return 1;
 }
 
+/* V9.5.21 — compte les ports audio in (hors sidechain) / out d'un plugin et
+ * en déduit sa catégorie pour la GUI :
+ *   "effet"      : audio in >= 1 ET audio out >= 1  (traitement)
+ *   "instrument" : audio in == 0 ET audio out >= 1  (synthé/sampler MIDI→audio)
+ *   "graphique"  : audio out == 0                    (meter/scope/analyseur,
+ *                                                     visualisation uniquement)
+ * "ins"=1 si utilisable en insert stéréo (effet mono 1/1 ou stéréo 2/2 ;
+ * les versions multi-canaux x8/x32 ont ai/ao > 2 → ins=0, non supportées). */
+static const char *lv2_categorize(const LilvPlugin *plug, int *out_ai, int *out_ao)
+{
+	int np = (int)lilv_plugin_get_num_ports(plug);
+	int ai = 0, ao = 0;
+	for (int i = 0; i < np; i++) {
+		const LilvPort *port = lilv_plugin_get_port_by_index(plug, i);
+		if (!lilv_port_is_a(plug, port, g_uri_audio_port))
+			continue;
+		int is_in = lilv_port_is_a(plug, port, g_uri_input_port);
+		if (is_in) {
+			/* exclure les sidechains (symbol "sc...") du compte principal */
+			LilvNode *sym = (LilvNode *)lilv_port_get_symbol(plug, port);
+			const char *s = sym ? lilv_node_as_string(sym) : NULL;
+			if (!(s && strncmp(s, "sc", 2) == 0))
+				ai++;
+		} else {
+			ao++;
+		}
+	}
+	*out_ai = ai;
+	*out_ao = ao;
+
+	/* Classe LV2 prioritaire : les meters/analyseurs (Bit Meter, EBU, VU,
+	 * Spectrum, Histogram, Oscilloscope…) passent l'audio (ai/ao>=1) mais
+	 * leur rôle est la VISUALISATION → catégorie "graphique" même s'ils ont
+	 * des ports audio. Détecté via lv2:AnalyserPlugin. */
+	const LilvPluginClass *cls = lilv_plugin_get_class(plug);
+	if (cls) {
+		const LilvNode *curi = lilv_plugin_class_get_uri(cls);
+		const char *cs = curi ? lilv_node_as_string(curi) : NULL;
+		if (cs && strstr(cs, "AnalyserPlugin"))
+			return "graphique";
+	}
+
+	if (ai == 0 && ao == 0) return "midi";        /* séquenceur/MIDI, pas d'audio */
+	if (ai == 0)            return "instrument";  /* synthé/sampler MIDI→audio */
+	if (ao == 0)            return "graphique";   /* meter sans passthrough */
+	return "effet";
+}
+
 int fx_lv2_list_uris(char *buf, int len)
 {
 	if (!lv2_world_init()) return 0;
@@ -1984,11 +2032,17 @@ int fx_lv2_list_uris(char *buf, int len)
 		const LilvNode *uri  = lilv_plugin_get_uri(plug);
 		LilvNode *name       = lilv_plugin_get_name(plug);
 		if (!uri) continue;
-		if (n >= len - 128) break;
-		n += snprintf(buf + n, len - n, "%s{\"uri\":\"%s\",\"name\":\"%s\"}",
+		if (n >= len - 256) break;
+		int ai = 0, ao = 0;
+		const char *cat = lv2_categorize(plug, &ai, &ao);
+		int ins = (cat[0] == 'e' && ai >= 1 && ai <= 2 && ao >= 1 && ao <= 2);
+		n += snprintf(buf + n, len - n,
+		              "%s{\"uri\":\"%s\",\"name\":\"%s\",\"cat\":\"%s\","
+		              "\"ai\":%d,\"ao\":%d,\"ins\":%d}",
 		              first ? "" : ",",
 		              lilv_node_as_string(uri),
-		              name ? lilv_node_as_string(name) : "?");
+		              name ? lilv_node_as_string(name) : "?",
+		              cat, ai, ao, ins);
 		lilv_node_free(name);
 		first = 0;
 	}
