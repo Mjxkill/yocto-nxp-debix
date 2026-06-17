@@ -1770,14 +1770,14 @@ html, body {
               <div class="alsa-ctrl-label" x-text="key"></div>
               <div class="alsa-ctrl-int">
                 <input type="range"
-                       :min="fxLv2ParamSpec(key, val).min"
-                       :max="fxLv2ParamSpec(key, val).max"
-                       :step="fxLv2ParamSpec(key, val).step"
+                       :min="fxLv2SliderSpec(key, val).min"
+                       :max="fxLv2SliderSpec(key, val).max"
+                       :step="fxLv2SliderSpec(key, val).step"
                        :value="val"
                        @input.debounce.40ms="setFxParam(selectedFxBus, key, $event.target.value)">
                 <span class="alsa-ctrl-val"
-                      x-text="Number(val).toFixed(fxLv2ParamSpec(key, val).step < 1 ? 2 : 0)
-                              + ' ' + fxLv2ParamSpec(key, val).unit"></span>
+                      x-text="Number(val).toFixed(fxLv2SliderSpec(key, val).step < 1 ? 2 : 0)
+                              + ' ' + fxLv2SliderSpec(key, val).unit"></span>
               </div>
             </div>
           </template>
@@ -3844,6 +3844,29 @@ function mixerApp() {
      * Pas d'introspection des port:minimum/port:maximum côté backend pour
      * l'instant (TODO V9.3). On devine min/max/step depuis le nom + valeur
      * courante du paramètre. Mieux qu'un slider 0-1 plat. */
+    /* V9.5.21 — spec slider d'un param LV2 : utilise les VRAIES plages
+     * déclarées par le plugin (get_fx → ranges{min,max,def}) au lieu de
+     * deviner depuis le nom. Fallback heuristique si la plage est absente
+     * ou non bornée (null/NaN dans le TTL). Corrige le "curseur faux sur
+     * tous les effets". */
+    fxLv2SliderSpec(key, currentValue) {
+      const heur = this.fxLv2ParamSpec(key, currentValue);
+      const r = this.fxState[this.selectedFxBus]
+              && this.fxState[this.selectedFxBus].ranges
+              && this.fxState[this.selectedFxBus].ranges[key];
+      if (r && r.min != null && r.max != null
+          && isFinite(r.min) && isFinite(r.max) && r.max > r.min) {
+        const range = r.max - r.min;
+        let step;
+        if (r.min === 0 && r.max === 1) step = heur.step;        /* toggle/normalisé */
+        else if (range <= 2)   step = 0.01;
+        else if (range <= 100) step = 0.1;
+        else                   step = 1;
+        return { min: r.min, max: r.max, step, unit: heur.unit };
+      }
+      return heur;
+    },
+
     fxLv2ParamSpec(key, currentValue) {
       const k = (key||'').toLowerCase();
       const v = Number(currentValue) || 0;
