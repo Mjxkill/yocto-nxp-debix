@@ -1144,6 +1144,10 @@ static int g_skip_phone = 0;
 static atomic_int g_presets_dirty = 0;
 #define PRESETS_PATH "/var/lib/mixer-pro/presets.json"
 
+/* V9.5.21 — remap des 8 mics DSP : in_block[i] = slot TDM g_mic_map[i].
+ * Défaut identité (0..7). Corrige un ordre de slots/câblage TAC ≠ M1..M8. */
+static atomic_int g_mic_map[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+
 /* V9.4 — insert mastering : chaîne de N plugins sur out_0+out_1 DSP.
  * g_insert_active = 0 : bypass total, mix_block out directement vers convert.
  * g_insert_active = 1 : g_insert_chain.process_block sur out_block[0..1].
@@ -1573,10 +1577,16 @@ static void *audio_thread(void *arg)
 		uint32_t pk_out[N_OUTPUT_TOTAL] = {0};
 		uint32_t pk_fx[N_BUS_FX_CH] = {0};
 
-		/* Convert S32 → float, déinterleave par channel */
+		/* Convert S32 → float, déinterleave par channel.
+		 * V9.5.21 : remap des 8 mics DSP (g_mic_map) — corrige un câblage/
+		 * ordre de slots TDM ≠ M1..M8 attendu. in_block[i] = slot g_mic_map[i].
+		 * Affecte métre ET audio (cohérent). Défaut identité = sans effet. */
 		for (int f = 0; f < PERIOD_FRAMES; f++) {
 			for (int i = 0; i < N_INPUT_MICS; i++)
-				in_block[i][f] = s32_to_f(cap_dsp_buf[f * N_INPUT_MICS + i]);
+				in_block[i][f] = s32_to_f(
+					cap_dsp_buf[f * N_INPUT_MICS
+					            + atomic_load_explicit(&g_mic_map[i],
+					                                   memory_order_relaxed)]);
 			for (int i = 0; i < N_INPUT_STEMS; i++)
 				in_block[N_INPUT_MICS + i][f] = s32_to_f(cap_uac2_buf[f * N_INPUT_STEMS + i]);
 			for (int i = 0; i < N_INPUT_PHONE; i++)
@@ -2631,6 +2641,29 @@ static void handle_cmd(int fd, const char *line)
 		dprintf(fd, "{\"ok\":true,\"op\":\"list_lv2_plugins\",\"plugins\":%s}\n",
 		        n > 0 ? lv2_buf : "[]");
 
+	} else if (json_has_op(line, "set_input_map")) {
+		/* V9.5.21 — remap mic DSP : {"op":"set_input_map","mic":I,"slot":S}
+		 * (un mic) ou {"op":"set_input_map","map":[s0..s7]} (les 8). */
+		int mic, slot;
+		if (json_get_int(line, "mic", &mic) >= 0 &&
+		    json_get_int(line, "slot", &slot) >= 0 &&
+		    mic >= 0 && mic < 8 && slot >= 0 && slot < 8) {
+			atomic_store_explicit(&g_mic_map[mic], slot, memory_order_relaxed);
+			atomic_store(&g_presets_dirty, 1);
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_input_map\",\"map\":[");
+		for (int i = 0; i < 8; i++)
+			dprintf(fd, "%s%d", i ? "," : "",
+			        atomic_load_explicit(&g_mic_map[i], memory_order_relaxed));
+		dprintf(fd, "]}\n");
+
+	} else if (json_has_op(line, "get_input_map")) {
+		dprintf(fd, "{\"ok\":true,\"op\":\"get_input_map\",\"map\":[");
+		for (int i = 0; i < 8; i++)
+			dprintf(fd, "%s%d", i ? "," : "",
+			        atomic_load_explicit(&g_mic_map[i], memory_order_relaxed));
+		dprintf(fd, "]}\n");
+
 	} else if (json_has_op(line, "get_meters")) {
 		/* E7.1 + E7.5 : retourne peaks + analyzer (spectrum + scope) en
 		 * un seul round-trip, consommé par mixer-gui-http /api/stream.
@@ -3010,6 +3043,32 @@ static void save_presets(void)
 		fprintf(stderr, "save_presets: rename failed: %s\n", strerror(errno));
 }
 
+/* V9.5.21 — persistance dédiée du remap mic (fichier texte 8 entiers). */
+#define MIC_MAP_PATH "/var/lib/mixer-pro/mic_map"
+static void save_mic_map(void)
+{
+	mkdir("/var/lib/mixer-pro", 0755);
+	FILE *f = fopen(MIC_MAP_PATH, "w");
+	if (!f) return;
+	for (int i = 0; i < 8; i++)
+		fprintf(f, "%d%s", atomic_load_explicit(&g_mic_map[i],
+		        memory_order_relaxed), i < 7 ? " " : "\n");
+	fclose(f);
+}
+static void load_mic_map(void)
+{
+	FILE *f = fopen(MIC_MAP_PATH, "r");
+	if (!f) return;
+	int v[8];
+	if (fscanf(f, "%d %d %d %d %d %d %d %d",
+	           &v[0],&v[1],&v[2],&v[3],&v[4],&v[5],&v[6],&v[7]) == 8) {
+		for (int i = 0; i < 8; i++)
+			if (v[i] >= 0 && v[i] < 8)
+				atomic_store_explicit(&g_mic_map[i], v[i], memory_order_relaxed);
+	}
+	fclose(f);
+}
+
 static void *persistence_thread(void *arg)
 {
 	(void)arg;
@@ -3017,11 +3076,14 @@ static void *persistence_thread(void *arg)
 		sleep(1);
 		if (atomic_exchange(&g_presets_dirty, 0)) {
 			save_presets();
+			save_mic_map();   /* V9.5.21 */
 		}
 	}
 	/* Final save au shutdown si dirty */
-	if (atomic_load(&g_presets_dirty))
+	if (atomic_load(&g_presets_dirty)) {
 		save_presets();
+		save_mic_map();
+	}
 	return NULL;
 }
 
@@ -3077,6 +3139,8 @@ int main(int argc, char **argv)
 
 	mlog("mixer-pro " MIXER_VERSION " starting (skip_uac2=%d skip_phone=%d)",
 	     g_skip_uac2, g_skip_phone);
+
+	load_mic_map();   /* V9.5.21 — restaure le remap mic persisté */
 
 	/* Reset matrices = identity (all 0, then fx_bus_target = 1.0) */
 	memset(&g_st.send_gain,     0, sizeof(g_st.send_gain));

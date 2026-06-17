@@ -951,6 +951,10 @@ html, body {
     <div class="section-title">
       <span class="accent-dot"></span>DSP MICS
       <span class="count">×8 · post-TAC ADC chain</span>
+      <button @click="micMapOpen = !micMapOpen"
+              :style="'margin-left:8px; font-size:9px; padding:1px 7px; border-radius:3px; cursor:pointer; border:1px solid var(--border-hi); background:' + (micMap.some((s,i)=>s!==i) ? 'rgba(245,158,11,0.85); color:#000' : 'transparent; color:#888')"
+              title="Remap source TDM par mic (corrige un câblage/ordre de slots ≠ M1..M8). Sélectionne quelle entrée physique alimente chaque M.">
+        Remap<span x-show="micMap.some((s,i)=>s!==i)"> ●</span></button>
     </div>
     <div class="strips-row">
       <template x-for="i in 8" :key="'mic'+i">
@@ -959,6 +963,14 @@ html, body {
              @dblclick="openStripDetail(i-1, 'M'+i, 'Mic DSP', false)">
           <div class="label" x-text="'M' + i" @click="openStripDetail(i-1, 'M'+i, 'Mic DSP', false)"></div>
           <div class="sublabel" @click="openStripDetail(i-1, 'M'+i, 'Mic DSP', false)">DSP</div>
+          <!-- V9.5.21 — remap : quelle source TDM alimente ce M -->
+          <select x-show="micMapOpen" @change="setMicMap(i-1, $event.target.value)"
+                  style="width:100%; font-size:9px; padding:1px; margin:2px 0; background:#1a1a1a; color:#f59e0b; border:1px solid #444; border-radius:3px;"
+                  :title="'M'+i+' ← source slot'">
+            <template x-for="s in 8" :key="s">
+              <option :value="s-1" :selected="micMap[i-1]===s-1" x-text="'src ' + s"></option>
+            </template>
+          </select>
           <div class="fader-meter-pair">
             <div class="fader-track">
               <input type="range" class="fader" min="-60" max="6" step="0.5"
@@ -1941,6 +1953,8 @@ function mixerApp() {
       poll_ms: 200,
     },
     sysload: { cpu: [0,0,0,0], gpu: -1, npu: -1, dsp: -1 },   /* V9.5.20 */
+    micMap: [0,1,2,3,4,5,6,7],   /* V9.5.21 — remap source slot par mic DSP */
+    micMapOpen: false,
     drift: { ppm: 0, valid: 0, shift_ppm: 0, shift_ppm_cap: 0, shift_ppm_play: 0,
              xruns_cap: 0, xruns_play: 0, drops_play: 0,
              cap_full_evt: 0, cap_empty_evt: 0,
@@ -2053,6 +2067,7 @@ function mixerApp() {
       /* V9.5.20 — charge CPU/GPU/NPU à 1 Hz */
       this.fetchSysload();
       setInterval(() => this.fetchSysload(), 1000);
+      this.fetchMicMap();
       /* V9.5.12 — poll Mixer Assistant state + insert params live à 5 Hz */
       this.pollAssistant();
       setInterval(() => this.pollAssistant(), 200);
@@ -2383,6 +2398,18 @@ function mixerApp() {
       } catch(e) {}
     },
 
+    async fetchMicMap() {
+      try {
+        const j = await this.sendCmd({ op:'get_input_map' });
+        if (j && j.ok && Array.isArray(j.map)) this.micMap = j.map;
+      } catch(e) {}
+    },
+
+    async setMicMap(mic, slot) {
+      const j = await this.sendCmd({ op:'set_input_map', mic, slot: Number(slot) });
+      if (j && j.ok && Array.isArray(j.map)) this.micMap = j.map;
+    },
+
     async fetchDrift() {
       try {
         const r = await fetch('/api/drift');
@@ -2644,12 +2671,13 @@ function mixerApp() {
 
     async sendCmd(obj) {
       try {
-        await fetch('/api/cmd', {
+        const r = await fetch('/api/cmd', {
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body: JSON.stringify(obj)
         });
-      } catch(e) {}
+        return await r.json();   /* V9.5.21 : retourne la réponse (set/get_input_map) */
+      } catch(e) { return null; }
     },
 
     async resetDriftStats() {
