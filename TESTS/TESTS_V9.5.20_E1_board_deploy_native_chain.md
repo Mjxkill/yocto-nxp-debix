@@ -84,3 +84,38 @@ USB IN 8/9 → SHM tap → daemon mixer-ml-inference (cores 0-1, nice 10) :
 - v5.21 : loss spectrale loudness-normalisée (sub + sur-compression)
 - Offload insert chain core 3 (TODO mémorisé) — marge audio_thread
 - DSP à 72 % : surveiller avant tout nouvel effet DSP
+
+---
+
+## Addendum V9.5.21b (2026-07-02) — persistance état complet + revue critic
+
+Commits : `26f4761c` (fixes revue) après série V9.5.21 (classification plugins,
+UI riche, remap mics, gains sortie, décimation FFT).
+
+Revue croisée : critic job `dfeb668d` (qwen3-480b, minimax, glm-5.1,
+deepseek-v4) — les 3 fixes validés "bons et nécessaires" + slew anti-zipper
+ajouté sur recommandation (3 workers).
+
+**Test persistance (board 192.168.0.198 — NOUVELLE IP DHCP)** :
+- setup une fois → `/var/lib/mixer-pro/mixer_state` écrit (version 1)
+- `systemctl restart mixer-pro` SANS re-setup →
+  - insert chain restaurée (3 plugins natifs) ✓
+  - assistant mastering/usb restauré ✓
+  - routage master + input gains restaurés ✓
+- test fonctionnel : bruit rose via pipewire sink Debix →
+  in8/in9 -17.2 dB, out0/out1 -11.0 dB (mastering actif, make-up +6 dB) ✓
+
+Note PC : pipewire tient désormais le gadget (sink
+`alsa_output.usb-Electrosens_Debix_UAC2_8x8...`) — choisir "Debix UAC2 8x8"
+comme sortie système route tout l'audio PC par le mastering ; aplay direct
+sur hw échoue (Device busy), passer par paplay/pw-play ou libérer pipewire.
+
+Findings critic restants (non corrigés, à arbitrer) :
+- allpass reverb natif : feedforward -1.0 au lieu de -0.5 (nulle le DC,
+  +2.5 dB à Nyquist) — fix 1 ligne mais change le son → écoute requise
+- decay VU-mètres ~280 dB/s vs 12 dB/s documenté (commentaire faux ou
+  comportement à ralentir — arbitrage visuel)
+- json_get_int/float ne valident pas strtol/strtof (robustesse)
+- races techniques bénignes (lectures gains sans lock, ARM64 OK)
+
+## Test utilisateur : (persistance validée techniquement, écoute inchangée)
