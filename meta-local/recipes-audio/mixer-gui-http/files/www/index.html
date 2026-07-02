@@ -2523,16 +2523,20 @@ function mixerApp() {
     },
     setOutGain(out, db) {
       const v = parseFloat(db);
-      /* MAJ locale immédiate (anti-saut) + envoi throttlé */
+      /* MAJ locale immédiate (anti-saut) + envoi throttlé, timer par sortie */
       this.outGain[out] = v <= -60 ? 0 : Math.round(Math.pow(10, v/20) * 1000);
       this._ogTh = this._ogTh || {};
+      this._ogTrailMap = this._ogTrailMap || {};
       const now = performance.now();
+      clearTimeout(this._ogTrailMap[out]);
       if (now - (this._ogTh[out] || 0) > 45) {
         this._ogTh[out] = now;
         this.sendCmd({ op:'set_output_gain', out, db: v });
       } else {
-        clearTimeout(this._ogTrail);
-        this._ogTrail = setTimeout(() => this.sendCmd({ op:'set_output_gain', out, db: v }), 45);
+        this._ogTrailMap[out] = setTimeout(() => {
+          this._ogTh[out] = performance.now();
+          this.sendCmd({ op:'set_output_gain', out, db: v });
+        }, 45);
       }
     },
 
@@ -4061,20 +4065,25 @@ function mixerApp() {
       const fx = this.fxState[this.selectedFxBus];
       return (fx && fx.params && fx.params[key]) ?? 0;
     },
-    /* MAJ slider : valeur locale immédiate (anti-saut) + envoi backend throttlé */
+    /* MAJ slider : valeur locale immédiate (anti-saut) + envoi backend throttlé.
+     * V9.5.21b : timer de trailing PAR paramètre (un timer partagé perdait la
+     * dernière valeur d'un slider quand on en touchait un autre < 45 ms). */
     setFxParamLive(bus, key, value) {
       const v = parseFloat(value);
       const fx = this.fxState[bus];
       if (fx && fx.params) fx.params[key] = v;   /* in place, pas de recréation */
       this._fxTh = this._fxTh || {};
+      this._fxTrailMap = this._fxTrailMap || {};
       const id = bus + ':' + key, now = performance.now();
+      clearTimeout(this._fxTrailMap[id]);
       if (now - (this._fxTh[id] || 0) > 45) {
         this._fxTh[id] = now;
         this.sendCmd({ op:'set_fx_param', bus, param:key, value:v });
       } else {
-        clearTimeout(this._fxTrail);
-        this._fxTrail = setTimeout(() =>
-          this.sendCmd({ op:'set_fx_param', bus, param:key, value:v }), 45);
+        this._fxTrailMap[id] = setTimeout(() => {
+          this._fxTh[id] = performance.now();
+          this.sendCmd({ op:'set_fx_param', bus, param:key, value:v });
+        }, 45);
       }
     },
     /* type de widget : 'toggle' | 'enum' | 'int' | 'slider' */

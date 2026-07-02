@@ -1152,6 +1152,18 @@ static atomic_int g_mic_map[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
  * appliqué après l'insert, avant interleave. Défaut 1000 (= ×1.0). Initialisé
  * dans main() (zero-init = silence sinon). */
 static atomic_int g_out_gain_m[N_OUTPUT_TOTAL];
+/* gain de sortie LISSÉ, écrit uniquement par l'audio_thread (critic dfeb668d :
+ * appliquer la cible brute par pas de 0.5 dB = zipper noise audible).
+ * alpha 1/16 par période 2 ms → tau ≈ 32 ms. */
+static float g_out_gain_cur[N_OUTPUT_TOTAL];
+
+/* V9.5.21b — copie de la spec insert (set_insert) pour persistance : la
+ * chaîne mastering + le mode assistant + le routage étaient PERDUS à chaque
+ * reboot (re-setup manuel). Protégée par g_st.target_lock (écrite dans le
+ * handler set_insert, lue par save_mixer_state). */
+static char g_insert_spec_engine[FX_CHAIN_MAX][32];
+static char g_insert_spec_uri[FX_CHAIN_MAX][256];
+static int  g_insert_spec_n = 0;
 
 /* V9.4 — insert mastering : chaîne de N plugins sur out_0+out_1 DSP.
  * g_insert_active = 0 : bypass total, mix_block out directement vers convert.
@@ -1621,14 +1633,18 @@ static void *audio_thread(void *arg)
 				PERIOD_FRAMES);
 		}
 
-		/* V9.5.21 — gain de sortie par strip OUT (trim final) */
+		/* V9.5.21 — gain de sortie par strip OUT (trim final, lissé anti-
+		 * zipper : converge vers la cible en ~32 ms au lieu de sauter) */
 		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
-			int gm = atomic_load_explicit(&g_out_gain_m[o], memory_order_relaxed);
-			if (gm != 1000) {
-				float g = gm * 0.001f;
+			float tgt = atomic_load_explicit(&g_out_gain_m[o],
+			                                 memory_order_relaxed) * 0.001f;
+			float cur = g_out_gain_cur[o];
+			cur += (tgt - cur) * 0.0625f;
+			if (fabsf(cur - tgt) < 1e-4f) cur = tgt;
+			g_out_gain_cur[o] = cur;
+			if (cur != 1.0f)
 				for (int f = 0; f < PERIOD_FRAMES; f++)
-					out_block[o][f] *= g;
-			}
+					out_block[o][f] *= cur;
 		}
 
 		/* Analyzer taps : push N samples par tap (lecture buffers block) */
@@ -1984,6 +2000,7 @@ static void handle_cmd(int fd, const char *line)
 		pthread_mutex_lock(&g_st.target_lock);
 		g_st.master_target[src][out] = gain;
 		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"op\":\"set_master\",\"src\":%d,\"out\":%d,\"gain\":%.4f}\n",
 			 src, out, gain);
@@ -2001,6 +2018,7 @@ static void handle_cmd(int fd, const char *line)
 		pthread_mutex_lock(&g_st.target_lock);
 		g_st.fx_bus_target[bus] = gain;
 		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"op\":\"set_fx_bus\",\"bus\":%d,\"gain\":%.4f}\n",
 			 bus, gain);
@@ -2018,6 +2036,7 @@ static void handle_cmd(int fd, const char *line)
 		pthread_mutex_lock(&g_st.target_lock);
 		g_st.input_target[src] = gain;
 		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"op\":\"set_input_gain\",\"src\":%d,\"gain\":%.4f}\n",
 			 src, gain);
@@ -2037,6 +2056,7 @@ static void handle_cmd(int fd, const char *line)
 		else
 			g_st.mute_mask &= ~(1u << src);
 		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"op\":\"set_mute\",\"src\":%d,\"mute\":%d}\n",
 			 src, mute);
@@ -2233,6 +2253,7 @@ static void handle_cmd(int fd, const char *line)
 			/* Bypass : désactive l'insert + free chain existante */
 			pthread_mutex_lock(&g_st.target_lock);
 			int was_active = atomic_exchange(&g_insert_active, 0);
+			g_insert_spec_n = 0;   /* V9.5.21b : persiste le bypass */
 			pthread_mutex_unlock(&g_st.target_lock);
 			if (was_active) fx_free(&g_insert_chain);
 			dprintf(fd, "{\"ok\":true,\"op\":\"set_insert\",\"n\":0}\n");
@@ -2251,6 +2272,14 @@ static void handle_cmd(int fd, const char *line)
 		int was_active = atomic_load(&g_insert_active);
 		g_insert_chain = new_chain;
 		atomic_store(&g_insert_active, 1);
+		/* V9.5.21b : copie de la spec pour persistance */
+		g_insert_spec_n = n_specs;
+		for (int i = 0; i < n_specs; i++) {
+			strncpy(g_insert_spec_engine[i], engines[i], sizeof(g_insert_spec_engine[0]) - 1);
+			g_insert_spec_engine[i][sizeof(g_insert_spec_engine[0]) - 1] = '\0';
+			strncpy(g_insert_spec_uri[i], uris[i], sizeof(g_insert_spec_uri[0]) - 1);
+			g_insert_spec_uri[i][sizeof(g_insert_spec_uri[0]) - 1] = '\0';
+		}
 		pthread_mutex_unlock(&g_st.target_lock);
 		if (was_active) fx_free(&old_chain);
 		atomic_store(&g_presets_dirty, 1);
@@ -2374,6 +2403,7 @@ static void handle_cmd(int fd, const char *line)
 		int src  = (strcmp(src_str,  "usb")       == 0) ? 1 : 0;
 		atomic_store_explicit(&g_assistant_mode,   mode, memory_order_release);
 		atomic_store_explicit(&g_assistant_source, src,  memory_order_release);
+		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_assistant_mode\","
 		            "\"mode\":\"%s\",\"source\":\"%s\"}\n",
 		        mode ? "mastering" : "passthrough",
@@ -3141,6 +3171,120 @@ static void load_out_gain(void)
 	fclose(f);
 }
 
+
+/* V9.5.21b — persistance de l'état COMPLET du mixer (le manque n°1 de la
+ * revue : la chaîne insert mastering, le mode assistant et le routage étaient
+ * perdus à chaque reboot → re-setup manuel systématique).
+ * Fichier texte versionné, écriture atomique (tmp + rename). */
+#define MIXER_STATE_PATH "/var/lib/mixer-pro/mixer_state"
+static void save_mixer_state(void)
+{
+	mkdir("/var/lib/mixer-pro", 0755);
+	char tmp_path[256];
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", MIXER_STATE_PATH);
+	FILE *f = fopen(tmp_path, "w");
+	if (!f) return;
+
+	pthread_mutex_lock(&g_st.target_lock);
+	fprintf(f, "version 1\n");
+	fprintf(f, "insert %d\n", g_insert_spec_n);
+	for (int i = 0; i < g_insert_spec_n; i++)
+		fprintf(f, "%s %s\n", g_insert_spec_engine[i],
+		        g_insert_spec_uri[i][0] ? g_insert_spec_uri[i] : "-");
+	fprintf(f, "assistant %d %d\n",
+	        atomic_load_explicit(&g_assistant_mode,   memory_order_relaxed),
+	        atomic_load_explicit(&g_assistant_source, memory_order_relaxed));
+	fprintf(f, "mute_mask %u\n", g_st.mute_mask);
+	fprintf(f, "input_gains");
+	for (int i = 0; i < N_INPUT_TOTAL; i++)
+		fprintf(f, " %.4f", g_st.input_target[i]);
+	fprintf(f, "\nfx_bus");
+	for (int b = 0; b < N_BUS_FX_CH; b++)
+		fprintf(f, " %.4f", g_st.fx_bus_target[b]);
+	fprintf(f, "\nmaster\n");
+	for (int s = 0; s < N_INPUT_TOTAL; s++) {
+		for (int o = 0; o < N_OUTPUT_TOTAL; o++)
+			fprintf(f, "%.4f%s", g_st.master_target[s][o],
+			        o < N_OUTPUT_TOTAL - 1 ? " " : "\n");
+	}
+	pthread_mutex_unlock(&g_st.target_lock);
+
+	fclose(f);
+	rename(tmp_path, MIXER_STATE_PATH);
+}
+
+/* Appelée dans main() AVANT le démarrage des threads (pas de lock requis,
+ * fx_init_chain initialise le monde lilv à la demande). */
+static void load_mixer_state(void)
+{
+	FILE *f = fopen(MIXER_STATE_PATH, "r");
+	if (!f) return;
+	int ver = 0;
+	if (fscanf(f, "version %d\n", &ver) != 1 || ver != 1) {
+		fclose(f);
+		return;
+	}
+	int n_ins = 0;
+	if (fscanf(f, "insert %d\n", &n_ins) == 1 &&
+	    n_ins > 0 && n_ins <= FX_CHAIN_MAX) {
+		struct fx_chain_spec specs[FX_CHAIN_MAX];
+		int ok = 1;
+		for (int i = 0; i < n_ins; i++) {
+			if (fscanf(f, "%31s %255s\n", g_insert_spec_engine[i],
+			           g_insert_spec_uri[i]) != 2) { ok = 0; break; }
+			if (!strcmp(g_insert_spec_uri[i], "-"))
+				g_insert_spec_uri[i][0] = '\0';
+			specs[i].engine = g_insert_spec_engine[i];
+			specs[i].uri    = g_insert_spec_uri[i];
+		}
+		if (ok) {
+			fx_engine_t chain = {0};
+			if (fx_init_chain(&chain, (float)SAMPLE_RATE, specs, n_ins)) {
+				g_insert_chain = chain;
+				atomic_store(&g_insert_active, 1);
+				g_insert_spec_n = n_ins;
+				mlog("state: insert chain restaurée (%d plugins)", n_ins);
+			} else {
+				mlog("state: insert chain restore FAILED (plugins absents ?)");
+				g_insert_spec_n = 0;
+			}
+		}
+	}
+	int am = 0, as = 0;
+	if (fscanf(f, "assistant %d %d\n", &am, &as) == 2) {
+		atomic_store_explicit(&g_assistant_mode,   am ? 1 : 0, memory_order_relaxed);
+		atomic_store_explicit(&g_assistant_source, as ? 1 : 0, memory_order_relaxed);
+	}
+	unsigned mm = 0;
+	if (fscanf(f, "mute_mask %u\n", &mm) == 1)
+		g_st.mute_mask = mm;
+	if (fscanf(f, " input_gains") == 0) {
+		for (int i = 0; i < N_INPUT_TOTAL; i++) {
+			float v;
+			if (fscanf(f, "%f", &v) != 1) break;
+			if (v >= 0.0f && v <= 8.0f) g_st.input_target[i] = v;
+		}
+	}
+	if (fscanf(f, " fx_bus") == 0) {
+		for (int b = 0; b < N_BUS_FX_CH; b++) {
+			float v;
+			if (fscanf(f, "%f", &v) != 1) break;
+			if (v >= 0.0f && v <= 8.0f) g_st.fx_bus_target[b] = v;
+		}
+	}
+	if (fscanf(f, " master") == 0) {
+		for (int s = 0; s < N_INPUT_TOTAL; s++)
+			for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
+				float v;
+				if (fscanf(f, "%f", &v) != 1) goto done;
+				if (v >= 0.0f && v <= 8.0f) g_st.master_target[s][o] = v;
+			}
+	}
+done:
+	fclose(f);
+	mlog("state: mixer_state restauré (assistant=%d/%d mute=0x%x)", am, as, mm);
+}
+
 static void *persistence_thread(void *arg)
 {
 	(void)arg;
@@ -3148,8 +3292,9 @@ static void *persistence_thread(void *arg)
 		sleep(1);
 		if (atomic_exchange(&g_presets_dirty, 0)) {
 			save_presets();
-			save_mic_map();    /* V9.5.21 */
-			save_out_gain();   /* V9.5.21 */
+			save_mic_map();      /* V9.5.21 */
+			save_out_gain();     /* V9.5.21 */
+			save_mixer_state();  /* V9.5.21b */
 		}
 	}
 	/* Final save au shutdown si dirty */
@@ -3157,6 +3302,7 @@ static void *persistence_thread(void *arg)
 		save_presets();
 		save_mic_map();
 		save_out_gain();
+		save_mixer_state();
 	}
 	return NULL;
 }
@@ -3214,10 +3360,14 @@ int main(int argc, char **argv)
 	mlog("mixer-pro " MIXER_VERSION " starting (skip_uac2=%d skip_phone=%d)",
 	     g_skip_uac2, g_skip_phone);
 
-	for (int o = 0; o < N_OUTPUT_TOTAL; o++)
+	for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
 		atomic_store(&g_out_gain_m[o], 1000);   /* gain sortie ×1.0 par défaut */
-	load_mic_map();    /* V9.5.21 — restaure le remap mic persisté */
-	load_out_gain();   /* V9.5.21 — restaure les gains de sortie persistés */
+		g_out_gain_cur[o] = 1.0f;
+	}
+	load_mic_map();      /* V9.5.21 — restaure le remap mic persisté */
+	load_out_gain();     /* V9.5.21 — restaure les gains de sortie persistés */
+	for (int o = 0; o < N_OUTPUT_TOTAL; o++)   /* pas de rampe au boot */
+		g_out_gain_cur[o] = atomic_load(&g_out_gain_m[o]) * 0.001f;
 
 	/* Reset matrices = identity (all 0, then fx_bus_target = 1.0) */
 	memset(&g_st.send_gain,     0, sizeof(g_st.send_gain));
@@ -3236,6 +3386,10 @@ int main(int argc, char **argv)
 	g_st.mute_mask = 0;
 	pthread_mutex_init(&g_st.target_lock, NULL);
 	atomic_store(&g_st.running, 1);
+
+	/* V9.5.21b — restaure l'état complet (insert + assistant + routage)
+	 * APRÈS l'init des défauts g_st (sinon écrasé), AVANT les threads. */
+	load_mixer_state();
 
 	/* E6.h : eventfd pour signaler le play_thread depuis l'audio_thread.
 	 * EFD_SEMAPHORE-like accumule les writes ; on lit en bloc.

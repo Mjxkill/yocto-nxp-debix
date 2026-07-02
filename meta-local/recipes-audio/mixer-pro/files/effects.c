@@ -1621,6 +1621,26 @@ static void lv2_reset(fx_engine_t *fx)
 	}
 }
 
+/* V9.5.21b — copie s dans buf en échappant " \\ et les contrôles (JSON-safe).
+ * Les labels/scale points lilv sont du contenu tiers : sans échappement, un
+ * label contenant un guillemet casserait tout le get_fx (revue point 2). */
+static int json_escape(char *buf, int len, const char *s)
+{
+	int n = 0;
+	for (; s && *s && n < len - 7; s++) {
+		unsigned char c = (unsigned char)*s;
+		if (c == '"' || c == '\\') {
+			buf[n++] = '\\'; buf[n++] = (char)c;
+		} else if (c < 0x20) {
+			n += snprintf(buf + n, len - n, "\\u%04x", c);
+		} else {
+			buf[n++] = (char)c;
+		}
+	}
+	buf[n] = '\0';
+	return n;
+}
+
 /* Format flottant JSON-safe : NaN/Inf → null (sinon JSON.parse rejette). */
 static int json_float(char *buf, int len, float v)
 {
@@ -1660,14 +1680,20 @@ static int lv2_get_state(fx_engine_t *fx, char *buf, int len)
 	 * +0x10 log), unit, group, scale points. Pour UI riche groupée. */
 	if (n < len - 16)
 		n += snprintf(buf + n, len - n, "},\"meta\":{");
-	for (int i = 0; i < st->n_ctrl_in && n < len - 160; i++) {
-		n += snprintf(buf + n, len - n,
-		              "%s\"%s\":{\"label\":\"%s\",\"kind\":%d,\"unit\":\"%s\",\"grp\":\"%s\"",
-		              i == 0 ? "" : ",", st->ctrl_in_name[i],
-		              st->ctrl_label[i], st->ctrl_kind[i],
-		              st->ctrl_unit[i], st->ctrl_group[i]);
-		if (st->ctrl_sp[i] && n < len - 540) {
-			n += snprintf(buf + n, len - n, ",\"sp\":\"%s\"", st->ctrl_sp[i]);
+	for (int i = 0; i < st->n_ctrl_in && n < len - 320; i++) {
+		char esc[600];
+		n += snprintf(buf + n, len - n, "%s\"%s\":{\"label\":\"",
+		              i == 0 ? "" : ",", st->ctrl_in_name[i]);
+		json_escape(esc, sizeof(esc), st->ctrl_label[i]);
+		n += snprintf(buf + n, len - n, "%s\",\"kind\":%d,\"unit\":\"",
+		              esc, st->ctrl_kind[i]);
+		json_escape(esc, sizeof(esc), st->ctrl_unit[i]);
+		n += snprintf(buf + n, len - n, "%s\",\"grp\":\"", esc);
+		json_escape(esc, sizeof(esc), st->ctrl_group[i]);
+		n += snprintf(buf + n, len - n, "%s\"", esc);
+		if (st->ctrl_sp[i] && n < len - 700) {
+			json_escape(esc, sizeof(esc), st->ctrl_sp[i]);
+			n += snprintf(buf + n, len - n, ",\"sp\":\"%s\"", esc);
 		}
 		n += snprintf(buf + n, len - n, "}");
 	}
