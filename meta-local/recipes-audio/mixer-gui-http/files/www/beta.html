@@ -34,7 +34,7 @@ body{
 }
 .note b{color:var(--accent);font-weight:600;}
 #stagewrap{width:100%;display:flex;justify-content:center;}
-#stage{
+#stage{position:relative;
   width:1024px;height:600px;flex:none;
   background:linear-gradient(178deg,#181d22 0%,var(--chassis) 22%,#12161a 100%);
   border:1px solid #060809;
@@ -263,6 +263,41 @@ body{
   font-size:10px;padding:5px 6px;width:100%;}
 .tgrow{display:flex;align-items:center;justify-content:space-between;font-size:9.5px;color:var(--mut);}
 .grbig{margin-top:4px;}
+/* ===== V10-P2d : topbar VU unifiés + drawer effets piste ===== */
+.cpu4.one i{width:13px;}
+.chip .k em{font-style:normal;color:var(--text);margin-left:4px;letter-spacing:0;font-size:9.5px;}
+.tbtn{padding:4px 10px;border-radius:4px;font-size:8.5px;font-weight:700;letter-spacing:.14em;
+  color:var(--mut);border:1px solid var(--line);background:var(--panel);cursor:pointer;align-self:center;}
+.tbtn:active,.tbtn.busy{color:var(--accent);border-color:var(--accent);}
+#stripfx{position:absolute;left:8px;right:8px;top:66px;bottom:34px;z-index:40;
+  background:linear-gradient(180deg,#171c21,#12161a);border:1px solid var(--line-hi);
+  border-radius:8px;box-shadow:0 18px 48px rgba(0,0,0,.65);display:flex;flex-direction:column;}
+.sfhead{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);}
+.sfhead .sftitle{font-size:11px;font-weight:700;letter-spacing:.18em;color:var(--accent);}
+.sfhead .kind{font-size:9px;color:var(--mut);letter-spacing:.1em;}
+.sfhead .spacer{flex:1;}
+.sftabs{display:flex;gap:4px;padding:6px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+.sftab{padding:3px 10px;border-radius:3px;font-size:8.5px;font-weight:700;letter-spacing:.12em;
+  color:var(--mut);border:1px solid var(--line);cursor:pointer;background:var(--panel);}
+.sftab.on{color:var(--accent);border-color:rgba(229,161,60,.45);background:rgba(229,161,60,.08);}
+.sfbody{flex:1;overflow-y:auto;padding:10px 14px;}
+.sfsub{font-size:8.5px;color:var(--mut);letter-spacing:.12em;margin:2px 0 8px;}
+.sfrow{display:grid;grid-template-columns:150px 1fr 96px;gap:10px;align-items:center;
+  padding:4px 0;border-bottom:1px solid rgba(255,255,255,.03);}
+.sfrow .lb{font-size:9.5px;color:var(--mut);}
+.sfrow .vl{font-size:9.5px;color:var(--text);text-align:right;font-variant-numeric:tabular-nums;}
+.sfrow input[type=range]{width:100%;accent-color:var(--accent);height:18px;}
+.sfrow select{background:var(--well);color:var(--text);border:1px solid var(--line-hi);
+  border-radius:4px;font-size:9.5px;padding:3px 6px;max-width:230px;}
+.sfsec{margin:12px 0 4px;font-size:8.5px;font-weight:700;letter-spacing:.2em;color:var(--accent);}
+.sfbar{display:flex;gap:8px;align-items:center;margin:10px 0 2px;}
+.sfbar button{padding:4px 12px;border-radius:4px;font-size:8.5px;font-weight:700;letter-spacing:.1em;
+  border:1px solid var(--line-hi);background:var(--panel2);color:var(--text);cursor:pointer;}
+.sfbar .apply{background:rgba(229,161,60,.8);color:#1d1204;border-color:#ffcf7e;}
+.sfbar .apply[disabled]{opacity:.5;cursor:wait;}
+.sfbar .dirt{font-size:8.5px;color:var(--warn);}
+.strip .id,.strip .src{cursor:pointer;}
+.strip .id:hover{color:var(--accent);}
 @media (prefers-reduced-motion:reduce){
   .mlstate i{animation:none;}
 }
@@ -283,8 +318,11 @@ body{
         <i><b style="height:20%"></b></i><i><b style="height:15%"></b></i>
         <i><b style="height:25%"></b></i><i><b style="height:10%"></b></i>
       </span></div>
-    <div class="chip"><span class="k">DSP</span><span class="v" id="dspv">72%</span><span class="loadbar"><i id="dspb" style="width:72%"></i></span></div>
-    <div class="chip"><span class="k">NPU</span><span class="v" id="npuv">14%</span><span class="loadbar"><i id="npub" style="width:14%"></i></span></div>
+    <div class="chip"><span class="k">DSP <em id="dspv">72%</em></span>
+      <span class="cpu4 one"><i><b id="dspb" style="height:72%"></b></i></span></div>
+    <div class="chip"><span class="k">NPU <em id="npuv">14%</em></span>
+      <span class="cpu4 one"><i><b id="npub" style="height:14%"></b></i></span></div>
+    <button class="tbtn" id="tacbtn">RESET TAC</button>
     <div class="sysdot"><i></i>EN LIGNE</div>
   </div>
 
@@ -461,6 +499,19 @@ body{
       <div id="sys-tac-out" style="font-size:9px;color:var(--mut);margin-top:6px;"></div></div>
   </div>
   </div><!-- /pages -->
+
+  <!-- ===== V10-P2d : effets par piste (TAC + DSP) — tap sur le nom d'une tranche ===== -->
+  <div id="stripfx" style="display:none">
+    <div class="sfhead">
+      <button class="sq" id="sfprev">&#8249;</button>
+      <span class="sftitle" id="sftitle">M1</span><span class="kind" id="sfkind">MIC DSP</span>
+      <button class="sq" id="sfnext">&#8250;</button>
+      <span class="spacer"></span>
+      <button class="sq" id="sfclose">&#10005;</button>
+    </div>
+    <div class="sftabs" id="sftabs"></div>
+    <div class="sfbody" id="sfbody"></div>
+  </div>
 
   <!-- ============ NAV ============ -->
   <div id="navbar">
@@ -1026,8 +1077,8 @@ setInterval(()=>{
   {const bars=document.querySelectorAll("#cpu4 i b");
    [cpu,cpu-4,18+Math.round(Math.random()*8),6+Math.round(Math.random()*6)]
      .forEach((v,i)=>{if(bars[i])bars[i].style.height=Math.max(3,v)+"%";});}
-  $("#dspv").textContent=dsp+"%";$("#dspb").style.width=dsp+"%";
-  $("#npuv").textContent=npu+"%";$("#npub").style.width=npu+"%";
+  $("#dspv").textContent=dsp+"%";$("#dspb").style.height=dsp+"%";
+  $("#npuv").textContent=npu+"%";$("#npub").style.height=npu+"%";
   const lu=(-14.6+Math.random()*0.9).toFixed(1);
   $("#lufs").innerHTML=`${lu} <em>LUFS</em>`;$("#mlufs").textContent=lu;
   $("#grb").style.width=(6+Math.random()*16)+"%";
@@ -1070,7 +1121,7 @@ function applyState(d){
   if(f.sysload&&f.sysload.cpu){
     const s=f.sysload;
     const set=(id,v,bar)=>{const e=document.getElementById(id);if(e)e.textContent=v+"%";
-      const b=document.getElementById(bar);if(b)b.style.width=Math.min(100,v)+"%";};
+      const b=document.getElementById(bar);if(b)b.style.height=Math.min(100,Math.max(3,v))+"%";};
     {const bars=document.querySelectorAll("#cpu4 i b");
      s.cpu.forEach((v,i)=>{if(bars[i])bars[i].style.height=Math.min(100,Math.max(3,v))+"%";});}
     set("dspv",s.dsp<0?0:s.dsp,"dspb");
@@ -1589,4 +1640,560 @@ document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
 }));
 setInterval(()=>{if(window.LIVE)window.renderActivePage();},1000);
 })();
+
+/* ================== V10-P2d : effets par piste (TAC + DSP) ==================
+ * Port fidèle du panneau détail de l'ancienne GUI (index.html) :
+ *  - /api/alsa/contents (amixer) → contrôles TAC ADC/DAC/OUT + PGA par tranche
+ *  - biquads programmables TAC : forme RBJ (type/Hz/Q/gain) → blob Q1.31 BE
+ *  - blobs SOF DRC / MULTIBAND_DRC : /api/dsp/blob — mêmes formules que
+ *    drc_gen_coefs.m (solveur K dichotomique, crossover Butterworth).
+ * Ouverture : tap sur le nom d'une tranche. Canal DSP visé = idx%8. */
+(function(){
+"use strict";
+const $=s=>document.querySelector(s);
+const A={controls:{},bq:{},blobs:{},idx:0,isOut:false,tab:"",open:false};
+const BIQUAD_TYPES=['Bypass','LPF','HPF','BPF','Notch','Peak','LowShelf','HighShelf','AllPass'];
+const DRC_SLIDERS=[
+  {key:'threshold_dB',      label:'Threshold',   unit:'dB', min:-60,max:0,  step:0.5},
+  {key:'knee_dB',           label:'Knee',        unit:'dB', min:0,  max:40, step:0.5},
+  {key:'ratio',             label:'Ratio',       unit:':1', min:1,  max:30, step:0.1},
+  {key:'pre_delay_ms',      label:'Pre-delay',   unit:'ms', min:0,  max:50, step:0.1},
+  {key:'attack_ms',         label:'Attack',      unit:'ms', min:1,  max:500,step:0.5},
+  {key:'master_gain_dB',    label:'Make-up',     unit:'dB', min:-24,max:24, step:0.1},
+  {key:'release_spacing_dB',label:'Rel. spacing',unit:'dB', min:0,  max:20, step:0.5},
+];
+const DRC_PARAMS_SIZE=88, DRC_CFG_HDR=20, MBDRC_HDR=324, ABI_HDR=32;
+const q24f=v=>v/(1<<24), q30f=v=>v/(1<<30);
+const fq24=v=>Math.max(-2147483648,Math.min(2147483647,Math.round(v*(1<<24))));
+const fq30=v=>Math.max(-2147483648,Math.min(2147483647,Math.round(v*(1<<30))));
+const db2mag=db=>Math.pow(10,db/20), mag2db=m=>20*Math.log10(Math.max(m,1e-30));
+const hex2b=h=>{const n=h.length>>>1,o=new Uint8Array(n);
+  for(let i=0;i<n;i++)o[i]=parseInt(h.substr(i*2,2),16);return o;};
+const b2hex=a=>{let s="";for(let i=0;i<a.length;i++)s+=a[i].toString(16).padStart(2,"0");return s;};
+const isDrcBlob=n=>/^(MULTIBAND_DRC|DRC)\d+\.\d+ /.test(n||"");
+const isMb=n=>/^MULTIBAND_DRC/.test(n||"");
+const parseBqName=n=>{const m=(n||"").match(/^(TAC\d+) (ADC|DAC) BQ(\d+) Coefs$/);
+  return m?{tac:m[1],chain:m[2],idx:+m[3]}:null;};
+
+/* ---- amixer contents parser (identique ancien GUI) ---- */
+function parseAmixer(text){
+  const out={};
+  const blocks=text.split(/^numid=/m).filter(b=>b.trim());
+  for(const blk of blocks){
+    const lines=blk.split("\n");
+    const m=lines[0].match(/^(\d+),iface=MIXER,name='([^']+)'/);
+    if(!m)continue;
+    const c={numid:+m[1],name:m[2],items:[],type:"?",value:""};
+    for(let i=1;i<lines.length;i++){
+      const t=lines[i].trim();
+      if(t.startsWith("; type=")){
+        const tm=t.match(/type=([A-Z]+)/),mn=t.match(/min=(-?\d+)/),
+              mx=t.match(/max=(-?\d+)/),cnt=t.match(/values=(\d+)/);
+        if(tm)c.type=tm[1];if(mn)c.min=+mn[1];if(mx)c.max=+mx[1];if(cnt)c.count=+cnt[1];
+      }else if(t.startsWith("; Item #")){
+        const im=t.match(/Item #(\d+) '([^']*)'/);if(im)c.items[+im[1]]=im[2];
+      }else if(t.startsWith(": values=")){
+        c.value=t.substring(": values=".length);
+      }else if(t.startsWith("| dB")){
+        const dm=t.match(/min=(-?[\d.]+)\s*dB/),dx=t.match(/max=(-?[\d.]+)\s*dB/),
+              ds=t.match(/step=(-?[\d.]+)\s*dB/);
+        if(dm)c.dbMin=parseFloat(dm[1]);if(dx)c.dbMax=parseFloat(dx[1]);
+        if(ds)c.dbStep=parseFloat(ds[1]);
+      }
+    }
+    out[c.name]=c;
+  }
+  return out;
+}
+const shortLbl=n=>n
+  .replace(/^TAC\d+\s+(?:ADC|DAC|OUT|CH|MICBIAS|VAD|VREF)(?:\d[A-Z]?)?\s+/,"")
+  .replace(/^TAC\d+\s+/,"").replace(/^PGA\d\.\d \d /,"")
+  .replace(/^(MULTIBAND_DRC|DRC)\d\.\d /,"");
+
+/* ---- groupes par tranche (port alsaGroupsForStrip) ---- */
+function groupsFor(){
+  const groups=[],idx=A.idx,isOut=A.isOut,all=A.controls,names=Object.keys(all);
+  const mk=(n,full)=>({...all[n],short:shortLbl(n),fullName:full?n:all[n].fullName});
+  if(idx<8){
+    const dsp=names.filter(n=>isOut?n.startsWith("MULTIBAND_DRC2.0 ")
+      :(n.startsWith("MULTIBAND_DRC1.0 ")||n.startsWith("DRC1.0 "))).map(n=>mk(n,true));
+    if(dsp.length)groups.push({title:isOut?"CHAÎNE DSP (sortie)":"CHAÎNE DSP (entrée)",
+      subtitle:"réglages par canal — "+(isOut?"S":"M")+((idx%8)+1),controls:dsp});
+  }
+  const isBq=n=>/^TAC\d+ (ADC|DAC) BQ\d+ Coefs$/.test(n);
+  if(!isOut){
+    if(idx<8){
+      const tac=Math.floor(idx/2),ch=(idx%2)+1,P="TAC"+tac;
+      const perCh=names.filter(n=>n.startsWith(P+" ADC"+ch)||n===P+" CH"+ch+" Input Mux").map(n=>mk(n));
+      const shared=names.filter(n=>n.startsWith(P+" ADC ")&&!n.match(/ADC\d/)&&!isBq(n)).map(n=>mk(n));
+      const bq=names.filter(n=>n.startsWith(P+" ADC BQ")&&isBq(n))
+        .sort((a,b)=>+a.match(/BQ(\d+)/)[1]-+b.match(/BQ(\d+)/)[1]).map(n=>mk(n,true));
+      const misc=names.filter(n=>n.startsWith(P+" MICBIAS")||n.startsWith(P+" VAD")||n.startsWith(P+" VREF")).map(n=>mk(n));
+      const pgaN="PGA1.0 1 Strip"+(idx+1)+" Volume";
+      const pga=all[pgaN]?[mk(pgaN)]:[];
+      if(perCh.length)groups.push({title:"TAC ADC "+ch,subtitle:perCh.length+" contrôles canal",controls:perCh});
+      if(shared.length)groups.push({title:"TAC ADC COMMUN",subtitle:"partagé CH1+CH2",controls:shared});
+      if(bq.length)groups.push({title:"TAC BIQUADS",subtitle:"12 filtres programmables (partage CH1+CH2)",controls:bq});
+      if(misc.length)groups.push({title:"TAC DIVERS",subtitle:"bias / VAD / VREF",controls:misc});
+      if(pga.length)groups.push({title:"DSP PGA",subtitle:"volume strip SOF",controls:pga});
+      if(!perCh.length&&!shared.length&&!bq.length&&!misc.length)
+        groups.push({title:P+" ABSENT",subtitle:"codec non câblé sur ce port",controls:[],
+          placeholder:P+" est déclaré mais ne répond pas sur I²C (adresse 0x"+(0x50+tac).toString(16)+")."});
+    }else if(idx<18){
+      const pgaN="PGA1.0 1 Strip"+(idx+1)+" Volume";
+      if(all[pgaN])groups.push({title:"DSP PGA",subtitle:"volume strip SOF (pas de TAC sur cette source)",controls:[mk(pgaN)]});
+    }
+  }else if(idx<8){
+    const tac=Math.floor(idx/2),ch=(idx%2)+1,P="TAC"+tac;
+    const perCh=names.filter(n=>n.startsWith(P+" DAC"+ch)||n.startsWith(P+" OUT"+ch)).map(n=>mk(n));
+    const shared=names.filter(n=>n.startsWith(P+" DAC ")&&!n.match(/DAC\d/)&&!isBq(n)).map(n=>mk(n));
+    const bq=names.filter(n=>n.startsWith(P+" DAC BQ")&&isBq(n))
+      .sort((a,b)=>+a.match(/BQ(\d+)/)[1]-+b.match(/BQ(\d+)/)[1]).map(n=>mk(n,true));
+    const pgaN="PGA2.0 2 Out Strip"+(idx+1)+" Volume";
+    const pga=all[pgaN]?[mk(pgaN)]:[];
+    if(perCh.length)groups.push({title:"TAC DAC "+ch,subtitle:perCh.length+" contrôles canal",controls:perCh});
+    if(shared.length)groups.push({title:"TAC DAC COMMUN",subtitle:"partagé CH1+CH2",controls:shared});
+    if(bq.length)groups.push({title:"TAC BIQUADS",subtitle:"12 filtres programmables (partage CH1+CH2)",controls:bq});
+    if(pga.length)groups.push({title:"DSP PGA",subtitle:"volume strip SOF",controls:pga});
+    if(!perCh.length&&!shared.length&&!bq.length)
+      groups.push({title:P+" ABSENT",subtitle:"codec non câblé sur ce port",controls:[],
+        placeholder:P+" est déclaré mais ne répond pas sur I²C (adresse 0x"+(0x50+tac).toString(16)+")."});
+  }
+  return groups;
+}
+
+/* ---- valeurs + écriture ALSA ---- */
+const intVal=c=>{if(!c.value)return c.min||0;
+  const n=parseInt(String(c.value).split(",")[0].trim(),10);return isNaN(n)?(c.min||0):n;};
+const dbLbl=c=>{const v=intVal(c);
+  if(c.dbStep!==undefined&&c.dbMin!==undefined)return(c.dbMin+v*c.dbStep).toFixed(1)+" dB";
+  if(c.dbMin!==undefined&&c.dbMax!==undefined&&c.max)
+    return(c.dbMin+(v/c.max)*(c.dbMax-c.dbMin)).toFixed(1)+" dB";
+  return v+" / "+(c.max??"?");};
+const isOn=c=>{const v=String(c.value||"").toLowerCase();
+  return v.includes("on")||v==="1"||v.includes("true");};
+const thA={};
+function setAlsa(c,value){
+  const val=String(value);
+  if(c.type==="INTEGER"){const n=parseInt(val,10);c.value=(c.count===2)?(n+","+n):String(n);}
+  else if(c.type==="BOOLEAN")c.value=val;
+  else if(c.type==="ENUMERATED")c.value="'"+val+"'";
+  clearTimeout(thA[c.numid]);
+  thA[c.numid]=setTimeout(()=>{
+    fetch("/api/alsa/set",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({numid:c.numid,value:val})}).catch(()=>{});
+  },50);
+}
+
+/* ---- biquads RBJ (port rbjBiquadBlob, coefs Q1.31 BE, convention TI) ---- */
+function rbjBlob(type,fHz,q,gainDb,fs){
+  fs=fs||48000;
+  fHz=Math.max(20,Math.min(+fHz||1000,fs/2-100));
+  q=Math.max(0.1,Math.min(+q||0.707,16));
+  gainDb=Math.max(-24,Math.min(+gainDb||0,24));
+  let b0,b1,b2,a0,a1,a2;
+  const w0=2*Math.PI*fHz/fs,cw=Math.cos(w0),sw=Math.sin(w0),al=sw/(2*q);
+  const Aa=Math.pow(10,gainDb/40),be=Math.sqrt(Aa)/q;
+  switch(+type|0){
+    case 0:return[0x7f,0xff,0xff,0xff,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    case 1:b0=(1-cw)/2;b1=1-cw;b2=(1-cw)/2;a0=1+al;a1=-2*cw;a2=1-al;break;
+    case 2:b0=(1+cw)/2;b1=-(1+cw);b2=(1+cw)/2;a0=1+al;a1=-2*cw;a2=1-al;break;
+    case 3:b0=al;b1=0;b2=-al;a0=1+al;a1=-2*cw;a2=1-al;break;
+    case 4:b0=1;b1=-2*cw;b2=1;a0=1+al;a1=-2*cw;a2=1-al;break;
+    case 5:b0=1+al*Aa;b1=-2*cw;b2=1-al*Aa;a0=1+al/Aa;a1=-2*cw;a2=1-al/Aa;break;
+    case 6:b0=Aa*((Aa+1)-(Aa-1)*cw+be*sw);b1=2*Aa*((Aa-1)-(Aa+1)*cw);
+      b2=Aa*((Aa+1)-(Aa-1)*cw-be*sw);a0=(Aa+1)+(Aa-1)*cw+be*sw;
+      a1=-2*((Aa-1)+(Aa+1)*cw);a2=(Aa+1)+(Aa-1)*cw-be*sw;break;
+    case 7:b0=Aa*((Aa+1)+(Aa-1)*cw+be*sw);b1=-2*Aa*((Aa-1)+(Aa+1)*cw);
+      b2=Aa*((Aa+1)+(Aa-1)*cw-be*sw);a0=(Aa+1)-(Aa-1)*cw+be*sw;
+      a1=2*((Aa-1)-(Aa+1)*cw);a2=(Aa+1)-(Aa-1)*cw-be*sw;break;
+    case 8:b0=1-al;b1=-2*cw;b2=1+al;a0=1+al;a1=-2*cw;a2=1-al;break;
+    default:return[0x7f,0xff,0xff,0xff,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+  }
+  const N0=b0/a0,N1=b1/a0,N2=b2/a0,D1=-a1/a0,D2=-a2/a0;
+  const q31=x=>{let v=Math.round(Math.max(-1,Math.min(0.9999999995,x))*0x80000000);
+    if(v<-0x80000000)v=-0x80000000;if(v>0x7FFFFFFF)v=0x7FFFFFFF;if(v<0)v+=0x100000000;
+    return[(v>>>24)&255,(v>>>16)&255,(v>>>8)&255,v&255];};
+  const out=[];for(const c of[N0,N1,N2,D1,D2])out.push(...q31(c));
+  return out;
+}
+const bqDefault=()=>({type:0,fHz:1000,q:0.707,gainDb:0});
+function initBq(){
+  const names=Object.keys(A.controls).filter(n=>parseBqName(n));
+  const fresh={};
+  for(const n of names)fresh[n]=A.bq[n]||bqDefault();
+  try{const st=JSON.parse(localStorage.getItem("biquadParams")||"{}");
+    for(const n of names)if(st[n])Object.assign(fresh[n],st[n]);}catch(e){}
+  A.bq=fresh;
+}
+function setBq(name,partial){
+  const c=A.controls[name];if(!c)return;
+  const cur={...(A.bq[name]||bqDefault()),...partial};
+  A.bq[name]=cur;
+  try{localStorage.setItem("biquadParams",JSON.stringify(A.bq));}catch(e){}
+  clearTimeout(thA["bq"+c.numid]);
+  thA["bq"+c.numid]=setTimeout(()=>{
+    fetch("/api/alsa/set",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({numid:c.numid,value:rbjBlob(cur.type,cur.fHz,cur.q,cur.gainDb,48000).join(",")})}).catch(()=>{});
+  },60);
+}
+
+/* ---- blobs DRC / MULTIBAND_DRC (ports _parse/_pack, formules drc_gen_coefs.m) ---- */
+function parseDrcParams(view,off){
+  const r=i=>view.getInt32(off+i*4,true);
+  const inv=r(13),att_s=(inv?1/q30f(inv):0)/48000;
+  return{enabled:r(0),threshold_dB:q24f(r(1)),knee_dB:q24f(r(2)),ratio:q24f(r(3)),
+    pre_delay_ms:q30f(r(4))*1000,attack_ms:att_s*1000,
+    master_gain_dB:mag2db(q24f(r(12))),release_spacing_dB:r(16),
+    _raw:new Uint8Array(view.buffer.slice(view.byteOffset+off,view.byteOffset+off+88))};
+}
+function packDrcParams(p,Fs){
+  Fs=Fs||48000;
+  const buf=new Uint8Array(88);buf.set(p._raw);
+  const dv=new DataView(buf.buffer),w=(i,v)=>dv.setInt32(i*4,v|0,true);
+  const thr=+p.threshold_dB||0,knee=+p.knee_dB||0,ratio=Math.max(1.0001,+p.ratio||1);
+  const pre=(+p.pre_delay_ms||0)/1000,att=Math.max(0.001,(+p.attack_ms||0)/1000);
+  const mlin=db2mag(+p.master_gain_dB||0);
+  const lt=db2mag(thr),slope=1/ratio,kt=db2mag(thr+knee);
+  const slopeAt=(x,k)=>{
+    if(x<lt)return 1;
+    const kc=xv=>lt+(1-Math.exp(-k*(xv-lt)))/k;
+    const x2=x*1.001;
+    return(mag2db(kc(x2))-mag2db(kc(x)))/(mag2db(x2)-mag2db(x));};
+  let mn=0.1,mx=10000,K=5;
+  for(let it=0;it<15;it++){const sl=slopeAt(kt,K);if(sl<slope)mx=K;else mn=K;K=Math.sqrt(mn*mx);}
+  const ka=lt+1/K,kb=-Math.exp(K*lt)/K;
+  const kc=x=>x<lt?x:lt+(1-Math.exp(-K*(x-lt)))/K;
+  const rbase=kc(kt)*Math.pow(kt,-slope);
+  w(0,p.enabled?1:0);w(1,fq24(thr));w(2,fq24(knee));w(3,fq24(ratio));
+  w(4,fq30(pre));w(5,fq30(lt));w(6,fq30(slope));
+  w(7,Math.round(K*(1<<20))|0);w(8,fq24(ka));w(9,fq24(kb));w(10,fq24(kt));
+  w(11,fq30(rbase));w(12,fq24(mlin));w(13,fq30(1/(att*Fs)));
+  w(16,Math.round(+p.release_spacing_dB||0));
+  return buf;
+}
+function parseDrcCfg(payload){
+  const view=new DataView(payload.buffer,payload.byteOffset,payload.byteLength);
+  const size=view.getUint32(0,true),reservedBytes=payload.slice(4,20);
+  const N=Math.max(1,Math.floor((size-DRC_CFG_HDR)/DRC_PARAMS_SIZE));
+  const params=[];
+  for(let i=0;i<N;i++)params.push(parseDrcParams(view,DRC_CFG_HDR+i*DRC_PARAMS_SIZE));
+  return{size,reservedBytes,params,params_per_band:N};
+}
+function crossBq(fs,fc,hp){
+  let cut=fc/(fs/2);if(cut<0)cut=0;if(cut>1)cut=1;
+  if(cut===0||cut===1){const b0=hp?(1-cut):cut;return{a1:0,a2:0,b0,b1:0,b2:0};}
+  const d=Math.SQRT2,th=Math.PI*cut,sn=0.5*d*Math.sin(th);
+  const beta=0.5*(1-sn)/(1+sn),gamma=(0.5+beta)*Math.cos(th);
+  const alpha=0.25*(0.5+beta+(hp?gamma:-gamma));
+  return{b0:2*alpha,b1:hp?-4*alpha:4*alpha,b2:2*alpha,a1:-2*gamma,a2:2*beta};
+}
+function bqBytes(bq){
+  const buf=new Uint8Array(28),dv=new DataView(buf.buffer);
+  dv.setInt32(0,fq30(-bq.a2),true);dv.setInt32(4,fq30(-bq.a1),true);
+  dv.setInt32(8,fq30(bq.b2),true);dv.setInt32(12,fq30(bq.b1),true);
+  dv.setInt32(16,fq30(bq.b0),true);dv.setInt32(20,0,true);dv.setInt32(24,16384,true);
+  return buf;
+}
+function flatBq(){
+  const buf=new Uint8Array(28),dv=new DataView(buf.buffer);
+  dv.setInt32(16,1<<30,true);dv.setInt32(24,16384,true);
+  return buf;
+}
+function packCross(nb,fs,fcs){
+  const out=new Uint8Array(168);let lps,hps;
+  if(nb<=1){for(let i=0;i<3;i++){out.set(flatBq(),i*56);out.set(flatBq(),i*56+28);}return out;}
+  if(nb===2){lps=[crossBq(fs,fcs.low,false),null,null];hps=[crossBq(fs,fcs.low,true),null,null];}
+  else if(nb===3){lps=[crossBq(fs,fcs.low,false),crossBq(fs,fcs.high,false),crossBq(fs,fcs.high,false)];
+    hps=[crossBq(fs,fcs.low,true),crossBq(fs,fcs.high,true),crossBq(fs,fcs.high,true)];}
+  else{lps=[crossBq(fs,fcs.low,false),crossBq(fs,fcs.mid,false),crossBq(fs,fcs.high,false)];
+    hps=[crossBq(fs,fcs.low,true),crossBq(fs,fcs.mid,true),crossBq(fs,fcs.high,true)];}
+  for(let i=0;i<3;i++){
+    out.set(lps[i]?bqBytes(lps[i]):flatBq(),i*56);
+    out.set(hps[i]?bqBytes(hps[i]):flatBq(),i*56+28);
+  }
+  return out;
+}
+function fcFromBq(bytes,off,fs){
+  const dv=new DataView(bytes.buffer,bytes.byteOffset+off,28);
+  const a2=q30f(dv.getInt32(0,true)),a1=q30f(dv.getInt32(4,true));
+  const beta=-a2/2,gamma=a1/2;
+  if(Math.abs(beta)<1e-9&&Math.abs(gamma)<1e-9)return NaN;
+  const sn=(1-2*beta)/(1+2*beta);
+  let s=sn*Math.SQRT2;if(s<-1)s=-1;if(s>1)s=1;
+  const c=(0.5+beta)===0?0:gamma/(0.5+beta);
+  let th=Math.asin(s);if(c<0)th=Math.PI-th;
+  return th*fs/(2*Math.PI);
+}
+function extractFcs(cb,nb,fs){
+  fs=fs||48000;
+  const fcs={low:200,mid:2000,high:5000};
+  if(nb<2)return fcs;
+  const f0=fcFromBq(cb,0,fs);if(!isNaN(f0))fcs.low=Math.round(f0);
+  if(nb===3){const f1=fcFromBq(cb,56,fs);if(!isNaN(f1))fcs.high=Math.round(f1);}
+  else if(nb===4){const f1=fcFromBq(cb,56,fs),f2=fcFromBq(cb,112,fs);
+    if(!isNaN(f1))fcs.mid=Math.round(f1);if(!isNaN(f2))fcs.high=Math.round(f2);}
+  return fcs;
+}
+function parseMbCfg(payload){
+  const view=new DataView(payload.buffer,payload.byteOffset,payload.byteLength);
+  const size=view.getUint32(0,true),num_bands=view.getUint32(4,true),
+        enable_emp_deemp=view.getUint32(8,true);
+  const reservedBytes=payload.slice(12,44),empBytes=payload.slice(44,100),
+        deempBytes=payload.slice(100,156),crossBytes=payload.slice(156,324);
+  const total=Math.max(1,Math.floor((size-MBDRC_HDR)/DRC_PARAMS_SIZE));
+  const ppb=Math.max(1,Math.floor(total/Math.max(1,num_bands)));
+  const drc=[];
+  for(let b=0;b<num_bands;b++){const row=[];
+    for(let c=0;c<ppb;c++)
+      row.push(parseDrcParams(view,MBDRC_HDR+(b*ppb+c)*DRC_PARAMS_SIZE));
+    drc.push(row);}
+  return{size,num_bands,enable_emp_deemp,reservedBytes,empBytes,deempBytes,crossBytes,
+    crossover_fcs:extractFcs(crossBytes,num_bands,48000),drc,params_per_band:ppb};
+}
+function packDrcCfg(p){
+  const N=p.params.length,tot=DRC_CFG_HDR+N*DRC_PARAMS_SIZE;
+  const buf=new Uint8Array(tot);new DataView(buf.buffer).setUint32(0,tot,true);
+  buf.set(p.reservedBytes,4);
+  for(let i=0;i<N;i++)buf.set(packDrcParams(p.params[i]),DRC_CFG_HDR+i*DRC_PARAMS_SIZE);
+  return buf;
+}
+function packMbCfg(p){
+  const tot=MBDRC_HDR+p.num_bands*p.params_per_band*DRC_PARAMS_SIZE;
+  const buf=new Uint8Array(tot),dv=new DataView(buf.buffer);
+  dv.setUint32(0,tot,true);dv.setUint32(4,p.num_bands,true);dv.setUint32(8,p.enable_emp_deemp,true);
+  buf.set(p.reservedBytes,12);buf.set(p.empBytes,44);buf.set(p.deempBytes,100);buf.set(p.crossBytes,156);
+  for(let b=0;b<p.num_bands;b++)for(let c=0;c<p.params_per_band;c++)
+    buf.set(packDrcParams(p.drc[b][c]),MBDRC_HDR+(b*p.params_per_band+c)*DRC_PARAMS_SIZE);
+  return buf;
+}
+const drcDefaults=()=>({enabled:1,threshold_dB:-30,knee_dB:20,ratio:10,pre_delay_ms:6,
+  attack_ms:3,master_gain_dB:3,release_spacing_dB:5,_raw:new Uint8Array(88)});
+function loadBlob(numid,fullName,done){
+  const ex=A.blobs[numid];
+  if(ex&&(ex.loading||(ex.parsed&&!ex.error))){done&&done();return;}
+  A.blobs[numid]=A.blobs[numid]||{bandTab:0};
+  Object.assign(A.blobs[numid],{loading:true,error:null,fullName,applying:false,dirty:false});
+  fetch("/api/dsp/blob/"+numid+"/raw").then(r=>r.json()).then(j=>{
+    if(!j.ok)throw new Error(j.err||"blob read failed");
+    const raw=hex2b(j.hex);
+    if(raw.length<ABI_HDR+4)throw new Error("blob too small");
+    const abiHdr=raw.slice(0,ABI_HDR),payload=raw.slice(ABI_HDR);
+    const kind=isMb(fullName)?"multiband":"drc";
+    const parsed=kind==="multiband"?parseMbCfg(payload):parseDrcCfg(payload);
+    Object.assign(A.blobs[numid],{loading:false,kind,parsed,abiHdr,error:null});
+  }).catch(e=>{Object.assign(A.blobs[numid],{loading:false,error:e.message});})
+    .finally(()=>done&&done());
+}
+function blobParams(numid){
+  const b=A.blobs[numid];if(!b||!b.parsed)return null;
+  const ch=A.idx%8;
+  if(b.kind==="multiband"){
+    const band=b.bandTab|0;
+    if(band>=b.parsed.drc.length)return null;
+    const row=b.parsed.drc[band];
+    return row[Math.min(ch,row.length-1)]||null;
+  }
+  const arr=b.parsed.params;
+  return arr[Math.min(ch,arr.length-1)]||null;
+}
+function applyBlob(numid,btn){
+  const b=A.blobs[numid];if(!b||!b.parsed||b.applying)return;
+  b.applying=true;if(btn)btn.disabled=true;
+  const cfg=b.kind==="multiband"?packMbCfg(b.parsed):packDrcCfg(b.parsed);
+  const full=new Uint8Array(b.abiHdr.length+cfg.length);
+  full.set(b.abiHdr,0);full.set(cfg,b.abiHdr.length);
+  fetch("/api/dsp/blob/set",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({numid,hex:b2hex(full)})})
+  .then(r=>r.json()).then(j=>{if(!j.ok)throw new Error(j.err||"write failed");b.dirty=false;})
+  .catch(e=>alert("Échec écriture blob : "+e.message))
+  .finally(()=>{b.applying=false;if(btn){btn.disabled=false;render();}});
+}
+
+/* ============================ rendu ============================ */
+function el(tag,cls,txt){const e=document.createElement(tag);
+  if(cls)e.className=cls;if(txt!==undefined)e.textContent=txt;return e;}
+function row(label){const r=el("div","sfrow");r.appendChild(el("span","lb",label));return r;}
+function slider(min,max,step,val,oninput){
+  const s=document.createElement("input");s.type="range";
+  s.min=min;s.max=max;s.step=step;s.value=val;
+  s.addEventListener("input",()=>oninput(parseFloat(s.value)));
+  return s;
+}
+function pwr(on,ontoggle){
+  const p=el("div","pwrsw"+(on?" on":""));p.appendChild(el("i"));
+  p.addEventListener("click",()=>{p.classList.toggle("on");ontoggle(p.classList.contains("on"));});
+  return p;
+}
+function rowFor(c){
+  if(c.type==="INTEGER"){
+    const r=row(c.short),vl=el("span","vl",dbLbl(c));
+    r.insertBefore(slider(c.min||0,c.max||100,1,intVal(c),v=>{setAlsa(c,Math.round(v));vl.textContent=dbLbl(c);}),null);
+    r.appendChild(vl);return r;
+  }
+  if(c.type==="BOOLEAN"){
+    const r=row(c.short);
+    r.appendChild(pwr(isOn(c),on=>setAlsa(c,on?"on":"off")));
+    r.appendChild(el("span","vl",""));return r;
+  }
+  if(c.type==="ENUMERATED"){
+    const r=row(c.short),sel=document.createElement("select");
+    const cur=String(c.value||"").replace(/'/g,"");
+    c.items.forEach((it,ix)=>{const o=document.createElement("option");
+      o.value=it;o.textContent=it;
+      if(cur===it||parseInt(cur,10)===ix)o.selected=true;sel.appendChild(o);});
+    sel.addEventListener("change",()=>setAlsa(c,sel.value));
+    r.appendChild(sel);r.appendChild(el("span","vl",""));return r;
+  }
+  if(c.type==="BYTES"&&c.fullName&&parseBqName(c.fullName))return bqEditor(c);
+  if(c.type==="BYTES"&&isDrcBlob(c.fullName))return drcEditor(c);
+  const r=row(c.short);r.appendChild(el("span","vl",c.type));return r;
+}
+function bqEditor(c){
+  const wrap=el("div");
+  const p=A.bq[c.fullName]||bqDefault();
+  const head=row(c.short),sel=document.createElement("select");
+  BIQUAD_TYPES.forEach((t,ti)=>{const o=document.createElement("option");
+    o.value=ti;o.textContent=t;if(p.type===ti)o.selected=true;sel.appendChild(o);});
+  head.appendChild(sel);head.appendChild(el("span","vl",""));wrap.appendChild(head);
+  const params=el("div");wrap.appendChild(params);
+  function renderParams(){
+    params.innerHTML="";
+    const q=A.bq[c.fullName]||bqDefault();
+    if(q.type===0)return;
+    const rf=row("· Fréquence"),vf=el("span","vl",q.fHz+" Hz");
+    rf.insertBefore(slider(20,22000,1,q.fHz,v=>{setBq(c.fullName,{fHz:v});vf.textContent=Math.round(v)+" Hz";}),null);
+    rf.appendChild(vf);params.appendChild(rf);
+    const rq=row("· Q"),vq=el("span","vl",q.q.toFixed(2));
+    rq.insertBefore(slider(0.1,10,0.01,q.q,v=>{setBq(c.fullName,{q:v});vq.textContent=v.toFixed(2);}),null);
+    rq.appendChild(vq);params.appendChild(rq);
+    if([5,6,7].includes(q.type)){
+      const rg=row("· Gain"),vg=el("span","vl",q.gainDb.toFixed(1)+" dB");
+      rg.insertBefore(slider(-24,24,0.1,q.gainDb,v=>{setBq(c.fullName,{gainDb:v});vg.textContent=v.toFixed(1)+" dB";}),null);
+      rg.appendChild(vg);params.appendChild(rg);
+    }
+  }
+  sel.addEventListener("change",()=>{setBq(c.fullName,{type:parseInt(sel.value,10)});renderParams();});
+  renderParams();
+  return wrap;
+}
+function drcEditor(c){
+  const wrap=el("div");
+  wrap.appendChild(el("div","sfsec",c.short));
+  const inner=el("div");wrap.appendChild(inner);
+  function renderBlob(){
+    inner.innerHTML="";
+    const b=A.blobs[c.numid];
+    if(!b||b.loading){inner.appendChild(el("div","sfsub","Chargement du blob DSP…"));return;}
+    if(b.error){inner.appendChild(el("div","sfsub","Erreur : "+b.error));return;}
+    const p=blobParams(c.numid);
+    if(!p){inner.appendChild(el("div","sfsub","Paramètres indisponibles."));return;}
+    if(b.kind==="multiband"){
+      const nb=b.parsed.num_bands;
+      const tabs=el("div","sftabs");tabs.style.padding="0 0 6px";tabs.style.border="none";
+      for(let i=0;i<nb;i++){
+        const t=el("span","sftab"+(b.bandTab===i?" on":""),"BANDE "+(i+1));
+        t.addEventListener("click",()=>{b.bandTab=i;renderBlob();});
+        tabs.appendChild(t);
+      }
+      inner.appendChild(tabs);
+      /* crossover */
+      const fcs=b.parsed.crossover_fcs;
+      const xk=nb===2?["low"]:nb===3?["low","high"]:["low","mid","high"];
+      xk.forEach(k=>{
+        const r=row("Crossover "+k),vv=el("span","vl",fcs[k]+" Hz");
+        r.insertBefore(slider(20,20000,1,fcs[k],v=>{
+          const vc=Math.max(20,Math.min(v,20000));
+          fcs[k]=vc;
+          b.parsed.crossBytes=packCross(nb,48000,fcs);
+          b.dirty=true;vv.textContent=Math.round(vc)+" Hz";dirt.style.display="";
+        }),null);
+        r.appendChild(vv);inner.appendChild(r);
+      });
+    }
+    const re=row("Actif ("+(A.isOut?"S":"M")+((A.idx%8)+1)+")");
+    re.appendChild(pwr(p.enabled===1,on=>{p.enabled=on?1:0;b.dirty=true;dirt.style.display="";}));
+    re.appendChild(el("span","vl",""));inner.appendChild(re);
+    DRC_SLIDERS.forEach(s=>{
+      const r=row(s.label),vv=el("span","vl",(+p[s.key]).toFixed(s.step<1?1:0)+" "+s.unit);
+      r.insertBefore(slider(s.min,s.max,s.step,p[s.key],v=>{
+        p[s.key]=v;b.dirty=true;
+        vv.textContent=v.toFixed(s.step<1?1:0)+" "+s.unit;dirt.style.display="";
+      }),null);
+      r.appendChild(vv);inner.appendChild(r);
+    });
+    const bar=el("div","sfbar");
+    const ap=el("button","apply","APPLIQUER AU DSP");
+    ap.addEventListener("click",()=>applyBlob(c.numid,ap));
+    const rs=el("button",null,"DÉFAUT");
+    rs.addEventListener("click",()=>{
+      const cur=blobParams(c.numid);if(!cur)return;
+      const d=drcDefaults();d._raw=cur._raw;Object.assign(cur,d);
+      b.dirty=true;renderBlob();
+    });
+    const dirt=el("span","dirt","● modifié — non appliqué");
+    dirt.style.display=b.dirty?"":"none";
+    bar.appendChild(ap);bar.appendChild(rs);bar.appendChild(dirt);
+    inner.appendChild(bar);
+  }
+  loadBlob(c.numid,c.fullName,renderBlob);
+  renderBlob();
+  return wrap;
+}
+function render(){
+  const groups=groupsFor();
+  const tabs=$("#sftabs"),body=$("#sfbody");
+  tabs.innerHTML="";body.innerHTML="";
+  if(!groups.length){
+    body.appendChild(el("div","sfsub","Aucun effet TAC/DSP sur cette voie (pas de contrôles ALSA associés)."));
+    return;
+  }
+  const act=groups.find(g=>g.title===A.tab)||groups[0];A.tab=act.title;
+  groups.forEach(g=>{
+    const t=el("span","sftab"+(g===act?" on":""),g.title);
+    t.addEventListener("click",()=>{A.tab=g.title;render();});
+    tabs.appendChild(t);
+  });
+  body.appendChild(el("div","sfsub",act.subtitle||""));
+  if(act.placeholder)body.appendChild(el("div","sfsub",act.placeholder));
+  act.controls.forEach(c=>body.appendChild(rowFor(c)));
+}
+function labelFor(idx,isOut){
+  if(!isOut)return idx<8?["M"+(idx+1),"MIC DSP"]:idx<16?["U"+(idx-7),"USB IN"]:["P"+(idx-15),"TEL IN"];
+  return idx<8?["S"+(idx+1),"DSP OUT"]:idx<16?["U"+(idx-7),"USB OUT"]:["P"+(idx-15),"TEL OUT"];
+}
+function openDrawer(mp){
+  A.idx=mp.idx;A.isOut=(mp.t==="out");A.tab="";A.open=true;
+  const[l,k]=labelFor(A.idx,A.isOut);
+  $("#sftitle").textContent=l;$("#sfkind").textContent=k+" · EFFETS PISTE";
+  $("#stripfx").style.display="flex";
+  $("#sfbody").innerHTML='<div class="sfsub">Lecture des contrôles ALSA…</div>';
+  fetch("/api/alsa/contents").then(r=>r.text()).then(t=>{
+    A.controls=parseAmixer(t);initBq();render();
+  }).catch(()=>{A.controls={};render();});
+}
+$("#sfclose").addEventListener("click",()=>{$("#stripfx").style.display="none";A.open=false;});
+function step(d){
+  A.idx=(A.idx+d+18)%18;A.tab="";
+  const[l,k]=labelFor(A.idx,A.isOut);
+  $("#sftitle").textContent=l;$("#sfkind").textContent=k+" · EFFETS PISTE";
+  render();
+}
+$("#sfprev").addEventListener("click",()=>step(-1));
+$("#sfnext").addEventListener("click",()=>step(1));
+document.querySelectorAll("#bank .strip").forEach((elm,i)=>{
+  const h=()=>{const mp=st[i].map;if(mp)openDrawer(mp);};
+  elm.querySelector(".id").addEventListener("click",h);
+  elm.querySelector(".src").addEventListener("click",h);
+});
+/* bouton RESET TAC topbar */
+const tb=$("#tacbtn");
+if(tb)tb.addEventListener("click",()=>{
+  if(tb.classList.contains("busy"))return;
+  tb.classList.add("busy");tb.textContent="RESET…";
+  fetch("/api/tac/reset",{method:"POST"}).catch(()=>{}).finally(()=>{
+    setTimeout(()=>{tb.classList.remove("busy");tb.textContent="RESET TAC";},900);});
+});
+})();
+
 </script>
