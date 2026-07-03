@@ -263,7 +263,7 @@ body{
   <div id="topbar">
     <div class="brand"><span class="n">MODEL AB</span><span class="s">ELECTROSENS</span></div>
     <div class="tclock" id="clock">00:00:00<span class="fr">.00</span></div>
-    <div class="chip"><span class="k">LOUDNESS</span><span class="v" id="lufs">-14.2 <em>LUFS</em></span></div>
+    <div class="chip"><span class="k">NIVEAU</span><span class="v" id="lufs">-14.2 <em>LUFS</em></span></div>
     <div class="chip"><span class="k">LATENCE</span><span class="v">7.9 <em>ms</em></span></div>
     <div class="spacer"></div>
     <div class="chip"><span class="k">CPU</span><span class="v" id="cpuv">21%</span><span class="loadbar"><i id="cpub" style="width:21%"></i></span></div>
@@ -645,17 +645,26 @@ function drawGonio(t){
   vuctx.beginPath();vuctx.moveTo(cx-R,cy+R);vuctx.lineTo(cx+R,cy-R);vuctx.stroke();
   vuctx.beginPath();vuctx.moveTo(cx-R,cy-R);vuctx.lineTo(cx+R,cy+R);vuctx.stroke();
   /* nuage stéréo : phase corrélée + wobble */
-  const amp=(master.l+master.r)*0.5;
-  const n=REDUCED?40:90;
   vuctx.fillStyle="rgba(120,225,150,.5)";
   vuctx.shadowColor="rgba(120,225,150,.9)";vuctx.shadowBlur=7*DPR;
-  for(let i=0;i<n;i++){
-    const ph=t*7+i*0.31;
-    const m=amp*(0.35+0.65*Math.abs(Math.sin(ph*1.7+i)));
-    const corr=0.72+0.2*Math.sin(t*0.4);          /* corrélation L/R */
-    const l=m*Math.sin(ph), r=m*Math.sin(ph*corr+0.4*Math.sin(t+i));
-    const x=cx+(l-r)*R*1.1, y=cy-(l+r)*R*0.62;
-    vuctx.fillRect(x,y,1.6*DPR,1.6*DPR);
+  if(window.LIVE_SCOPE&&window.LIVE_SCOPE.length>=4){
+    const sc=window.LIVE_SCOPE;      /* [l,r,l,r,...] S16 réels */
+    for(let i=0;i<sc.length;i+=2){
+      const l=sc[i]/32768, r=sc[i+1]/32768;
+      const x=cx+(l-r)*R*1.1, y=cy-(l+r)*R*0.62;
+      vuctx.fillRect(x,y,1.6*DPR,1.6*DPR);
+    }
+  }else{
+    const amp=(master.l+master.r)*0.5;
+    const n=REDUCED?40:90;
+    for(let i=0;i<n;i++){
+      const ph=t*7+i*0.31;
+      const m=amp*(0.35+0.65*Math.abs(Math.sin(ph*1.7+i)));
+      const corr=0.72+0.2*Math.sin(t*0.4);
+      const l=m*Math.sin(ph), r=m*Math.sin(ph*corr+0.4*Math.sin(t+i));
+      const x=cx+(l-r)*R*1.1, y=cy-(l+r)*R*0.62;
+      vuctx.fillRect(x,y,1.6*DPR,1.6*DPR);
+    }
   }
   vuctx.shadowBlur=0;
 }
@@ -723,11 +732,13 @@ function drawSpec(t){
   spctx.fillStyle=g;
   const mAmp=(master.l+master.r)/2;
   for(let b=0;b<NB;b++){
-    const f=b/NB;
-    const shape=Math.pow(1-f,0.72);                     // pente rose
-    const wob=0.14*Math.sin(t*(1.1+f*5.3)+b*1.31)+0.09*Math.sin(t*0.37+b*0.7);
-    const tgt=Math.max(0,(shape+wob)*mAmp*1.18);
-    specState[b]+= (tgt-specState[b])*(tgt>specState[b]?0.5:0.12);
+    if(!window.LIVE){
+      const f=b/NB;
+      const shape=Math.pow(1-f,0.72);
+      const wob=0.14*Math.sin(t*(1.1+f*5.3)+b*1.31)+0.09*Math.sin(t*0.37+b*0.7);
+      const tgt=Math.max(0,(shape+wob)*mAmp*1.18);
+      specState[b]+= (tgt-specState[b])*(tgt>specState[b]?0.5:0.12);
+    }
     const bh=specState[b]*hs*0.92;
     spctx.fillRect(b*bw+1,hs-bh,bw-2,bh);
   }
@@ -749,10 +760,17 @@ function drawSpec(t){
   spctx.strokeStyle="#e5a13c";spctx.lineWidth=1.6*DPR;
   spctx.shadowColor="rgba(229,161,60,.6)";spctx.shadowBlur=5*DPR;
   spctx.beginPath();
+  const mlenv=window.LIVE_ENV;      /* 64 gains dB réels (spectral_env) */
   for(let b=0;b<=NB;b++){
     const f=b/NB;
-    const env=0.5-0.16*Math.sin(f*5+t*0.21)-0.10*Math.cos(f*11-t*0.13)+0.10*f;
-    const y=hs*(0.62-env*0.34);
+    let y;
+    if(mlenv&&mlenv.length===64){
+      const g=mlenv[Math.min(63,Math.round(f*63))];   /* -12..+12 dB */
+      y=hs*(0.5-(g/12)*0.42);
+    }else{
+      const env=0.5-0.16*Math.sin(f*5+t*0.21)-0.10*Math.cos(f*11-t*0.13)+0.10*f;
+      y=hs*(0.62-env*0.34);
+    }
     if(b===0)spctx.moveTo(0,y);else spctx.lineTo(f*w,y);
   }
   spctx.stroke();spctx.shadowBlur=0;
@@ -761,9 +779,11 @@ function drawSpec(t){
 /* ---------- moteur de simulation ---------- */
 let t0=performance.now();
 let tickErr=0;
+window.LIVE=false;          /* bascule par le bridge SSE si la board répond */
 function tick(now){
  try{
   const t=(now-t0)/1000;
+  if(!window.LIVE){
   let suml=0,sumr=0;
   st.forEach((s,i)=>{
     const active=!s.mute&&(!anySolo||s.solo);
@@ -777,6 +797,7 @@ function tick(now){
   const ml=Math.min(1,suml*0.34*mf),mr=Math.min(1,sumr*0.34*mf);
   master.l+=(ml-master.l)*(ml>master.l?0.5:0.12);
   master.r+=(mr-master.r)*(mr>master.r?0.5:0.12);
+  }
   master.pkl=Math.max(master.pkl*0.985,master.l);
   master.pkr=Math.max(master.pkr*0.985,master.r);
   // ballistique aiguilles (300ms VU)
@@ -823,6 +844,15 @@ setInterval(()=>{
   $("#clock").innerHTML=`${h}:${m}:${s}<span class="fr">.${String(Math.floor(Math.random()*99)).padStart(2,"0")}</span>`;
 },1000);
 setInterval(()=>{
+  if(window.LIVE){
+    /* LIVE : sysload vient du state stream ; on met à jour LUFS→peak réel */
+    const pl=20*Math.log10(Math.max(master.pkl,0.001)), pr=20*Math.log10(Math.max(master.pkr,0.001));
+    $("#lufs").innerHTML=Math.max(pl,pr).toFixed(1)+" <em>dB pk</em>";
+    $("#mlufs").textContent=Math.max(pl,pr).toFixed(1);
+    $("#pkl").textContent=pl.toFixed(1);
+    $("#pkr").textContent=pr.toFixed(1);
+    return;
+  }
   const cpu=18+Math.round(Math.random()*9), dsp=70+Math.round(Math.random()*4), npu=12+Math.round(Math.random()*6);
   $("#cpuv").textContent=cpu+"%";$("#cpub").style.width=cpu+"%";
   $("#dspv").textContent=dsp+"%";$("#dspb").style.width=dsp+"%";
@@ -834,4 +864,157 @@ setInterval(()=>{
   $("#pkl").textContent=(20*Math.log10(Math.max(master.pkl,0.001))).toFixed(1);
   $("#pkr").textContent=(20*Math.log10(Math.max(master.pkr,0.001))).toFixed(1);
 },900);
+
+/* ================== V10-P1 : LIVE BRIDGE ==================
+ * Connecte la console au vrai mixer-pro :
+ *  - /api/state/sse : état versionné (seq/resync), enveloppe ML, sysload
+ *  - /api/stream    : meters 30 Hz + analyzer (spectre réel, scope gonio)
+ *  - POST /api/cmd  : faders → set_master, knobs → set_input_gain,
+ *                     mute → set_mute, master → set_output_gain
+ * Mapping tranches : M1-M4 = in[0..3] (mics DSP), U1-U4 = in[8..11] (USB).
+ * Sans board (artifact/démo) : la simulation continue, rien ne casse. */
+(function(){
+"use strict";
+const SRC_MAP=[0,1,2,3,8,9,10,11];
+let lastSeq=null, es=null, esRetry=800;
+
+const post=(o)=>fetch("/api/cmd",{method:"POST",
+  headers:{"Content-Type":"application/json"},body:JSON.stringify(o)}).catch(()=>{});
+
+/* throttle par clé (45 ms + trailing) — même recette que la GUI validée */
+const thMap={}, trMap={};
+function postT(key,o){
+  const now=performance.now();
+  clearTimeout(trMap[key]);
+  if(now-(thMap[key]||0)>45){thMap[key]=now;post(o);}
+  else trMap[key]=setTimeout(()=>{thMap[key]=performance.now();post(o);},45);
+}
+
+function applyState(d){
+  const f=d.full||d.patch||{};
+  if(f.insert&&f.insert.chain&&f.insert.chain[0]&&f.insert.chain[0].l)
+    window.LIVE_ENV=f.insert.chain[0].l;
+  if(f.sysload&&f.sysload.cpu){
+    const s=f.sysload;
+    const set=(id,v,bar)=>{const e=document.getElementById(id);if(e)e.textContent=v+"%";
+      const b=document.getElementById(bar);if(b)b.style.width=Math.min(100,v)+"%";};
+    set("cpuv",Math.max(s.cpu[0],s.cpu[1]),"cpub");
+    set("dspv",s.dsp<0?0:s.dsp,"dspb");
+    set("npuv",s.npu<0?0:s.npu,"npub");
+  }
+  if(f.stat){
+    const x=document.querySelector(".mastnotes .mn b[style]");
+    if(x)x.textContent=f.stat.xrun;
+    const lat=document.querySelectorAll("#topbar .chip .v")[1];
+    if(lat&&f.stat.latency_us_one_way)
+      lat.innerHTML=(f.stat.latency_us_one_way/1000).toFixed(1)+" <em>ms</em>";
+  }
+  if(f.output_gain&&f.output_gain.gains){
+    const g=f.output_gain.gains[0]||1000;
+    master.fader=Math.max(0,Math.min(1,(20*Math.log10(Math.max(g,1)/1000)+72)/84));
+  }
+}
+
+function connectState(){
+  es=new EventSource("/api/state/sse");
+  es.onmessage=(e)=>{
+    try{
+      const d=JSON.parse(e.data);
+      if(lastSeq!==null&&d.seq!==lastSeq+1&&!d.full){
+        /* gap → resync */
+        fetch("/api/state/full").then(r=>r.json()).then(fd=>{
+          lastSeq=fd.seq;applyState(fd);}).catch(()=>{});
+      }
+      lastSeq=d.seq;
+      if(!window.LIVE){
+        window.LIVE=true;
+        document.querySelector(".sysdot").childNodes[1].textContent="LIVE";
+        /* tap analyzer 3 = OUT 0/1 pour spectre+gonio réels */
+        post({op:"set_tap",tap:3,kind:3,a:0,b:1});
+      }
+      applyState(d);
+    }catch(_){}
+  };
+  es.onerror=()=>{
+    es.close();window.LIVE=false;window.LIVE_ENV=null;window.LIVE_SCOPE=null;
+    setTimeout(connectState,esRetry);esRetry=Math.min(esRetry*2,8000);
+  };
+  es.onopen=()=>{esRetry=800;};
+}
+
+/* meters 30 Hz + analyzer */
+function connectMeters(){
+  const ms=new EventSource("/api/stream");
+  const dbn=(p)=>{ /* peak s32 → 0..1 normalisé pour les bargraphs (-60..0 dB) */
+    if(!p||p<=0)return 0;
+    const db=20*Math.log10(p/2147483648);
+    return Math.max(0,Math.min(1,(db+60)/60));
+  };
+  ms.onmessage=(e)=>{
+    if(!window.LIVE)return;
+    try{
+      const m=JSON.parse(e.data);
+      if(Array.isArray(m.in))
+        SRC_MAP.forEach((src,i)=>{
+          const v=dbn(m.in[src]);
+          st[i].lvl=v;st[i].pk=Math.max(st[i].pk*0.985,v);
+        });
+      if(Array.isArray(m.out)){
+        master.l=dbn(m.out[0]);master.r=dbn(m.out[1]);
+      }
+      if(Array.isArray(m.analyzer)&&m.analyzer[3]){
+        const t3=m.analyzer[3];
+        if(Array.isArray(t3.s)){
+          /* 128 bins log dB → 48 barres 0..1 */
+          for(let b=0;b<NB;b++){
+            const v=t3.s[Math.min(127,Math.round(b*127/(NB-1)))];
+            specState[b]=Math.max(0,Math.min(1,(v+90)/90));
+          }
+        }
+        if(Array.isArray(t3.x))window.LIVE_SCOPE=t3.x;
+      }
+    }catch(_){}
+  };
+  ms.onerror=()=>{ms.close();setTimeout(connectMeters,2000);};
+}
+
+/* ---- contrôles → vrai mixer ---- */
+/* faders de tranche → routage vers master (out 0+1) */
+document.querySelectorAll(".ftrack[data-i]").forEach(tr=>{
+  const i=+tr.dataset.i;
+  tr.addEventListener("pointermove",()=>{
+    if(!window.LIVE)return;
+    const db=st[i].fader*84-72;
+    const gain=db<=-71?0:Math.pow(10,db/20);
+    postT("f"+i,{op:"set_master",src:SRC_MAP[i],out:0,gain});
+    postT("g"+i,{op:"set_master",src:SRC_MAP[i],out:1,gain});
+  });
+});
+/* knob gain d'entrée */
+document.querySelectorAll(".knob[data-i]").forEach(k=>{
+  const i=+k.dataset.i;
+  k.addEventListener("pointermove",()=>{
+    if(!window.LIVE)return;
+    postT("k"+i,{op:"set_input_gain",src:SRC_MAP[i],
+                 gain:Math.pow(10,st[i].gain/20)});
+  });
+});
+/* mute réel ; solo = GUI seule (P2) */
+document.querySelectorAll(".sq.mute").forEach(b=>{
+  const i=+b.dataset.i;
+  b.addEventListener("click",()=>{
+    if(window.LIVE)post({op:"set_mute",src:SRC_MAP[i],mute:st[i].mute?1:0});
+  });
+});
+/* master fader → gains de sortie 0+1 (dB) */
+const mtr=document.querySelector(".ftrack[data-m]");
+if(mtr)mtr.addEventListener("pointermove",()=>{
+  if(!window.LIVE)return;
+  const db=master.fader*84-72;
+  postT("m0",{op:"set_output_gain",out:0,db:db});
+  postT("m1",{op:"set_output_gain",out:1,db:db});
+});
+
+connectState();connectMeters();
+})();
 </script>

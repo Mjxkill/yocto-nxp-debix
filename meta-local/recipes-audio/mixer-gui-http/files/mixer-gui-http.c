@@ -166,6 +166,284 @@ static ssize_t sse_stream_callback(void *cls, uint64_t pos, char *buf, size_t ma
 	return len;
 }
 
+
+/* ================== V10-P1 : /api/state — flux d'état versionné ==========
+ * ARCHI V10 v3.1 (annexes A-C) :
+ *  - UN thread producteur poll mixer-pro (chaud 5 Hz : insert/assistant/stat,
+ *    froid 1 Hz : input_map/output_gain + sysload calculé ici même) et émet :
+ *      · patch par SECTION ENTIÈRE quand elle change :
+ *        data: {"seq":N,"patch":{"insert":{...}}}
+ *      · full state toutes les 30 s (filet) et à chaque nouveau client :
+ *        data: {"seq":N,"full":{...toutes les sections...}}
+ *  - par client : ring de trames, drop-oldest (le producteur ne bloque
+ *    jamais), réveil par cond var (pas de mixer_request par client).
+ *  - slot 0 réservé au kiosk (?panel=1) — jamais 503 pour l'écran local.
+ *  - le producteur est LA source sysload (le handler /api/sysload sert son
+ *    cache : plus de double fenêtre de mesure — finding critic it.2).
+ * Les FX bus (fx0-3, potentiellement ~40 Ko avec meta) ne sont PAS dans le
+ * flux : la page EFFETS les charge par POST get_fx à l'ouverture (P2). */
+
+#define SC_MAX    6
+#define SC_RING   8
+#define SC_FRAME  32768
+
+struct sclient {
+	int used, is_panel, need_full;
+	unsigned wr, rd;               /* indices monotones (slot = idx % RING) */
+	int drops;
+	int lens[SC_RING];
+	pthread_mutex_t mu;
+	pthread_cond_t  cv;
+};
+static struct sclient g_sc[SC_MAX];
+static char g_sc_ring[SC_MAX][SC_RING][SC_FRAME];   /* 1.5 MB BSS, statique */
+static pthread_mutex_t g_sc_alloc_mu = PTHREAD_MUTEX_INITIALIZER;
+static unsigned g_sseq = 0;
+static unsigned long g_sc_frames_out = 0;
+
+static char g_sysload_json[256] = "";
+static pthread_mutex_t g_sysload_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* sections du state (hors sysload, géré à part) */
+struct ssec {
+	const char *name, *req;
+	int hot;                       /* 1 = poll 5 Hz, 0 = 1 Hz */
+	char cache[SC_FRAME/4];        /* 8 KB par section, insert le + gros */
+};
+static struct ssec g_secs[] = {
+	{ "insert",      "{\"op\":\"get_insert\"}\n",      1, "" },
+	{ "assistant",   "{\"op\":\"get_assistant\"}\n",   1, "" },
+	{ "stat",        "{\"op\":\"get_state\"}\n",       1, "" },
+	{ "input_map",   "{\"op\":\"get_input_map\"}\n",   0, "" },
+	{ "output_gain", "{\"op\":\"get_output_gain\"}\n", 0, "" },
+};
+#define N_SECS ((int)(sizeof(g_secs)/sizeof(g_secs[0])))
+
+static void sc_push(struct sclient *c, const char *frame, int len)
+{
+	if (len <= 0 || len >= SC_FRAME) return;
+	pthread_mutex_lock(&c->mu);
+	if (c->used) {
+		if (c->wr - c->rd >= SC_RING) { c->rd++; c->drops++; }
+		int slot = c->wr % SC_RING;
+		memcpy(g_sc_ring[c - g_sc][slot], frame, len);
+		c->lens[slot] = len;
+		c->wr++;
+		pthread_cond_signal(&c->cv);
+	}
+	pthread_mutex_unlock(&c->mu);
+}
+
+static void sc_broadcast(const char *frame, int len)
+{
+	for (int i = 0; i < SC_MAX; i++)
+		if (g_sc[i].used) sc_push(&g_sc[i], frame, len);
+	g_sc_frames_out++;
+}
+
+/* construit la trame full depuis les caches ; retourne la longueur */
+static int sc_build_full(char *out, size_t sz)
+{
+	int n = snprintf(out, sz, "data: {\"schema_version\":1,\"seq\":%u,\"full\":{",
+	                 ++g_sseq);
+	for (int s = 0; s < N_SECS; s++)
+		n += snprintf(out + n, sz - n, "%s\"%s\":%s",
+		              s ? "," : "", g_secs[s].name,
+		              g_secs[s].cache[0] ? g_secs[s].cache : "null");
+	pthread_mutex_lock(&g_sysload_mu);
+	n += snprintf(out + n, sz - n, ",\"sysload\":%s",
+	              g_sysload_json[0] ? g_sysload_json : "null");
+	pthread_mutex_unlock(&g_sysload_mu);
+	n += snprintf(out + n, sz - n, "}}\n\n");
+	return (n > 0 && n < (int)sz) ? n : 0;
+}
+
+/* --- sysload : calcul unique (déplacé du handler, source unique) --- */
+static void compute_sysload(void)
+{
+	static unsigned long long prev_busy[4], prev_total[4];
+	int cpu_pct[4] = {0, 0, 0, 0};
+	FILE *f = fopen("/proc/stat", "r");
+	if (f) {
+		char ln[256];
+		while (fgets(ln, sizeof(ln), f)) {
+			int c;
+			unsigned long long u, ni, s, idle, iow, irq, sirq, st;
+			if (sscanf(ln, "cpu%d %llu %llu %llu %llu %llu %llu %llu %llu",
+				   &c, &u, &ni, &s, &idle, &iow, &irq, &sirq, &st) == 9
+			    && c >= 0 && c < 4) {
+				unsigned long long busy = u + ni + s + irq + sirq + st;
+				unsigned long long total = busy + idle + iow;
+				unsigned long long db = busy - prev_busy[c];
+				unsigned long long dt = total - prev_total[c];
+				if (prev_total[c] && dt > 0)
+					cpu_pct[c] = (int)(db * 100 / dt);
+				prev_busy[c] = busy;
+				prev_total[c] = total;
+			}
+		}
+		fclose(f);
+	}
+	static unsigned int prev_beat;
+	static int dsp_pct = -1;
+	f = fopen("/sys/kernel/debug/sof/debug", "rb");
+	if (f) {
+		unsigned int regs[2] = {0, 0};
+		if (fseek(f, 0xE0, SEEK_SET) == 0 && fread(regs, 4, 2, f) == 2) {
+			dsp_pct = (regs[1] != prev_beat && regs[0] <= 100)
+				  ? (int)regs[0] : 0;
+			prev_beat = regs[1];
+		}
+		fclose(f);
+	}
+	/* C2 : charge réelle audio_thread depuis la section stat déjà pollée
+	 * (pas de mixer_request supplémentaire) */
+	{
+		const char *st = g_secs[2].cache;
+		long mix_us = 0, play_us = 0;
+		const char *p = strstr(st, "\"prof_mix_us\":");
+		if (p) mix_us = atol(p + 14);
+		p = strstr(st, "\"prof_play_us\":");
+		if (p) play_us = atol(p + 15);
+		if (mix_us > 0) {
+			int c2 = (int)((mix_us + play_us) / 20);
+			cpu_pct[2] = c2 > 100 ? 100 : c2;
+		}
+	}
+	int gpu = -1, npu = -1;
+	f = fopen("/sys/kernel/debug/gc/load", "r");
+	if (f) {
+		char ln[128];
+		int core = -1;
+		while (fgets(ln, sizeof(ln), f)) {
+			int v;
+			if (sscanf(ln, "core : %d", &v) == 1) core = v;
+			else if (sscanf(ln, "load : %d%%", &v) == 1) {
+				if (core == 0) gpu = v;
+				else if (core == 1) npu = v;
+			}
+		}
+		fclose(f);
+	}
+	pthread_mutex_lock(&g_sysload_mu);
+	snprintf(g_sysload_json, sizeof(g_sysload_json),
+		 "{\"ok\":true,\"cpu\":[%d,%d,%d,%d],\"gpu\":%d,\"npu\":%d,\"dsp\":%d}",
+		 cpu_pct[0], cpu_pct[1], cpu_pct[2], cpu_pct[3], gpu, npu, dsp_pct);
+	pthread_mutex_unlock(&g_sysload_mu);
+}
+
+static void *state_producer(void *arg)
+{
+	(void)arg;
+	char resp[SC_FRAME/4], frame[SC_FRAME];
+	int tick = 0;
+	for (;;) {
+		usleep(200000);              /* 5 Hz de base */
+		tick++;
+		int cold = (tick % 5) == 0;  /* 1 Hz */
+		int full = (tick % 150) == 0;/* 30 s */
+
+		for (int s = 0; s < N_SECS; s++) {
+			if (!g_secs[s].hot && !cold && !full) continue;
+			int n = mixer_request(g_secs[s].req, resp, sizeof(resp));
+			if (n <= 0) continue;
+			if (resp[n-1] == '\n') resp[--n] = '\0';
+			if (strcmp(resp, g_secs[s].cache) != 0) {
+				strncpy(g_secs[s].cache, resp, sizeof(g_secs[s].cache) - 1);
+				if (!full) {   /* patch section entière */
+					int fl = snprintf(frame, sizeof(frame),
+						"data: {\"seq\":%u,\"patch\":{\"%s\":%s}}\n\n",
+						++g_sseq, g_secs[s].name, resp);
+					if (fl > 0 && fl < (int)sizeof(frame))
+						sc_broadcast(frame, fl);
+				}
+			}
+		}
+		if (cold) {
+			compute_sysload();
+			/* sysload change quasi toujours → patch dédié 1 Hz */
+			pthread_mutex_lock(&g_sysload_mu);
+			int fl = snprintf(frame, sizeof(frame),
+				"data: {\"seq\":%u,\"patch\":{\"sysload\":%s}}\n\n",
+				++g_sseq, g_sysload_json);
+			pthread_mutex_unlock(&g_sysload_mu);
+			if (fl > 0 && fl < (int)sizeof(frame))
+				sc_broadcast(frame, fl);
+		}
+		/* full périodique OU demandé par de nouveaux clients */
+		int need = full;
+		for (int i = 0; i < SC_MAX && !need; i++)
+			if (g_sc[i].used && g_sc[i].need_full) need = 1;
+		if (need) {
+			int fl = sc_build_full(frame, sizeof(frame));
+			if (fl > 0) {
+				if (full) sc_broadcast(frame, fl);
+				else for (int i = 0; i < SC_MAX; i++)
+					if (g_sc[i].used && g_sc[i].need_full) {
+						sc_push(&g_sc[i], frame, fl);
+						g_sc[i].need_full = 0;
+					}
+				if (full)
+					for (int i = 0; i < SC_MAX; i++) g_sc[i].need_full = 0;
+			}
+		}
+	}
+	return NULL;
+}
+
+/* --- callback SSE state : consomme le ring, réveillé par le producteur --- */
+static ssize_t sse_state_cb(void *cls, uint64_t pos, char *buf, size_t max)
+{
+	(void)pos;
+	struct sclient *c = cls;
+	pthread_mutex_lock(&c->mu);
+	if (c->rd == c->wr) {
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		ts.tv_nsec += 500000000L;
+		if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+		pthread_cond_timedwait(&c->cv, &c->mu, &ts);
+	}
+	if (c->rd == c->wr) {          /* timeout → keep-alive */
+		pthread_mutex_unlock(&c->mu);
+		if (max < 6) return 0;
+		memcpy(buf, ": ka\n\n", 6);
+		return 6;
+	}
+	int slot = c->rd % SC_RING;
+	int len = c->lens[slot];
+	if ((size_t)len > max) len = (int)max;
+	memcpy(buf, g_sc_ring[c - g_sc][slot], len);
+	c->rd++;
+	pthread_mutex_unlock(&c->mu);
+	return len;
+}
+
+static void sse_state_free(void *cls)
+{
+	struct sclient *c = cls;
+	pthread_mutex_lock(&g_sc_alloc_mu);
+	pthread_mutex_lock(&c->mu);
+	c->used = 0;
+	pthread_mutex_unlock(&c->mu);
+	pthread_mutex_unlock(&g_sc_alloc_mu);
+}
+
+static struct sclient *sc_alloc(int is_panel)
+{
+	pthread_mutex_lock(&g_sc_alloc_mu);
+	int lo = is_panel ? 0 : 1, hi = is_panel ? 1 : SC_MAX;
+	struct sclient *c = NULL;
+	for (int i = lo; i < hi; i++)
+		if (!g_sc[i].used) { c = &g_sc[i]; break; }
+	if (c) {
+		c->used = 1; c->is_panel = is_panel;
+		c->wr = c->rd = 0; c->drops = 0; c->need_full = 1;
+	}
+	pthread_mutex_unlock(&g_sc_alloc_mu);
+	return c;
+}
+
 /* ============================== HTTP helpers ====================== */
 
 static void add_cors_headers(struct MHD_Response *r)
@@ -623,98 +901,15 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		}
 
 		if (!strcmp(url, "/api/sysload")) {
-			/* V9.5.20 — charge CPU0-3 (delta /proc/stat), NPU + GPU
-			 * (galcore gc/load), DSP (SW REGs fw SOF).
-			 * Cache 500 ms : l'état delta est partagé entre clients —
-			 * sans cache, 2 lecteurs simultanés (GUI + curl) rétrécissent
-			 * les fenêtres → pics artificiels et dsp=0 intermittent. */
-			static char cached[256];
-			static struct timespec last_ts;
-			struct timespec now_ts;
-			clock_gettime(CLOCK_MONOTONIC, &now_ts);
-			long age_ms = (now_ts.tv_sec - last_ts.tv_sec) * 1000
-				    + (now_ts.tv_nsec - last_ts.tv_nsec) / 1000000;
-			if (cached[0] && age_ms < 500)
-				return send_json(conn, 200, cached);
-			last_ts = now_ts;
-			static unsigned long long prev_busy[4], prev_total[4];
-			int cpu_pct[4] = {0, 0, 0, 0};
-			FILE *f = fopen("/proc/stat", "r");
-			if (f) {
-				char ln[256];
-				while (fgets(ln, sizeof(ln), f)) {
-					int c;
-					unsigned long long u, ni, s, idle, iow, irq, sirq, st;
-					if (sscanf(ln, "cpu%d %llu %llu %llu %llu %llu %llu %llu %llu",
-						   &c, &u, &ni, &s, &idle, &iow, &irq, &sirq, &st) == 9
-					    && c >= 0 && c < 4) {
-						unsigned long long busy = u + ni + s + irq + sirq + st;
-						unsigned long long total = busy + idle + iow;
-						unsigned long long db = busy - prev_busy[c];
-						unsigned long long dt = total - prev_total[c];
-						if (prev_total[c] && dt > 0)
-							cpu_pct[c] = (int)(db * 100 / dt);
-						prev_busy[c] = busy;
-						prev_total[c] = total;
-					}
-				}
-				fclose(f);
-			}
-			/* DSP load : SW REG 0xE0 (%) + heartbeat 0xE4 publiés par
-			 * la fw SOF (zephyr_dma_domain, fenêtre DEBUG mailbox).
-			 * Heartbeat figé entre 2 appels = pipelines stoppés → 0%. */
-			static unsigned int prev_beat;
-			static int dsp_pct = -1;
-			f = fopen("/sys/kernel/debug/sof/debug", "rb");
-			if (f) {
-				unsigned int regs[2] = {0, 0};
-				if (fseek(f, 0xE0, SEEK_SET) == 0 &&
-				    fread(regs, 4, 2, f) == 2) {
-					dsp_pct = (regs[1] != prev_beat && regs[0] <= 100)
-						  ? (int)regs[0] : 0;
-					prev_beat = regs[1];
-				}
-				fclose(f);
-			}
-			/* C2 (core audio RT isolé) : /proc/stat est faux (aliasing
-			 * tick NO_HZ_IDLE vs période RT 2 ms → 0 % ou 57 % fantômes).
-			 * Vraie charge = timestamps internes de mixer-pro :
-			 * (prof_mix + prof_play) / période 2000 µs. */
-			{
-				char st[2048];
-				if (mixer_request("{\"op\":\"get_state\"}\n", st, sizeof(st)) > 0) {
-					long mix_us = 0, play_us = 0;
-					char *p = strstr(st, "\"prof_mix_us\":");
-					if (p) mix_us = atol(p + 14);
-					p = strstr(st, "\"prof_play_us\":");
-					if (p) play_us = atol(p + 15);
-					if (mix_us > 0) {
-						int c2 = (int)((mix_us + play_us) / 20);
-						cpu_pct[2] = c2 > 100 ? 100 : c2;
-					}
-				}
-			}
-			int gpu = -1, npu = -1;
-			f = fopen("/sys/kernel/debug/gc/load", "r");
-			if (f) {
-				char ln[128];
-				int core = -1;
-				while (fgets(ln, sizeof(ln), f)) {
-					int v;
-					if (sscanf(ln, "core : %d", &v) == 1) core = v;
-					else if (sscanf(ln, "load : %d%%", &v) == 1) {
-						if (core == 0) gpu = v;
-						else if (core == 1) npu = v;
-					}
-				}
-				fclose(f);
-			}
-			snprintf(cached, sizeof(cached),
-				 "{\"ok\":true,\"cpu\":[%d,%d,%d,%d],"
-				 "\"gpu\":%d,\"npu\":%d,\"dsp\":%d}",
-				 cpu_pct[0], cpu_pct[1], cpu_pct[2], cpu_pct[3],
-				 gpu, npu, dsp_pct);
-			return send_json(conn, 200, cached);
+			/* V10-P1 : source UNIQUE = le producteur state (1 Hz) —
+			 * plus de double fenêtre de mesure (finding critic it.2). */
+			char out[256];
+			pthread_mutex_lock(&g_sysload_mu);
+			snprintf(out, sizeof(out), "%s",
+				 g_sysload_json[0] ? g_sysload_json
+				 : "{\"ok\":false,\"err\":\"warming up\"}");
+			pthread_mutex_unlock(&g_sysload_mu);
+			return send_json(conn, 200, out);
 		}
 
 		if (!strcmp(url, "/api/drift")) {
@@ -739,6 +934,64 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			int n = mixer_request("{\"op\":\"apply_drift_as_shift\"}\n",
 			                      reply, sizeof(reply));
 			return send_json(conn, n > 0 ? 200 : 503, reply);
+		}
+
+		if (!strcmp(url, "/api/state/sse")) {
+			/* V10-P1 : flux d'état versionné (full + patches par section).
+			 * ?panel=1 → slot 0 réservé au kiosk (jamais 503). */
+			const char *pv = MHD_lookup_connection_value(conn,
+					MHD_GET_ARGUMENT_KIND, "panel");
+			struct sclient *c = sc_alloc(pv && !strcmp(pv, "1"));
+			if (!c) {
+				struct MHD_Response *r503 = MHD_create_response_from_buffer(
+					35, "{\"ok\":false,\"err\":\"sse slots full\"}",
+					MHD_RESPMEM_MUST_COPY);
+				MHD_add_response_header(r503, "Retry-After", "5");
+				add_cors_headers(r503);
+				enum MHD_Result rr = MHD_queue_response(conn, 503, r503);
+				MHD_destroy_response(r503);
+				return rr;
+			}
+			struct MHD_Response *r = MHD_create_response_from_callback(
+				MHD_SIZE_UNKNOWN, 65536, &sse_state_cb, c, &sse_state_free);
+			if (!r) { sse_state_free(c); return MHD_NO; }
+			MHD_add_response_header(r, "Content-Type", "text/event-stream");
+			MHD_add_response_header(r, "Cache-Control", "no-cache");
+			MHD_add_response_header(r, "Connection", "keep-alive");
+			MHD_add_response_header(r, "X-Accel-Buffering", "no");
+			add_cors_headers(r);
+			enum MHD_Result ret = MHD_queue_response(conn, 200, r);
+			MHD_destroy_response(r);
+			return ret;
+		}
+
+		if (!strcmp(url, "/api/state/full")) {
+			/* resync à la demande (gap de seq côté client) */
+			static char full[SC_FRAME];
+			int n = sc_build_full(full, sizeof(full));
+			/* strip "data: " et le \n\n final pour renvoyer du JSON pur */
+			if (n > 8)
+				return send_text(conn, 200, "application/json",
+						 full + 6, (size_t)(n - 8));
+			return send_json(conn, 503, "{\"ok\":false,\"err\":\"state not ready\"}\n");
+		}
+
+		if (!strcmp(url, "/api/debug/sse")) {
+			char dbg[512];
+			int n = snprintf(dbg, sizeof(dbg),
+				"{\"ok\":true,\"seq\":%u,\"frames_out\":%lu,\"clients\":[",
+				g_sseq, g_sc_frames_out);
+			int first = 1;
+			for (int i = 0; i < SC_MAX; i++)
+				if (g_sc[i].used) {
+					n += snprintf(dbg + n, sizeof(dbg) - n,
+						"%s{\"slot\":%d,\"panel\":%d,\"drops\":%d,\"backlog\":%u}",
+						first ? "" : ",", i, g_sc[i].is_panel,
+						g_sc[i].drops, g_sc[i].wr - g_sc[i].rd);
+					first = 0;
+				}
+			n += snprintf(dbg + n, sizeof(dbg) - n, "]}");
+			return send_json(conn, 200, dbg);
 		}
 
 		if (!strcmp(url, "/api/stream")) {
@@ -1039,6 +1292,14 @@ int main(int argc, char **argv)
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
 	signal(SIGPIPE, SIG_IGN);
+
+	/* V10-P1 : clients state stream + thread producteur */
+	for (int i = 0; i < SC_MAX; i++) {
+		pthread_mutex_init(&g_sc[i].mu, NULL);
+		pthread_cond_init(&g_sc[i].cv, NULL);
+	}
+	pthread_t state_th;
+	pthread_create(&state_th, NULL, state_producer, NULL);
 
 	struct MHD_Daemon *d = MHD_start_daemon(
 		MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_AUTO,
