@@ -83,6 +83,15 @@ body{
 
 /* ===== plan de travail ===== */
 #deck{display:grid;grid-template-columns:1fr 268px;min-height:0;}
+#bankbar .bk{padding:4px 12px;border-radius:4px;font-size:9px;font-weight:700;
+  letter-spacing:.14em;color:var(--mut);border:1px solid var(--line);cursor:pointer;background:var(--panel);}
+#bankbar .bk.on{color:var(--accent);border-color:rgba(229,161,60,.45);background:rgba(229,161,60,.08);}
+.send4{display:flex;gap:3px;margin-top:3px;}
+.send4 button{width:22px;height:14px;font-size:7px;border-radius:2px;border:1px solid var(--line-hi);
+  background:var(--panel2);color:var(--mut);cursor:pointer;padding:0;}
+.send4 button.on{background:rgba(229,161,60,.75);color:#1d1204;border-color:#ffcf7e;}
+.strip.isout .send4, .strip.isout .sq.solo, .strip.isout .sq.mute, .strip.isout .knob, .strip.isout .kval{visibility:hidden;}
+.strip.hidden{visibility:hidden;}
 
 /* --- banque de tranches --- */
 #bank{
@@ -281,10 +290,13 @@ body{
 
   <!-- ============ PAGES ============ -->
   <div id="pages">
-  <div id="deck" class="page" data-page="MIXER">
-    <div id="bank"></div>
+  <div id="deck" class="page" data-page="MIXER" style="grid-template-rows:30px 1fr;grid-template-columns:1fr 268px;display:grid;">
+    <div id="bankbar" style="grid-column:1/3;display:flex;gap:4px;align-items:center;padding:3px 10px;border-bottom:1px solid var(--line);">
+      <span style="font-size:8px;letter-spacing:.2em;color:var(--mut);">BANQUE</span>
+    </div>
+    <div id="bank" style="grid-row:2;"></div>
 
-    <div id="master">
+    <div id="master" style="grid-column:2;grid-row:2;">
       <div class="mhdr"><span class="t">MASTER</span><span class="lufs"><b id="mlufs">-14.2</b> LUFS · ML ACTIF</span></div>
 
       <div id="vuwrap" title="Toucher : VU / Goniomètre"><canvas id="vu"></canvas>
@@ -487,7 +499,7 @@ const st=NAMES.map((n,i)=>({
   mute:false,solo:false,
   base:[.62,.5,.4,.34,.58,.46,.3,.25][i],
   rate:[1.9,1.3,.8,2.6,1.1,.7,3.1,.5][i],
-  ph:i*1.7, lvl:0, pk:0
+  ph:i*1.7, lvl:0, pk:0, sends:[0,0,0,0], map:{t:"in",idx:i}
 }));
 let anySolo=false;
 const master={fader:.78,l:0,r:0,pkl:0,pkr:0,needL:0,needR:0};
@@ -517,6 +529,10 @@ st.forEach((s,i)=>{
     <div class="btnrow">
       <button class="sq mute" data-i="${i}">M</button>
       <button class="sq solo" data-i="${i}">S</button>
+    </div>
+    <div class="send4" data-i="${i}">
+      <button data-b="0">F1</button><button data-b="1">F2</button>
+      <button data-b="2">F3</button><button data-b="3">F4</button>
     </div>`;
   bank.appendChild(el);
 });
@@ -599,6 +615,73 @@ document.querySelectorAll(".sq.solo").forEach(b=>b.addEventListener("click",()=>
   const i=+b.dataset.i;st[i].solo=!st[i].solo;b.classList.toggle("on",st[i].solo);
   anySolo=st.some(s=>s.solo);
 }));
+/* ---------- banques console (layers X32) ---------- */
+const BANKS=[
+ {label:"IN DSP",  strips:Array.from({length:8},(_,i)=>({n:"M"+(i+1),sub:"MIC",t:"in",idx:i}))},
+ {label:"IN USB",  strips:Array.from({length:8},(_,i)=>({n:"U"+(i+1),sub:"USB",t:"in",idx:8+i}))},
+ {label:"TÉLÉPHONE", strips:[
+   {n:"P1",sub:"TEL IN", t:"in", idx:16},{n:"P2",sub:"TEL IN", t:"in", idx:17},
+   {n:"P1",sub:"TEL OUT",t:"out",idx:16},{n:"P2",sub:"TEL OUT",t:"out",idx:17}]},
+ {label:"OUT DSP", strips:Array.from({length:8},(_,i)=>({n:"S"+(i+1),sub:"DSP OUT",t:"out",idx:i}))},
+ {label:"OUT USB", strips:Array.from({length:8},(_,i)=>({n:"U"+(i+1),sub:"USB OUT",t:"out",idx:8+i}))},
+];
+const bankState=BANKS.map(b=>b.strips.map(()=>({fader:.72,gain:0,mute:false,sends:[0,0,0,0]})));
+let curBank=0;
+function placeCap(tr,v){const cap=tr.querySelector(".fcap");
+  const h=tr.clientHeight-24;cap.style.top=(12+(1-v)*h)+"px";}
+function saveBank(){
+  BANKS[curBank].strips.forEach((sd,i)=>{const ls=bankState[curBank][i];
+    ls.fader=st[i].fader;ls.gain=st[i].gain;ls.mute=st[i].mute;ls.sends=st[i].sends.slice();});
+}
+function applyBank(bi){
+  curBank=bi;
+  document.querySelectorAll("#bankbar .bk").forEach((b,j)=>b.classList.toggle("on",j===bi));
+  st.forEach((s,i)=>{
+    const el=bank.children[i], sd=BANKS[bi].strips[i];
+    if(!sd){el.classList.add("hidden");s.map=null;s.liveTgt=0;return;}
+    el.classList.remove("hidden");
+    el.classList.toggle("isout",sd.t==="out");
+    el.querySelector(".id").textContent=sd.n;
+    el.querySelector(".src").textContent=sd.sub;
+    s.map={t:sd.t,idx:sd.idx};s.name=sd.n;
+    const ls=bankState[bi][i];
+    s.gain=ls.gain;s.mute=ls.mute;s.sends=ls.sends.slice();s.solo=false;s.fader=ls.fader;
+    /* sorties : position = gain REEL persisté (STORE.output_gain, milli-lin → dB → 0..1) */
+    if(sd.t==="out"&&window.STORE&&STORE.output_gain&&STORE.output_gain.gains){
+      const g=STORE.output_gain.gains[sd.idx];
+      if(g!==undefined)s.fader=Math.max(0,Math.min(1,(20*Math.log10(Math.max(g,1)/1000)+72)/84));
+    }
+    s.lvl=0;s.pk=0;s.liveTgt=0;
+    knobArc(el.querySelector(".knob"),s.gain);
+    el.querySelector(".kval").textContent=s.gain.toFixed(1)+" dB";
+    el.querySelector(".sq.mute").classList.toggle("on",s.mute);
+    el.querySelector(".sq.solo").classList.remove("on");
+    el.querySelectorAll(".send4 button").forEach((b,k)=>b.classList.toggle("on",!!s.sends[k]));
+    placeCap(el.querySelector(".ftrack"),s.fader);
+  });
+  anySolo=false;
+}
+BANKS.forEach((b,bi)=>{
+  const e=document.createElement("button");e.className="bk";e.textContent=b.label;
+  e.addEventListener("click",()=>{saveBank();applyBank(bi);});
+  $("#bankbar").appendChild(e);
+});
+/* sends FX1-4 par entrée (paire stéréo bus 2b/2b+1, toggle 1.0/0.0) */
+document.querySelectorAll(".send4 button").forEach(b=>{
+  b.addEventListener("click",()=>{
+    const i=+b.parentElement.dataset.i, k=+b.dataset.b;
+    const mp=st[i].map;if(!mp||mp.t!=="in")return;
+    st[i].sends[k]=st[i].sends[k]?0:1;
+    b.classList.toggle("on",!!st[i].sends[k]);
+    if(window.LIVE&&window.MXPOST){
+      const g=st[i].sends[k]?1.0:0.0;
+      MXPOST({op:"set_send",in:mp.idx,bus:k*2,  gain:g});
+      MXPOST({op:"set_send",in:mp.idx,bus:k*2+1,gain:g});
+    }
+  });
+});
+applyBank(0);
+
 document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));t.classList.add("on");
   const name=t.textContent.trim();
@@ -963,11 +1046,11 @@ setInterval(()=>{
  * Sans board (artifact/démo) : la simulation continue, rien ne casse. */
 (function(){
 "use strict";
-const SRC_MAP=[0,1,2,3,8,9,10,11];
 let lastSeq=null, es=null, esRetry=800;
 
 const post=(o)=>fetch("/api/cmd",{method:"POST",
   headers:{"Content-Type":"application/json"},body:JSON.stringify(o)}).catch(()=>{});
+window.MXPOST=post;
 
 /* throttle par clé (45 ms + trailing) — même recette que la GUI validée */
 const thMap={}, trMap={};
@@ -1046,8 +1129,9 @@ function connectMeters(){
     if(!window.LIVE)return;
     try{
       const m=JSON.parse(e.data);
-      if(Array.isArray(m.in))
-        SRC_MAP.forEach((src,i)=>{ st[i].liveTgt=dbn(m.in[src]); });
+      st.forEach((s)=>{ const mp=s.map;if(!mp)return;
+        const arr=mp.t==="in"?m.in:m.out;
+        if(Array.isArray(arr))s.liveTgt=dbn(arr[mp.idx]); });
       if(Array.isArray(m.out)){
         master.liveTgtL=dbn(m.out[0]);master.liveTgtR=dbn(m.out[1]);
       }
@@ -1073,10 +1157,15 @@ document.querySelectorAll(".ftrack[data-i]").forEach(tr=>{
   const i=+tr.dataset.i;
   tr.addEventListener("pointermove",()=>{
     if(!window.LIVE)return;
+    const mp=st[i].map;if(!mp)return;
     const db=st[i].fader*84-72;
-    const gain=db<=-71?0:Math.pow(10,db/20);
-    postT("f"+i,{op:"set_master",src:SRC_MAP[i],out:0,gain});
-    postT("g"+i,{op:"set_master",src:SRC_MAP[i],out:1,gain});
+    if(mp.t==="in"){
+      const gain=db<=-71?0:Math.pow(10,db/20);
+      postT("f"+i,{op:"set_master",src:mp.idx,out:0,gain});
+      postT("g"+i,{op:"set_master",src:mp.idx,out:1,gain});
+    }else{
+      postT("f"+i,{op:"set_output_gain",out:mp.idx,db:db});
+    }
   });
 });
 /* knob gain d'entrée */
@@ -1084,7 +1173,8 @@ document.querySelectorAll(".knob[data-i]").forEach(k=>{
   const i=+k.dataset.i;
   k.addEventListener("pointermove",()=>{
     if(!window.LIVE)return;
-    postT("k"+i,{op:"set_input_gain",src:SRC_MAP[i],
+    const mp=st[i].map;if(!mp||mp.t!=="in")return;
+    postT("k"+i,{op:"set_input_gain",src:mp.idx,
                  gain:Math.pow(10,st[i].gain/20)});
   });
 });
@@ -1092,7 +1182,8 @@ document.querySelectorAll(".knob[data-i]").forEach(k=>{
 document.querySelectorAll(".sq.mute").forEach(b=>{
   const i=+b.dataset.i;
   b.addEventListener("click",()=>{
-    if(window.LIVE)post({op:"set_mute",src:SRC_MAP[i],mute:st[i].mute?1:0});
+    const mp=st[i].map;
+    if(window.LIVE&&mp&&mp.t==="in")post({op:"set_mute",src:mp.idx,mute:st[i].mute?1:0});
   });
 });
 /* master fader → gains de sortie 0+1 (dB) */
@@ -1272,6 +1363,7 @@ window.addEventListener("mixer-live",()=>{
   if(p&&!p.classList.contains("hid"))openFx();
 });
 /* hooks : ouverture du tab EFFETS + bus + cats */
+
 document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
   if(t.textContent.trim()==="EFFETS")openFx();
 }));
@@ -1491,6 +1583,7 @@ window.renderActivePage=function(){
   if(vis("routepage"))renderRouting();
   if(vis("syspage")){renderSystem();pollDrift();}
 };
+
 document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
   setTimeout(window.renderActivePage,30);
 }));
