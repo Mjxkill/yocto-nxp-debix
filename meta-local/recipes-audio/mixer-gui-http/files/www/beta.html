@@ -74,6 +74,9 @@ body{
 .chip .v em{font-style:normal;color:var(--mut);font-size:10px;}
 .loadbar{width:56px;height:3px;background:var(--well);border-radius:2px;overflow:hidden;margin-top:2px;}
 .loadbar i{display:block;height:100%;background:var(--accent);border-radius:2px;transition:width .4s;}
+.cpu4{display:flex;gap:3px;align-items:flex-end;height:22px;margin-top:1px;}
+.cpu4 i{display:flex;align-items:flex-end;width:9px;height:100%;background:var(--well);border:1px solid #05070a;border-radius:2px;overflow:hidden;}
+.cpu4 i b{display:block;width:100%;background:linear-gradient(0deg,var(--good),var(--warn) 75%,var(--hot));transition:height .5s;}
 .spacer{flex:1;}
 .sysdot{display:flex;align-items:center;gap:7px;font-size:9px;letter-spacing:.22em;color:var(--mut);}
 .sysdot i{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good);}
@@ -266,7 +269,11 @@ body{
     <div class="chip"><span class="k">NIVEAU</span><span class="v" id="lufs">-14.2 <em>LUFS</em></span></div>
     <div class="chip"><span class="k">LATENCE</span><span class="v">7.9 <em>ms</em></span></div>
     <div class="spacer"></div>
-    <div class="chip"><span class="k">CPU 0/1/2/3</span><span class="v" id="cpuv" style="font-size:11px">-/-/-/-</span><span class="loadbar"><i id="cpub" style="width:21%"></i></span></div>
+    <div class="chip"><span class="k">CPU 0·1·2·3</span>
+      <span class="cpu4" id="cpu4">
+        <i><b style="height:20%"></b></i><i><b style="height:15%"></b></i>
+        <i><b style="height:25%"></b></i><i><b style="height:10%"></b></i>
+      </span></div>
     <div class="chip"><span class="k">DSP</span><span class="v" id="dspv">72%</span><span class="loadbar"><i id="dspb" style="width:72%"></i></span></div>
     <div class="chip"><span class="k">NPU</span><span class="v" id="npuv">14%</span><span class="loadbar"><i id="npub" style="width:14%"></i></span></div>
     <div class="sysdot"><i></i>EN LIGNE</div>
@@ -377,6 +384,69 @@ body{
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- ---- page MASTERING ---- -->
+  <div id="mastpage" class="page hid" data-page="MASTERING" style="display:flex;flex-direction:column;padding:12px 16px;gap:10px;overflow-y:auto;">
+    <div style="display:flex;gap:10px;align-items:center;">
+      <div class="mlstate" style="flex:none;min-width:210px;"><i></i><div class="l"><span class="a">MASTERING ML</span><span class="b" id="mst-sub">v5.20 · NPU</span></div></div>
+      <select id="mst-mode" style="background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:4px;font-size:10px;padding:5px 8px;">
+        <option value="mastering">MASTERING (NPU actif)</option>
+        <option value="passthrough">PASSTHROUGH</option>
+      </select>
+      <select id="mst-src" style="background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:4px;font-size:10px;padding:5px 8px;">
+        <option value="usb">SOURCE USB</option>
+        <option value="hw">SOURCE HW</option>
+      </select>
+      <span style="font-size:9px;color:var(--mut);letter-spacing:.15em" id="mst-gate"></span>
+    </div>
+    <div style="flex:none;height:190px;background:var(--well);border:1px solid #05070a;border-radius:6px;position:relative;">
+      <canvas id="mlenv" style="width:100%;height:100%;display:block;"></canvas>
+      <span style="position:absolute;top:6px;left:10px;font-size:8px;letter-spacing:.25em;color:var(--mut);">ENVELOPPE SPECTRALE 64PT · <b style="color:#4cc470">L</b> <b style="color:var(--accent)">R</b> · ±12 dB</span>
+    </div>
+    <div class="fxgrid" style="grid-template-columns:repeat(3,1fr);">
+      <div class="fxcard"><div class="ct">SPECTRAL ENV <em id="mst-b0-l">· slot 0</em></div>
+        <div class="tgrow"><span>FIR 256 · 64 bandes/canal</span><div class="pwrsw on" id="mst-b0"><i></i></div></div></div>
+      <div class="fxcard"><div class="ct">EXCITER <em>· slot 1</em></div>
+        <div class="mn"><span>AMOUNT</span><b id="mx-amount">-</b></div>
+        <div class="mn"><span>DRIVE</span><b id="mx-drive">-</b></div>
+        <div class="mn"><span>FREQ</span><b id="mx-freq">-</b></div>
+        <div class="tgrow" style="margin-top:6px"><span>ACTIF</span><div class="pwrsw on" id="mst-b1"><i></i></div></div></div>
+      <div class="fxcard"><div class="ct">LIMITEUR <em>· slot 2</em></div>
+        <div class="mn"><span>THRESHOLD</span><b id="ml-th">-</b></div>
+        <div class="mn"><span>GAIN IN</span><b id="ml-gin">-</b></div>
+        <div class="mn"><span>ATT / REL</span><b id="ml-ar">-</b></div>
+        <div class="tgrow" style="margin-top:6px"><span>ACTIF</span><div class="pwrsw on" id="mst-b2"><i></i></div></div></div>
+    </div>
+  </div>
+
+  <!-- ---- page ROUTING ---- -->
+  <div id="routepage" class="page hid" data-page="ROUTING" style="display:flex;flex-direction:column;padding:12px 16px;gap:10px;overflow-y:auto;">
+    <div class="fxgrid" style="grid-template-columns:1fr 1fr;">
+      <div class="fxcard"><div class="ct">REMAP MICS DSP <em>· M ← source TDM</em></div>
+        <div id="rt-remap" style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;"></div></div>
+      <div class="fxcard"><div class="ct">ROUTAGE D'UNE ENTRÉE <em>· vers les 18 sorties</em></div>
+        <select id="rt-src" style="width:100%;background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:4px;font-size:10px;padding:4px;margin-bottom:8px;"></select>
+        <div id="rt-matrix" style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;"></div></div>
+    </div>
+    <div class="fxcard"><div class="ct">GAINS DE SORTIE <em>· trim final, persistés</em></div>
+      <div id="rt-outs" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;"></div></div>
+  </div>
+
+  <!-- ---- page SYSTÈME ---- -->
+  <div id="syspage" class="page hid" data-page="SYSTEME" style="display:flex;flex-direction:column;padding:12px 16px;gap:10px;overflow-y:auto;">
+    <div class="fxgrid" style="grid-template-columns:1fr 1fr 1fr;">
+      <div class="fxcard"><div class="ct">CHARGES</div><div id="sys-loads"></div></div>
+      <div class="fxcard"><div class="ct">AUDIO</div><div id="sys-audio"></div></div>
+      <div class="fxcard"><div class="ct">DRIFT USB↔DSP</div><div id="sys-drift">-</div>
+        <button class="sq" style="width:auto;padding:0 10px;margin-top:8px" id="sys-rststats">RESET STATS</button></div>
+    </div>
+    <div class="fxcard"><div class="ct">MAINTENANCE</div>
+      <div style="display:flex;gap:10px;">
+        <button class="sq" style="width:auto;padding:0 12px;height:26px" id="sys-tac">RESET TACS (i2c)</button>
+        <a href="/" style="color:var(--accent);font-size:10px;align-self:center;">→ interface classique</a>
+      </div>
+      <div id="sys-tac-out" style="font-size:9px;color:var(--mut);margin-top:6px;"></div></div>
   </div>
   </div><!-- /pages -->
 
@@ -532,7 +602,9 @@ document.querySelectorAll(".sq.solo").forEach(b=>b.addEventListener("click",()=>
 document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));t.classList.add("on");
   const name=t.textContent.trim();
-  const target=(name==="EFFETS")?"EFFETS":"MIXER";   /* autres pages : à venir */
+  const map={"MIXER":"MIXER","EFFETS":"EFFETS","MASTERING":"MASTERING",
+             "ROUTING":"ROUTING","SYSTÈME":"SYSTEME"};
+  const target=map[name]||"MIXER";
   document.querySelectorAll("#pages>.page").forEach(p=>
     p.classList.toggle("hid",p.dataset.page!==target));
 }));
@@ -710,6 +782,7 @@ function drawVU(t){
 /* ---------- spectre + enveloppe ML + waterfall ---------- */
 const NB=48;
 const specState=new Array(NB).fill(0);
+const specTgt=new Array(NB).fill(0);   /* cibles LIVE, lissées à 60fps */
 let wfCanvas=null,wfctx=null;
 function drawSpec(t){
   const w=spctx.canvas.width,h=spctx.canvas.height;
@@ -732,7 +805,9 @@ function drawSpec(t){
   spctx.fillStyle=g;
   const mAmp=(master.l+master.r)/2;
   for(let b=0;b<NB;b++){
-    if(!window.LIVE){
+    if(window.LIVE){
+      specState[b]+=(specTgt[b]-specState[b])*(specTgt[b]>specState[b]?0.5:0.18);
+    }else{
       const f=b/NB;
       const shape=Math.pow(1-f,0.72);
       const wob=0.14*Math.sin(t*(1.1+f*5.3)+b*1.31)+0.09*Math.sin(t*0.37+b*0.7);
@@ -865,7 +940,9 @@ setInterval(()=>{
     return;
   }
   const cpu=18+Math.round(Math.random()*9), dsp=70+Math.round(Math.random()*4), npu=12+Math.round(Math.random()*6);
-  $("#cpuv").textContent=cpu+"/"+(cpu-3)+"/"+(18+Math.round(Math.random()*8))+"/"+(5+Math.round(Math.random()*5));$("#cpub").style.width=cpu+"%";
+  {const bars=document.querySelectorAll("#cpu4 i b");
+   [cpu,cpu-4,18+Math.round(Math.random()*8),6+Math.round(Math.random()*6)]
+     .forEach((v,i)=>{if(bars[i])bars[i].style.height=Math.max(3,v)+"%";});}
   $("#dspv").textContent=dsp+"%";$("#dspb").style.width=dsp+"%";
   $("#npuv").textContent=npu+"%";$("#npub").style.width=npu+"%";
   const lu=(-14.6+Math.random()*0.9).toFixed(1);
@@ -903,16 +980,16 @@ function postT(key,o){
 
 function applyState(d){
   const f=d.full||d.patch||{};
+  window.STORE=window.STORE||{};
+  Object.keys(f).forEach(k=>{window.STORE[k]=f[k];});
   if(f.insert&&f.insert.chain&&f.insert.chain[0]&&f.insert.chain[0].l)
     window.LIVE_ENV=f.insert.chain[0].l;
   if(f.sysload&&f.sysload.cpu){
     const s=f.sysload;
     const set=(id,v,bar)=>{const e=document.getElementById(id);if(e)e.textContent=v+"%";
       const b=document.getElementById(bar);if(b)b.style.width=Math.min(100,v)+"%";};
-    {const e=document.getElementById("cpuv");
-     if(e)e.textContent=s.cpu.join("/");
-     const b=document.getElementById("cpub");
-     if(b)b.style.width=Math.min(100,Math.max(...s.cpu))+"%";}
+    {const bars=document.querySelectorAll("#cpu4 i b");
+     s.cpu.forEach((v,i)=>{if(bars[i])bars[i].style.height=Math.min(100,Math.max(3,v))+"%";});}
     set("dspv",s.dsp<0?0:s.dsp,"dspb");
     set("npuv",s.npu<0?0:s.npu,"npub");
   }
@@ -977,10 +1054,10 @@ function connectMeters(){
       if(Array.isArray(m.analyzer)&&m.analyzer[3]){
         const t3=m.analyzer[3];
         if(Array.isArray(t3.s)){
-          /* 128 bins log dB → 48 barres 0..1 */
+          /* 128 bins log dB → 48 cibles 0..1 (lissées à 60fps dans drawSpec) */
           for(let b=0;b<NB;b++){
             const v=t3.s[Math.min(127,Math.round(b*127/(NB-1)))];
-            specState[b]=Math.max(0,Math.min(1,(v+90)/90));
+            specTgt[b]=Math.max(0,Math.min(1,(v+90)/90));
           }
         }
         if(Array.isArray(t3.x))window.LIVE_SCOPE=t3.x;
@@ -1212,5 +1289,211 @@ document.querySelectorAll(".fxcat").forEach(b=>{
 (function(){const c=document.querySelectorAll(".fxcat");
  const names=["TOUS","DYNAMIQUE","EQ","REVERB","MOD"];
  c.forEach((el,i)=>{if(names[i])el.textContent=names[i];});})();
+})();
+
+/* ================== V10-P2b : pages MASTERING / ROUTING / SYSTÈME ========= */
+(function(){
+"use strict";
+const post=(o)=>fetch("/api/cmd",{method:"POST",
+  headers:{"Content-Type":"application/json"},body:JSON.stringify(o)})
+  .then(r=>r.json()).catch(()=>null);
+const thm={},trm={};
+function postT(key,o){const now=performance.now();clearTimeout(trm[key]);
+  if(now-(thm[key]||0)>45){thm[key]=now;post(o);}
+  else trm[key]=setTimeout(()=>{thm[key]=performance.now();post(o);},45);}
+window.STORE=window.STORE||{};
+
+const OUT_NAMES=[..."12345678"].map(n=>"S"+n)
+  .concat([..."12345678"].map(n=>"U"+n)).concat(["P1","P2"]);
+const IN_NAMES=[..."12345678"].map(n=>"M"+n)
+  .concat([..."12345678"].map(n=>"U"+n)).concat(["P1","P2"])
+  .concat([..."12345678"].map(n=>"R"+n));
+
+/* ---------- MASTERING ---------- */
+function drawMlEnv(){
+  const cv=document.getElementById("mlenv");
+  if(!cv||cv.offsetParent===null)return;
+  const r=cv.getBoundingClientRect();
+  if(cv.width!==r.width*DPR){cv.width=r.width*DPR;cv.height=r.height*DPR;}
+  const x=cv.getContext("2d"),w=cv.width,h=cv.height;
+  x.clearRect(0,0,w,h);
+  x.strokeStyle="rgba(255,255,255,.06)";x.lineWidth=1;
+  for(let g=1;g<4;g++){x.beginPath();x.moveTo(0,h*g/4);x.lineTo(w,h*g/4);x.stroke();}
+  x.strokeStyle="rgba(255,255,255,.18)";
+  x.beginPath();x.moveTo(0,h/2);x.lineTo(w,h/2);x.stroke();
+  const ins=window.STORE.insert;
+  if(!ins||!ins.chain||!ins.chain[0]||!ins.chain[0].l)return;
+  [["l","#4cc470"],["r","#e5a13c"]].forEach(([ch,col])=>{
+    const env=ins.chain[0][ch];if(!env)return;
+    x.strokeStyle=col;x.lineWidth=1.8*DPR;x.shadowColor=col;x.shadowBlur=3;
+    x.beginPath();
+    env.forEach((g,i)=>{
+      const px=i/(env.length-1)*w, py=h/2-(g/12)*(h/2)*0.92;
+      i?x.lineTo(px,py):x.moveTo(px,py);
+    });
+    x.stroke();x.shadowBlur=0;
+  });
+}
+function renderMastering(){
+  const S=window.STORE;
+  if(S.assistant){
+    const m=document.getElementById("mst-mode"),s=document.getElementById("mst-src");
+    if(m&&document.activeElement!==m)m.value=S.assistant.mode||"passthrough";
+    if(s&&document.activeElement!==s)s.value=S.assistant.source||"usb";
+  }
+  const ins=S.insert;
+  if(ins&&ins.chain){
+    const exc=ins.chain[1]||{},lim=ins.chain[2]||{};
+    const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+    set("mx-amount",(exc.amount??0).toFixed(3));
+    set("mx-drive",(exc.drive??0).toFixed(1));
+    set("mx-freq",((exc.freq??0)/1000).toFixed(1)+" kHz");
+    set("ml-th",(lim.th??1).toFixed(3)+" ("+(20*Math.log10(lim.th||1)).toFixed(1)+" dB)");
+    set("ml-gin",(lim.g_in??1).toFixed(2)+" ("+(20*Math.log10(lim.g_in||1)).toFixed(1)+" dB)");
+    set("ml-ar",(lim.at??0).toFixed(1)+" / "+(lim.rt??0).toFixed(0)+" ms");
+    [["mst-b0",0,ins.chain[0]],["mst-b1",1,exc],["mst-b2",2,lim]].forEach(([id,slot,p])=>{
+      const el=document.getElementById(id);
+      if(el&&p)el.classList.toggle("on",!(p.bypass>0.5));
+    });
+  }
+  drawMlEnv();
+}
+["mst-mode","mst-src"].forEach(id=>{
+  document.addEventListener("change",e=>{
+    if(e.target.id!==id)return;
+    const m=document.getElementById("mst-mode").value,
+          s=document.getElementById("mst-src").value;
+    post({op:"set_assistant_mode",mode:m,source:s});
+  });
+});
+[["mst-b0",0],["mst-b1",1],["mst-b2",2]].forEach(([id,slot])=>{
+  document.addEventListener("click",e=>{
+    const el=e.target.closest("#"+id);if(!el)return;
+    el.classList.toggle("on");
+    post({op:"set_insert_param",slot,param:"bypass",
+          value:el.classList.contains("on")?0:1});
+  });
+});
+
+/* ---------- ROUTING ---------- */
+let routingBuilt=false;
+function buildRouting(){
+  if(routingBuilt)return;routingBuilt=true;
+  const rm=document.getElementById("rt-remap");
+  for(let m=0;m<8;m++){
+    const d=document.createElement("div");
+    d.innerHTML=`<div style="font-size:8px;color:var(--mut);letter-spacing:.1em">M${m+1}</div>
+      <select data-mic="${m}" style="width:100%;background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:3px;font-size:9px;padding:2px;">${
+      [...Array(8)].map((_,s)=>`<option value="${s}">src ${s+1}</option>`).join("")}</select>`;
+    d.querySelector("select").addEventListener("change",e=>
+      post({op:"set_input_map",mic:m,slot:+e.target.value}));
+    rm.appendChild(d);
+  }
+  const sel=document.getElementById("rt-src");
+  sel.innerHTML=IN_NAMES.map((n,i)=>`<option value="${i}">${n} — entrée ${i}</option>`).join("");
+  const mx=document.getElementById("rt-matrix");
+  OUT_NAMES.forEach((n,o)=>{
+    const d=document.createElement("div");
+    d.innerHTML=`<div style="font-size:8px;color:var(--mut)">${n}</div>
+      <input type="range" min="-60" max="6" step="0.5" value="-60"
+        style="width:100%;accent-color:var(--accent);height:4px;">
+      <div style="font-family:var(--mono);font-size:8px;color:var(--mut)" class="rv">-∞</div>`;
+    const inp=d.querySelector("input"),rv=d.querySelector(".rv");
+    inp.addEventListener("input",()=>{
+      const db=+inp.value;rv.textContent=db<=-59?"-∞":db.toFixed(1);
+      const gain=db<=-59?0:Math.pow(10,db/20);
+      postT("mx"+o,{op:"set_master",src:+sel.value,out:o,gain});
+    });
+    mx.appendChild(d);
+  });
+  const outs=document.getElementById("rt-outs");
+  OUT_NAMES.forEach((n,o)=>{
+    const d=document.createElement("div");
+    d.innerHTML=`<div style="font-size:8px;color:var(--mut)">${n}</div>
+      <input type="range" min="-60" max="12" step="0.5" value="0"
+        style="width:100%;accent-color:var(--accent);height:4px;">
+      <div style="font-family:var(--mono);font-size:8px;color:var(--text)" class="ov">0.0</div>`;
+    const inp=d.querySelector("input"),ov=d.querySelector(".ov");
+    inp.dataset.out=o;
+    inp.addEventListener("input",()=>{
+      ov.textContent=(+inp.value).toFixed(1);
+      postT("og"+o,{op:"set_output_gain",out:o,db:+inp.value});
+    });
+    outs.appendChild(d);
+  });
+}
+function renderRouting(){
+  buildRouting();
+  const S=window.STORE;
+  if(S.input_map&&S.input_map.map)
+    document.querySelectorAll("#rt-remap select").forEach((s,m)=>{
+      if(document.activeElement!==s)s.value=S.input_map.map[m];
+    });
+  if(S.output_gain&&S.output_gain.gains)
+    document.querySelectorAll("#rt-outs input").forEach((inp,o)=>{
+      if(document.activeElement===inp)return;
+      const g=S.output_gain.gains[o]||1000;
+      const db=g<=0?-60:20*Math.log10(g/1000);
+      inp.value=db.toFixed(1);
+      inp.parentElement.querySelector(".ov").textContent=db.toFixed(1);
+    });
+}
+
+/* ---------- SYSTÈME ---------- */
+function renderSystem(){
+  const S=window.STORE;
+  const l=document.getElementById("sys-loads");
+  if(l&&S.sysload){
+    const rows=[["CPU 0",S.sysload.cpu?.[0]],["CPU 1",S.sysload.cpu?.[1]],
+      ["CPU 2 (audio RT)",S.sysload.cpu?.[2]],["CPU 3",S.sysload.cpu?.[3]],
+      ["DSP HiFi4",S.sysload.dsp],["NPU",S.sysload.npu],["GPU",S.sysload.gpu]];
+    l.innerHTML=rows.map(([n,v])=>`<div class="mn"><span>${n}</span>
+      <span style="display:flex;align-items:center;gap:6px;">
+      <span class="loadbar" style="width:70px"><i style="width:${Math.max(0,Math.min(100,v??0))}%"></i></span>
+      <b style="min-width:32px;text-align:right">${v==null||v<0?"—":v+"%"}</b></span></div>`).join("");
+  }
+  const a=document.getElementById("sys-audio");
+  if(a&&S.stat){
+    const s=S.stat;
+    a.innerHTML=`<div class="mn"><span>VERSION</span><b>${s.version||"-"}</b></div>
+      <div class="mn"><span>XRUN</span><b style="color:${s.xrun?"var(--warn)":"var(--good)"}">${s.xrun}</b></div>
+      <div class="mn"><span>LATENCE</span><b>${((s.latency_us_one_way||0)/1000).toFixed(1)} ms</b></div>
+      <div class="mn"><span>PROF CAP/MIX/ITER</span><b>${s.prof_cap_us}/${s.prof_mix_us}/${s.prof_iter_us} µs</b></div>
+      <div class="mn"><span>RING DROPS</span><b>${s.ring_drops}</b></div>`;
+  }
+}
+let driftTimer=null;
+function pollDrift(){
+  const el=document.getElementById("sys-drift");
+  if(!el||el.offsetParent===null)return;
+  fetch("/api/drift").then(r=>r.json()).then(d=>{
+    el.innerHTML=`<div class="mn"><span>DRIFT</span><b>${(d.ppm??0).toFixed?.(2)??d.ppm} ppm</b></div>
+      <div class="mn"><span>WR µs min/avg/max</span><b>${d.wr_us_min??"-"}/${d.wr_us_avg??"-"}/${d.wr_us_max??"-"}</b></div>
+      <div class="mn"><span>RD µs min/avg/max</span><b>${d.rd_us_min??"-"}/${d.rd_us_avg??"-"}/${d.rd_us_max??"-"}</b></div>
+      <div class="mn"><span>ERR CAP/PLAY</span><b>${d.xruns_cap??0} / ${d.xruns_play??0}</b></div>`;
+  }).catch(()=>{});
+}
+document.addEventListener("click",e=>{
+  if(e.target.id==="sys-rststats")fetch("/api/reset_drift_stats");
+  if(e.target.id==="sys-tac"){
+    e.target.textContent="RESET EN COURS…";
+    fetch("/api/tac/reset",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({mode:"analog"})}).then(r=>r.json()).then(j=>{
+      document.getElementById("sys-tac-out").textContent=JSON.stringify(j);
+      e.target.textContent="RESET TACS (i2c)";}).catch(()=>{e.target.textContent="RESET TACS (i2c)";});
+  }
+});
+
+/* ---------- dispatch : refresh de la page visible ---------- */
+window.renderActivePage=function(){
+  const vis=p=>{const e=document.getElementById(p);return e&&!e.classList.contains("hid");};
+  if(vis("mastpage"))renderMastering();
+  if(vis("routepage"))renderRouting();
+  if(vis("syspage")){renderSystem();pollDrift();}
+};
+document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
+  setTimeout(window.renderActivePage,30);
+}));
+setInterval(()=>{if(window.LIVE)window.renderActivePage();},1000);
 })();
 </script>
