@@ -113,3 +113,56 @@ Chaque phase : build + smoke-test + validation board + fiche TESTS.
   généralisation) ; fallback 2D systématique.
 - Le miroir 5 Hz laisse ≤ 200 ms de latence sur les changements initiés
   hors UI — jugé acceptable (identique à l'existant).
+
+---
+
+# ANNEXE v3.1 — Spécifications techniques (précisions critic a2a30cbb, it. 3)
+
+Les objections « architecture non implémentée dans le code C » sont hors
+sujet (document pré-implémentation). Précisions de spec intégrées :
+
+## A. Producteur SSE : synchronisation et back-pressure
+- 1 thread producteur ; par client : ring de trames (8 slots) + mutex court.
+- Client lent → **drop-oldest dans SON ring** (le producteur ne bloque
+  JAMAIS ; compteur drops par client dans /api/debug/sse).
+- Budget mémoire par client borné (ring 8 × 24 Ko max, dimensionné sur la
+  plus grosse trame full-state mesurée + marge ; documenté à P1).
+
+## B. Protocole seq/resync (complet)
+- Toute trame porte `seq` croissant. Client : `last_seq` ; si
+  `seq != last_seq+1` → GET `/api/state/full` (resync), reprise au seq
+  retourné. Reconnexion SSE → toujours full-state d'abord.
+- Filet : full-state re-poussé toutes les 30 s même sans changement
+  structurel (auto-guérison des désyncs silencieuses).
+- PAS de diff JSON générique : le producteur émet le **patch par section**
+  qu'il sait avoir changée (`insert`, `fx.N`, `routing`, `sysload`…) —
+  coût O(section), pas O(state).
+
+## C. Deux plans de données, séparation ASSUMÉE
+- **Meters** (30 Hz, éphémère) : flux d'affichage, ne transite JAMAIS par
+  le store. **State** (5 Hz chaud / 1 Hz froid, versionné) : vérité de
+  contrôle. L'UI ne mélange pas les deux → pas de tearing par construction.
+
+## D. WebGL : validation AVANCÉE À P0 (était P2)
+- P0 inclut une démo waterfall/gonio WebGL standalone chargée sur la board
+  (WPE) AVANT de construire le front. Échec → pivot canvas 2D immédiat
+  (la maquette 2D validée prouve que le rendu 2D suffit visuellement).
+- Critère de fallback runtime chiffré : frametime > 50 ms sur 3 frames
+  consécutives OU contexte WebGL indisponible → bascule 2D (même API de
+  rendu, testée au smoke-test).
+
+## E. Divers
+- Slot SSE 0 **réservé au kiosk** (S2 jamais 503).
+- Re-polls post-POST coalescés (debounce 50 ms) — pas de tempête de polls.
+- Watchdog kiosk = **script systemd externe** (lit memory.current du
+  cgroup + /api/debug ; signale au front via /api/panel-mode) — pas dans
+  mixer-gui-http.
+- Interface store→rendu : `subscribeRaw(cb)` (module realtime-store.js),
+  hors réactivité Svelte ; test automatisé « 0 re-render à 30 Hz ».
+- `/api/debug/sse` : nb_clients, seq, deltas/min, resyncs, drops/client.
+
+## Décision de sortie d'itérations critic (3/3 atteintes)
+Choix de fond stables depuis v3 (SSE versionné, Svelte hors boucle RT,
+WebGL+fallback, kiosk mesuré). Les findings restants = spec à implémenter,
+tous intégrés ci-dessus. Passage en implémentation P0 sur validation
+utilisateur, avec les fiches TESTS comme filet à chaque phase.
