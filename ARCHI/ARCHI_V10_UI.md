@@ -115,3 +115,83 @@ Chaque phase : build + smoke-test + validation board + fiche TESTS.
 - Svelte : build PC uniquement (dist commité ou artefact de recette) —
   jamais de toolchain node sur la board.
 - Ne pas casser la GUI actuelle pendant P0-P3 (`/beta` parallèle).
+
+
+---
+
+# RÉVISION 2 (post-critic cc98ef86 — 2 workers, verdict initial NON approuvé)
+
+Le critic a identifié 6 contradictions fondées. Décisions de révision — le fil
+conducteur est LA SIMPLIFICATION (chaque point retiré = une classe de bugs en
+moins) :
+
+## R1 — ABANDON du WebSocket → SSE versionné + POST (inchangés)
+Le critic a raison deux fois : (a) MHD_upgrade ne fournit qu'un socket TCP
+brut, le framing RFC6455 (masking/ping/fragmentation) serait à écrire à la
+main = risque injustifié ; (b) le SSE actuel est éprouvé et répond au besoin
+30 Hz ; les commandes passent déjà très bien en POST /api/cmd.
+→ mixer-api = le mixer-gui-http actuel + un flux SSE `/api/state` :
+  - à la connexion : full state {schema_version, seq, state}
+  - ensuite : deltas {seq, patch} ; sur CHANGEMENT STRUCTUREL (set_insert,
+    set_fx_engine) : re-push full state (règle simple → pas de paths
+    invalides, répond au flaw "plugin change de structure")
+  - client : si seq reçu != seq attendu → resync (GET full state)
+  - limite : 4 clients SSE max, 503 + Retry-After au-delà (load shedding)
+  - un endpoint /api/debug : nb clients, deltas, resyncs (observabilité)
+
+## R2 — ABANDON des meters binaires → JSON actuel conservé
+Le critic a raison : rien ne prouve que le JSON get_meters (≈2 Ko à 30 Hz
+sur LAN) soit un problème. On garde. Optimisation UNIQUEMENT si mesure.
+
+## R3 — ABANDON de Svelte → vanilla ES modules + Web Components, ZÉRO build
+Résout la contradiction "pas de node sur la board" (il n'y a plus de node
+NULLE PART), cohérent avec le déploiement actuel (scp de fichiers), et
+répond au flaw canvas : chaque widget (Knob, Fader, MeterStrip, VUNeedle,
+Spectrum) = un Web Component vanilla avec son requestAnimationFrame interne,
+AUCUN framework dans la boucle 30 Hz. Structure :
+  www/ui/{tokens.css, components/*.js, pages/*.js, store.js (état+seq+resync),
+  api.js (SSE+POST)} — modules ES natifs, pas de bundler.
+La maquette validée est déjà du vanilla : elle DEVIENT la base du code.
+(Réponse à "pourquoi pas modulariser l'Alpine existant" : c'est exactement
+ça — on garde l'approche sans-build, on remplace le monolithe par des
+modules, et le design imposait de réécrire les widgets de toute façon.)
+
+## R4 — mixer-api assume un MIROIR d'état (clarification H1)
+Le critic a raison : tenir un état versionné n'est pas un proxy pur. On
+l'assume et on le borne : mixer-api tient un miroir (agrégat des get_*),
+AUCUNE logique métier (pas de décision audio, pas de validation des valeurs
+— mixer-pro reste seul juge). Le miroir se met à jour : par écho des
+commandes POST qui transitent, et par re-poll get_* à 1 Hz (rattrape toute
+divergence, y compris le daemon ML qui pousse en direct).
+
+## R5 — Kiosk : critères durcis + safe mode (suggestions critic adoptées)
+- cgroup memory.max=300M + cpu weight bas, kill propre avant OOM kernel
+- mesure RSS réelle (massif) + stalls capture 60 s×3 AVANT adoption
+- test SANS le SSE legacy en parallèle (le critic note que doubler les flux
+  pendant la mesure fausse le verdict) — la page /panel n'utilise QUE le
+  nouveau flux
+- SAFE MODE : si 3 stalls/60 s détectés (lecture /api/debug), l'UI panel
+  bascule seule en mode minimal (meters+mute, pas de spectre) — plan B
+  intermédiaire avant LVGL
+- Plan B LVGL chiffré : ~3× l'effort de la page panel, décision uniquement
+  sur mesures
+
+## R6 — Scènes : flush synchrone
+save_scene force d'abord un flush de la persistance mixer-pro (nouvelle op
+flush_state qui écrit mixer_state immédiatement, hors debounce 1 s) puis
+copie le fichier. Pas de race avec g_presets_dirty.
+
+## R7 — Divers actés
+- Formats de réponse hétérogènes mixer-pro : normalisés dans le miroir (le
+  front ne voit QUE le state du flux SSE).
+- Tauri/mDNS OS-dépendant : P5, fallback saisie IP + scan subnet.
+- Le cache /api/sysload 500 ms est retiré au profit du state versionné
+  (source de vérité unique — le critic a relevé la divergence).
+
+## Phasage révisé
+P0 : tokens+composants (base = maquette) + page MIXER statique /beta
+P1 : /api/state SSE versionné + store client + MIXER branché réel
+P2 : EFFETS (meta get_fx) + MASTERING
+P3 : ROUTING + SYSTÈME + scènes (flush_state) + bascule / ↔ /legacy
+P4 : kiosk 1024×600 (critères R5)
+P5 : Tauri
