@@ -142,8 +142,11 @@ static ssize_t sse_stream_callback(void *cls, uint64_t pos, char *buf, size_t ma
 
 	/* E7.5 : meters reply now embeds the analyzer payload (4 taps × 128
 	 * dB bins + 64 stereo scope pairs) so the buffer needs to grow past
-	 * the previous 2 KB ceiling. */
-	static char meters_json[20480];
+	 * the previous 2 KB ceiling.
+	 * V10-pre (critic f237748f) : buffer sur la PILE — le `static` était
+	 * partagé entre les threads MHD (1 par client SSE) → corruption des
+	 * trames dès 2 clients connectés (GUI PC + futur kiosk). */
+	char meters_json[20480];
 	int n = mixer_request("{\"op\":\"get_meters\"}\n", meters_json, sizeof(meters_json));
 	if (n <= 0) {
 		/* mixer-pro down : keep-alive comment frame pour que EventSource
