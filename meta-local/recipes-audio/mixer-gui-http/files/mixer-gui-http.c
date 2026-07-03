@@ -598,6 +598,9 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 	if (!strcmp(method, "GET")) {
 		if (!strcmp(url, "/") || !strcmp(url, "/index.html"))
 			return send_file(conn, WWW_ROOT "/index.html", "text/html; charset=utf-8");
+		/* V10-P0 : nouveau design en preview ; /panel = cible kiosk 1024x600 */
+		if (!strcmp(url, "/beta") || !strcmp(url, "/panel"))
+			return send_file(conn, WWW_ROOT "/beta.html", "text/html; charset=utf-8");
 
 		if (!strcmp(url, "/health")) {
 			char body[128];
