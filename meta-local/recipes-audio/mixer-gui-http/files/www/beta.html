@@ -299,6 +299,20 @@ body{
 .strip .id,.strip .src{cursor:pointer;}
 .strip .id:hover{color:var(--accent);}
 #stripfx,#stripfx *{user-select:text;-webkit-user-select:text;}
+/* V10-P2j : panneau piste en langage console (cartes + knobs) */
+.sfbody .fxcard{margin-bottom:10px;}
+.kgridf{display:flex;flex-wrap:wrap;gap:12px 14px;align-items:flex-start;}
+.kcell{display:flex;flex-direction:column;align-items:center;gap:5px;width:92px;}
+.kcell .kn{font-size:7.5px;letter-spacing:.14em;color:var(--mut);text-align:center;line-height:1.5;}
+.kcell select{width:90px;background:var(--well);color:var(--text);border:1px solid var(--line-hi);
+  border-radius:4px;font-size:9px;padding:4px 4px;}
+.bqblk{display:flex;align-items:center;gap:14px;width:100%;padding:6px 0;
+  border-bottom:1px solid rgba(255,255,255,.04);}
+.bqblk .bqn{font-size:8.5px;font-weight:700;color:var(--accent);width:36px;letter-spacing:.12em;}
+.bqblk select{background:var(--well);color:var(--text);border:1px solid var(--line-hi);
+  border-radius:4px;font-size:9px;padding:4px;width:104px;}
+.drchead{display:flex;align-items:center;gap:14px;width:100%;margin:2px 0 8px;}
+.drchead .lb{font-size:8.5px;letter-spacing:.14em;color:var(--mut);}
 @media (prefers-reduced-motion:reduce){
   .mlstate i{animation:none;}
 }
@@ -521,7 +535,7 @@ body{
     <div class="tab" tabindex="0">EFFETS</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
-    <div class="scene">GUI <b id="guiver">P2i</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
+    <div class="scene">GUI <b id="guiver">P2j</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
   </div>
 
 </div></div>
@@ -1321,6 +1335,7 @@ function makeKnob(o){ // {label,min,max,val,unit,log,step,onchange}
   });
   return u;
 }
+window.MXKNOB=makeKnob;
 
 function inferGroup(key,m){
   if(m&&m.grp)return m.grp;
@@ -2043,61 +2058,69 @@ function pwr(on,ontoggle){
   p.addEventListener("click",()=>{p.classList.toggle("on");ontoggle(p.classList.contains("on"));});
   return p;
 }
+function kcell(label,node){
+  const u=el("div","kcell");
+  u.appendChild(node);
+  u.appendChild(el("span","kn",label.toUpperCase().slice(0,16)));
+  return u;
+}
 function rowFor(c){
   if(c.type==="INTEGER"){
-    const r=row(c.short),vl=el("span","vl",dbLbl(c));
-    r.insertBefore(slider(c.min||0,c.max||100,1,intVal(c),v=>{setAlsa(c,Math.round(v));vl.textContent=dbLbl(c);}),null);
-    r.appendChild(vl);return r;
+    /* knob console ; domaine dB quand le kcontrol expose son TLV */
+    if(c.dbStep!==undefined&&c.dbMin!==undefined){
+      const lo=c.min||0;
+      return MXKNOB({label:c.short,min:c.dbMin,max:c.dbMin+((c.max||0)-lo)*c.dbStep,
+        val:c.dbMin+(intVal(c)-lo)*c.dbStep,unit:"dB",step:c.dbStep>=1?1:0.5,
+        onchange:v=>setAlsa(c,Math.round((v-c.dbMin)/c.dbStep)+lo)});
+    }
+    return MXKNOB({label:c.short,min:c.min||0,max:c.max||100,val:intVal(c),
+      unit:"",step:1,onchange:v=>setAlsa(c,Math.round(v))});
   }
-  if(c.type==="BOOLEAN"){
-    const r=row(c.short);
-    r.appendChild(pwr(isOn(c),on=>setAlsa(c,on?"on":"off")));
-    r.appendChild(el("span","vl",""));return r;
-  }
+  if(c.type==="BOOLEAN")
+    return kcell(c.short,pwr(isOn(c),on=>setAlsa(c,on?"on":"off")));
   if(c.type==="ENUMERATED"){
-    const r=row(c.short),sel=document.createElement("select");
+    const sel=document.createElement("select");
     const cur=String(c.value||"").replace(/'/g,"");
     c.items.forEach((it,ix)=>{const o=document.createElement("option");
       o.value=it;o.textContent=it;
       if(cur===it||parseInt(cur,10)===ix)o.selected=true;sel.appendChild(o);});
     sel.addEventListener("change",()=>setAlsa(c,sel.value));
-    r.appendChild(sel);r.appendChild(el("span","vl",""));return r;
+    return kcell(c.short,sel);
   }
-  if(c.type==="BYTES"&&c.fullName&&parseBqName(c.fullName))return bqEditor(c);
-  if(c.type==="BYTES"&&isDrcBlob(c.fullName))return drcEditor(c);
-  const r=row(c.short);r.appendChild(el("span","vl",c.type));return r;
+  return kcell(c.short||"?",el("span","kn",c.type));
 }
 function bqEditor(c){
-  const wrap=el("div");
+  const blk=el("div","bqblk");
+  const info=parseBqName(c.fullName);
+  blk.appendChild(el("span","bqn","BQ"+(info?info.idx:"?")));
   const p=A.bq[c.fullName]||bqDefault();
-  const head=row(c.short),sel=document.createElement("select");
+  const sel=document.createElement("select");
   BIQUAD_TYPES.forEach((t,ti)=>{const o=document.createElement("option");
     o.value=ti;o.textContent=t;if(p.type===ti)o.selected=true;sel.appendChild(o);});
-  head.appendChild(sel);head.appendChild(el("span","vl",""));wrap.appendChild(head);
-  const params=el("div");wrap.appendChild(params);
+  blk.appendChild(sel);
+  const params=el("div","kgridf");params.style.flex="1";blk.appendChild(params);
   function renderParams(){
     params.innerHTML="";
     const q=A.bq[c.fullName]||bqDefault();
     if(q.type===0)return;
-    const rf=row("· Fréquence"),vf=el("span","vl",q.fHz+" Hz");
-    rf.insertBefore(slider(20,22000,1,q.fHz,v=>{setBq(c.fullName,{fHz:v});vf.textContent=Math.round(v)+" Hz";}),null);
-    rf.appendChild(vf);params.appendChild(rf);
-    const rq=row("· Q"),vq=el("span","vl",q.q.toFixed(2));
-    rq.insertBefore(slider(0.1,10,0.01,q.q,v=>{setBq(c.fullName,{q:v});vq.textContent=v.toFixed(2);}),null);
-    rq.appendChild(vq);params.appendChild(rq);
-    if([5,6,7].includes(q.type)){
-      const rg=row("· Gain"),vg=el("span","vl",q.gainDb.toFixed(1)+" dB");
-      rg.insertBefore(slider(-24,24,0.1,q.gainDb,v=>{setBq(c.fullName,{gainDb:v});vg.textContent=v.toFixed(1)+" dB";}),null);
-      rg.appendChild(vg);params.appendChild(rg);
-    }
+    params.appendChild(MXKNOB({label:"Fréquence",min:20,max:22000,val:q.fHz,unit:"Hz",
+      log:true,step:1,onchange:v=>setBq(c.fullName,{fHz:Math.round(v)})}));
+    params.appendChild(MXKNOB({label:"Q",min:0.1,max:10,val:q.q,unit:"",step:0.01,
+      onchange:v=>setBq(c.fullName,{q:v})}));
+    if([5,6,7].includes(q.type))
+      params.appendChild(MXKNOB({label:"Gain",min:-24,max:24,val:q.gainDb,unit:"dB",
+        step:0.1,onchange:v=>setBq(c.fullName,{gainDb:v})}));
   }
   sel.addEventListener("change",()=>{setBq(c.fullName,{type:parseInt(sel.value,10)});renderParams();});
   renderParams();
-  return wrap;
+  return blk;
 }
 function drcEditor(c){
-  const wrap=el("div");
-  wrap.appendChild(el("div","sfsec",c.short));
+  const wrap=el("div","fxcard");
+  const ct=el("div","ct",c.short);
+  const em=document.createElement("em");
+  em.textContent="  ·  compresseur DSP — canal "+(A.isOut?"S":"M")+((A.idx%8)+1);
+  ct.appendChild(em);wrap.appendChild(ct);
   const inner=el("div");wrap.appendChild(inner);
   function renderBlob(){
     inner.innerHTML="";
@@ -2106,40 +2129,40 @@ function drcEditor(c){
     if(b.error){inner.appendChild(el("div","sfsub","Erreur : "+b.error));return;}
     const p=blobParams(c.numid);
     if(!p){inner.appendChild(el("div","sfsub","Paramètres indisponibles."));return;}
+    const dirt=el("span","dirt","● modifié — non appliqué");
+    const touch=()=>{b.dirty=true;dirt.style.display="";};
     if(b.kind==="multiband"){
       const nb=b.parsed.num_bands;
-      const tabs=el("div","sftabs");tabs.style.padding="0 0 6px";tabs.style.border="none";
+      const tabs=el("div","sftabs");tabs.style.padding="0 0 8px";tabs.style.border="none";
       for(let i=0;i<nb;i++){
         const t=el("span","sftab"+(b.bandTab===i?" on":""),"BANDE "+(i+1));
         t.addEventListener("click",()=>{b.bandTab=i;renderBlob();});
         tabs.appendChild(t);
       }
       inner.appendChild(tabs);
-      /* crossover */
       const fcs=b.parsed.crossover_fcs;
       const xk=nb===2?["low"]:nb===3?["low","high"]:["low","mid","high"];
+      const xg=el("div","kgridf");xg.style.marginBottom="8px";
       xk.forEach(k=>{
-        const r=row("Crossover "+k),vv=el("span","vl",fcs[k]+" Hz");
-        r.insertBefore(slider(20,20000,1,fcs[k],v=>{
-          const vc=Math.max(20,Math.min(v,20000));
-          fcs[k]=vc;
-          b.parsed.crossBytes=packCross(nb,48000,fcs);
-          b.dirty=true;vv.textContent=Math.round(vc)+" Hz";dirt.style.display="";
-        }),null);
-        r.appendChild(vv);inner.appendChild(r);
+        xg.appendChild(MXKNOB({label:"Xover "+k,min:20,max:20000,val:fcs[k],unit:"Hz",
+          log:true,step:1,onchange:v=>{
+            fcs[k]=Math.max(20,Math.min(Math.round(v),20000));
+            b.parsed.crossBytes=packCross(nb,48000,fcs);touch();
+          }}));
       });
+      inner.appendChild(xg);
     }
-    const re=row("Actif ("+(A.isOut?"S":"M")+((A.idx%8)+1)+")");
-    re.appendChild(pwr(p.enabled===1,on=>{p.enabled=on?1:0;b.dirty=true;dirt.style.display="";}));
-    re.appendChild(el("span","vl",""));inner.appendChild(re);
+    const head=el("div","drchead");
+    head.appendChild(pwr(p.enabled===1,on=>{p.enabled=on?1:0;touch();}));
+    head.appendChild(el("span","lb","ACTIF"));
+    head.appendChild(dirt);
+    inner.appendChild(head);
+    const g=el("div","kgridf");
     DRC_SLIDERS.forEach(s=>{
-      const r=row(s.label),vv=el("span","vl",(+p[s.key]).toFixed(s.step<1?1:0)+" "+s.unit);
-      r.insertBefore(slider(s.min,s.max,s.step,p[s.key],v=>{
-        p[s.key]=v;b.dirty=true;
-        vv.textContent=v.toFixed(s.step<1?1:0)+" "+s.unit;dirt.style.display="";
-      }),null);
-      r.appendChild(vv);inner.appendChild(r);
+      g.appendChild(MXKNOB({label:s.label,min:s.min,max:s.max,val:+p[s.key]||0,
+        unit:s.unit,step:s.step,onchange:v=>{p[s.key]=v;touch();}}));
     });
+    inner.appendChild(g);
     const bar=el("div","sfbar");
     const ap=el("button","apply","APPLIQUER AU DSP");
     ap.addEventListener("click",()=>applyBlob(c.numid,ap));
@@ -2149,10 +2172,9 @@ function drcEditor(c){
       const d=drcDefaults();d._raw=cur._raw;Object.assign(cur,d);
       b.dirty=true;renderBlob();
     });
-    const dirt=el("span","dirt","● modifié — non appliqué");
-    dirt.style.display=b.dirty?"":"none";
-    bar.appendChild(ap);bar.appendChild(rs);bar.appendChild(dirt);
+    bar.appendChild(ap);bar.appendChild(rs);
     inner.appendChild(bar);
+    dirt.style.display=b.dirty?"":"none";
   }
   loadBlob(c.numid,c.fullName,renderBlob);
   renderBlob();
@@ -2160,12 +2182,17 @@ function drcEditor(c){
 }
 function dbOf(g){return g<=0.000316?-72:20*Math.log10(g);}
 function dbTxt(db){return db<=-71?"-∞":db.toFixed(1)+" dB";}
-function sendRow(body,label,curGain,onDb){
-  const r=row(label),vv=el("span","vl",dbTxt(dbOf(curGain)));
-  r.insertBefore(slider(-72,12,0.5,Math.max(-72,dbOf(curGain)),v=>{
-    vv.textContent=dbTxt(v);onDb(v);
-  }),null);
-  r.appendChild(vv);body.appendChild(r);
+function sendKnob(label,curGain,onDb){
+  return MXKNOB({label,min:-72,max:12,val:Math.max(-72,dbOf(curGain)),
+    unit:"dB",step:0.5,onchange:onDb});
+}
+function card(title,sub){
+  const c=el("div","fxcard");
+  const ct=el("div","ct",title);
+  if(sub){const em=document.createElement("em");em.textContent="  ·  "+sub;ct.appendChild(em);}
+  c.appendChild(ct);
+  const g=el("div","kgridf");c.appendChild(g);
+  return {c,g};
 }
 const thR={};
 function postRt(key,o){
@@ -2188,20 +2215,21 @@ function renderRouting(body){
       holder.appendChild(el("div","sfsub","Routage indisponible ("+((j&&j.err)||"pas de réponse")+")"));
       return;
     }
-    const g2db=v=>({db:dbOf(v)});
-    holder.appendChild(el("div","sfsec","ENVOI MASTER"));
-    sendRow(holder,"Master L (out 1)",j.master[0]||0,db=>{
-      postRt("m0",{op:"set_master",src:A.idx,out:0,gain:db<=-71?0:Math.pow(10,db/20)});});
-    sendRow(holder,"Master R (out 2)",j.master[1]||0,db=>{
-      postRt("m1",{op:"set_master",src:A.idx,out:1,gain:db<=-71?0:Math.pow(10,db/20)});});
-    holder.appendChild(el("div","sfsec","SENDS FX (paires stéréo)"));
+    const cm=card("ENVOI MASTER","gains lus du mixer");
+    cm.g.appendChild(sendKnob("Master L",j.master[0]||0,db=>{
+      postRt("m0",{op:"set_master",src:A.idx,out:0,gain:db<=-71?0:Math.pow(10,db/20)});}));
+    cm.g.appendChild(sendKnob("Master R",j.master[1]||0,db=>{
+      postRt("m1",{op:"set_master",src:A.idx,out:1,gain:db<=-71?0:Math.pow(10,db/20)});}));
+    holder.appendChild(cm.c);
+    const cs=card("SENDS FX","paires stéréo bus 1-8");
     for(let b=0;b<4;b++){
-      sendRow(holder,"FX"+(b+1),j.sends?(j.sends[b*2]||0):0,(db=>{
+      cs.g.appendChild(sendKnob("FX"+(b+1),j.sends?(j.sends[b*2]||0):0,(db=>{
         const gain=db<=-71?0:Math.pow(10,db/20);
         postRt("s"+b+"a",{op:"set_send","in":A.idx,bus:b*2,gain});
         postRt("s"+b+"b",{op:"set_send","in":A.idx,bus:b*2+1,gain});
-      }));
+      })));
     }
+    holder.appendChild(cs.c);
   }).catch(()=>{
     holder.innerHTML="";
     holder.appendChild(el("div","sfsub","Erreur réseau — rouvre le panneau."));
@@ -2209,17 +2237,14 @@ function renderRouting(body){
 }
 /* onglet SORTIE : gain reel (STORE.output_gain) */
 function renderOutTab(body){
-  body.appendChild(el("div","sfsub","Gain de la sortie — valeur persistée du mixer"));
   let db=-72;
   const S=window.STORE;
   if(S&&S.output_gain&&S.output_gain.gains&&S.output_gain.gains[A.idx]!==undefined)
     db=20*Math.log10(Math.max(S.output_gain.gains[A.idx],1)/1000);
-  const r=row("Gain sortie"),vv=el("span","vl",dbTxt(db));
-  r.insertBefore(slider(-72,12,0.5,Math.max(-72,db),v=>{
-    vv.textContent=dbTxt(v);
-    postRt("og",{op:"set_output_gain",out:A.idx,db:v});
-  }),null);
-  r.appendChild(vv);body.appendChild(r);
+  const co=card("SORTIE","gain persisté du mixer");
+  co.g.appendChild(MXKNOB({label:"Gain sortie",min:-72,max:12,val:Math.max(-72,db),
+    unit:"dB",step:0.5,onchange:v=>postRt("og",{op:"set_output_gain",out:A.idx,db:v})}));
+  body.appendChild(co.c);
 }
 function render(){
   const groups=groupsFor();
@@ -2236,12 +2261,30 @@ function render(){
   });
   if(act.custom==="routing"){renderRouting(body);return;}
   if(act.custom==="out"){renderOutTab(body);return;}
-  body.appendChild(el("div","sfsub",(act.subtitle||"")+(A.diag?"  ·  ALSA "+A.diag:"")));
-  if(act.placeholder)body.appendChild(el("div","sfsub",act.placeholder));
-  act.controls.forEach(c=>{
-    try{body.appendChild(rowFor(c));}
-    catch(e){const r=row(c.short||c.name||"?");
-      r.appendChild(el("span","vl","erreur: "+e.message));body.appendChild(r);}
+  const blobs=act.controls.filter(c=>c.type==="BYTES"&&isDrcBlob(c.fullName));
+  const bqs=act.controls.filter(c=>c.type==="BYTES"&&c.fullName&&parseBqName(c.fullName));
+  const plain=act.controls.filter(c=>blobs.indexOf(c)<0&&bqs.indexOf(c)<0);
+  if(plain.length||act.placeholder||(!blobs.length&&!bqs.length)){
+    const cp=card(act.title,(act.subtitle||"")+(A.diag?" · ALSA "+A.diag:""));
+    if(act.placeholder)cp.g.appendChild(el("div","sfsub",act.placeholder));
+    plain.forEach(c=>{
+      try{cp.g.appendChild(rowFor(c));}
+      catch(e){cp.g.appendChild(el("div","sfsub","⚠ "+(c.short||"?")+" : "+e.message));}
+    });
+    body.appendChild(cp.c);
+  }
+  if(bqs.length){
+    const cb=card("BIQUADS PROGRAMMABLES",bqs.length+" filtres · forme RBJ");
+    cb.g.style.display="block";
+    bqs.forEach(c=>{
+      try{cb.g.appendChild(bqEditor(c));}
+      catch(e){cb.g.appendChild(el("div","sfsub","⚠ "+(c.short||"?")+" : "+e.message));}
+    });
+    body.appendChild(cb.c);
+  }
+  blobs.forEach(c=>{
+    try{body.appendChild(drcEditor(c));}
+    catch(e){body.appendChild(el("div","sfsub","⚠ "+(c.short||"?")+" : "+e.message));}
   });
 }
 function labelFor(idx,isOut){
