@@ -2157,23 +2157,91 @@ function drcEditor(c){
   renderBlob();
   return wrap;
 }
+function dbOf(g){return g<=0.000316?-72:20*Math.log10(g);}
+function dbTxt(db){return db<=-71?"-∞":db.toFixed(1)+" dB";}
+function sendRow(body,label,curGain,onDb){
+  const r=row(label),vv=el("span","vl",dbTxt(dbOf(curGain)));
+  r.insertBefore(slider(-72,12,0.5,Math.max(-72,dbOf(curGain)),v=>{
+    vv.textContent=dbTxt(v);onDb(v);
+  }),null);
+  r.appendChild(vv);body.appendChild(r);
+}
+const thR={};
+function postRt(key,o){
+  clearTimeout(thR[key]);
+  thR[key]=setTimeout(()=>{
+    fetch("/api/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(o)}).catch(()=>{});
+  },45);
+}
+/* onglet ROUTAGE+SENDS (entrees) : valeurs REELLES via get_strip_routing */
+function renderRouting(body){
+  body.appendChild(el("div","sfsub","Envois de la tranche — valeurs lues du mixer"));
+  const holder=el("div");body.appendChild(holder);
+  holder.appendChild(el("div","sfsub","Lecture du routage…"));
+  fetch("/api/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({op:"get_strip_routing",src:A.idx})})
+  .then(r=>r.json()).then(j=>{
+    holder.innerHTML="";
+    if(!j||!j.ok||!Array.isArray(j.master)){
+      holder.appendChild(el("div","sfsub","Routage indisponible ("+((j&&j.err)||"pas de réponse")+")"));
+      return;
+    }
+    const g2db=v=>({db:dbOf(v)});
+    holder.appendChild(el("div","sfsec","ENVOI MASTER"));
+    sendRow(holder,"Master L (out 1)",j.master[0]||0,db=>{
+      postRt("m0",{op:"set_master",src:A.idx,out:0,gain:db<=-71?0:Math.pow(10,db/20)});});
+    sendRow(holder,"Master R (out 2)",j.master[1]||0,db=>{
+      postRt("m1",{op:"set_master",src:A.idx,out:1,gain:db<=-71?0:Math.pow(10,db/20)});});
+    holder.appendChild(el("div","sfsec","SENDS FX (paires stéréo)"));
+    for(let b=0;b<4;b++){
+      sendRow(holder,"FX"+(b+1),j.sends?(j.sends[b*2]||0):0,(db=>{
+        const gain=db<=-71?0:Math.pow(10,db/20);
+        postRt("s"+b+"a",{op:"set_send","in":A.idx,bus:b*2,gain});
+        postRt("s"+b+"b",{op:"set_send","in":A.idx,bus:b*2+1,gain});
+      }));
+    }
+  }).catch(()=>{
+    holder.innerHTML="";
+    holder.appendChild(el("div","sfsub","Erreur réseau — rouvre le panneau."));
+  });
+}
+/* onglet SORTIE : gain reel (STORE.output_gain) */
+function renderOutTab(body){
+  body.appendChild(el("div","sfsub","Gain de la sortie — valeur persistée du mixer"));
+  let db=-72;
+  const S=window.STORE;
+  if(S&&S.output_gain&&S.output_gain.gains&&S.output_gain.gains[A.idx]!==undefined)
+    db=20*Math.log10(Math.max(S.output_gain.gains[A.idx],1)/1000);
+  const r=row("Gain sortie"),vv=el("span","vl",dbTxt(db));
+  r.insertBefore(slider(-72,12,0.5,Math.max(-72,db),v=>{
+    vv.textContent=dbTxt(v);
+    postRt("og",{op:"set_output_gain",out:A.idx,db:v});
+  }),null);
+  r.appendChild(vv);body.appendChild(r);
+}
 function render(){
   const groups=groupsFor();
+  /* onglets synthetiques : le panneau n'est JAMAIS vide */
+  if(A.isOut)groups.unshift({title:"SORTIE",custom:"out"});
+  else groups.unshift({title:"ROUTAGE + SENDS",custom:"routing"});
   const tabs=$("#sftabs"),body=$("#sfbody");
   tabs.innerHTML="";body.innerHTML="";
-  if(!groups.length){
-    body.appendChild(el("div","sfsub","Aucun effet TAC/DSP sur cette voie (pas de contrôles ALSA associés)."));
-    return;
-  }
   const act=groups.find(g=>g.title===A.tab)||groups[0];A.tab=act.title;
   groups.forEach(g=>{
     const t=el("span","sftab"+(g===act?" on":""),g.title);
     t.addEventListener("click",()=>{A.tab=g.title;render();});
     tabs.appendChild(t);
   });
+  if(act.custom==="routing"){renderRouting(body);return;}
+  if(act.custom==="out"){renderOutTab(body);return;}
   body.appendChild(el("div","sfsub",act.subtitle||""));
   if(act.placeholder)body.appendChild(el("div","sfsub",act.placeholder));
-  act.controls.forEach(c=>body.appendChild(rowFor(c)));
+  act.controls.forEach(c=>{
+    try{body.appendChild(rowFor(c));}
+    catch(e){const r=row(c.short||c.name||"?");
+      r.appendChild(el("span","vl","erreur: "+e.message));body.appendChild(r);}
+  });
 }
 function labelFor(idx,isOut){
   if(!isOut)return idx<8?["M"+(idx+1),"MIC DSP"]:idx<16?["U"+(idx-7),"USB IN"]:["P"+(idx-15),"TEL IN"];
@@ -2184,10 +2252,25 @@ function openDrawer(mp){
   const[l,k]=labelFor(A.idx,A.isOut);
   $("#sftitle").textContent=l;$("#sfkind").textContent=k+" · EFFETS PISTE";
   $("#stripfx").style.display="flex";
+  loadControls();
+}
+function loadControls(){
   $("#sfbody").innerHTML='<div class="sfsub">Lecture des contrôles ALSA…</div>';
-  fetch("/api/alsa/contents").then(r=>r.text()).then(t=>{
+  const ctl=new AbortController();
+  const to=setTimeout(()=>ctl.abort(),8000);
+  fetch("/api/alsa/contents",{signal:ctl.signal}).then(r=>r.text()).then(t=>{
+    clearTimeout(to);
     A.controls=parseAmixer(t);initBq();render();
-  }).catch(()=>{A.controls={};render();});
+  }).catch(e=>{
+    clearTimeout(to);
+    A.controls={};render();
+    const body=$("#sfbody");
+    const msg=el("div","sfsub","⚠ Contrôles ALSA inaccessibles ("+(e.name==="AbortError"?"timeout 8 s":e.message)+") — les onglets TAC/DSP sont masqués.");
+    body.insertBefore(msg,body.firstChild);
+    const btn=el("button",null,"RÉESSAYER");btn.className="sftab";
+    btn.addEventListener("click",loadControls);
+    body.insertBefore(btn,body.firstChild.nextSibling);
+  });
 }
 $("#sfclose").addEventListener("click",()=>{$("#stripfx").style.display="none";A.open=false;});
 function step(d){
