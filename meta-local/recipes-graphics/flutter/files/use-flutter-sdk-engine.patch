@@ -1,8 +1,0 @@
-diff --git a/cmake/build.cmake b/cmake/build.cmake
---- a/cmake/build.cmake
-+++ b/cmake/build.cmake
-@@ -1,1 +1,3 @@
--set(FLUTTER_EMBEDDER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build/libflutter_engine.so")
-+if(NOT DEFINED FLUTTER_EMBEDDER_LIB)
-+  set(FLUTTER_EMBEDDER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/build/libflutter_engine.so")
-+endif()

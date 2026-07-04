@@ -30,6 +30,10 @@ SRC_URI += "file://apply-npu-tap-dt.py"
 # V5.4.1 SDRAM2 — DT carve for DSP-only matrix/effects (8 MB no-map @0xA0000000)
 SRC_URI += "file://apply-sdram2-dt.py"
 
+# V10-P4c — tactile Goodix GT911 de la dalle DSI 8" 800x1280 (noeud repris
+# de imx8mp-debix-core-TD080B.dts, pads GPIO1_IO09/IO14 libres chez nous)
+SRC_URI += "file://apply-goodix-touch-dt.py"
+
 # V7.0-E7.4.b — patch simple-card.c to support N codec phandles per DAI link
 # (upstream hardcodes num_codecs=1, blocking multi-TAC TDM binding)
 SRC_URI += "file://apply-simple-card-multicodec.py"
@@ -73,6 +77,8 @@ do_patch:append() {
     python3 ${WORKDIR}/apply-npu-tap-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
     # V5.4.1 SDRAM2 DT carve (sdram2_reserved@a0000000 + dsp memory-region append)
     python3 ${WORKDIR}/apply-sdram2-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
+    # V10-P4c tactile GT911 (i2c2 0x5d + pinctrl_mipi_tp)
+    python3 ${WORKDIR}/apply-goodix-touch-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
     # V7.0-E7.4.b simple-card multi-codec support (idempotent, backward-compat)
     python3 ${WORKDIR}/apply-simple-card-multicodec.py ${S}
     # V7.0-E7.4.b imx-card link_id : keep sequential default for SOF tplg match

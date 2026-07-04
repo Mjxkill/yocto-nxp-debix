@@ -34,7 +34,9 @@ inherit systemd pkgconfig
 # tensorflow-lite RETIRÉ : l'inférence NPU est dans mixer-ml-inference (daemon
 # séparé, voir meta-local/recipes-audio/mixer-ml-inference).
 DEPENDS = "alsa-lib lilv fftw"
-RDEPENDS:${PN} = "alsa-lib lilv lv2 fftw"
+# libfftwf = paquet runtime réel de fftw simple précision (-lfftw3f) ;
+# "fftw" n'existe pas comme paquet binaire → do_rootfs apt échouait (V10-P4b)
+RDEPENDS:${PN} = "alsa-lib lilv lv2 libfftwf"
 
 do_compile() {
     oe_runmake CC="${CC}" CFLAGS="${CFLAGS}" LDFLAGS="${LDFLAGS}"

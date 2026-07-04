@@ -544,7 +544,7 @@ body{
     <div class="tab" tabindex="0">EFFETS</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
-    <div class="scene">GUI <b id="guiver">P2l</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
+    <div class="scene">GUI <b id="guiver">P4c</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
   </div>
 
 </div></div>
@@ -557,8 +557,11 @@ const DPR=Math.min(devicePixelRatio||1,2);
 
 /* ---------- scale stage to viewport ---------- */
 function fit(){
-  /* V10-P4a : en mode PANEL (écran embarqué 1280x800 après rotation weston),
-   * on UPSCALE la console pour remplir l'écran (k jusqu'à 1.25). */
+  /* V10-P4c : PANEL défini ici (le module tick est chargé APRÈS le 1er fit()
+   * → l'upscale ne s'appliquait jamais : écran « petit »). Le kiosk passe
+   * --force-device-scale-factor=1.25 → innerWidth logique = 1024 et le
+   * rendu est natif net ; ce fit ne sert alors que de filet. */
+  window.PANEL=window.PANEL||(location.pathname==="/panel");
   const kw=(innerWidth-8)/1024, kh=(innerHeight-8)/600;
   let k=Math.min(kw,window.PANEL?kh:1);
   if(!window.PANEL)k=Math.min(k,1);
@@ -1022,8 +1025,7 @@ window.LIVE=false;          /* bascule par le bridge SSE si la board répond */
 /* V10-P4a : mode PANEL (écran embarqué) — l'i.MX8MP rend la page en local :
  * 30 fps + waterfall off pour laisser les cores 0-1 au daemon ML/IRQ.
  * Mesure kiosk 60 fps plein rendu : cpu0/1 99 % → 13 xruns/min. */
-window.PANEL=location.pathname==="/panel";
-let frameSkip=false;
+window.PANEL=window.PANEL||(location.pathname==="/panel");
 let lastNow=0;
 /* V10-P2e : ballistiques en TEMPS REEL (dt), plus par frame - un rAF lent
  * (fenetre chargee, 15-20 fps) gardait les memes coefficients par frame et
@@ -1033,7 +1035,6 @@ const kdt=(dt,tau)=>1-Math.exp(-dt/tau);
 window.__fps={n:0,t:0,v:0};
 function tick(now){
  try{
-  if(window.PANEL){frameSkip=!frameSkip;if(frameSkip){requestAnimationFrame(tick);return;}}
   const t=(now-t0)/1000;
   const dt=Math.min(100,lastNow?now-lastNow:16.7);lastNow=now;
   window.__dt=dt;
