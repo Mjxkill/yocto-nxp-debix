@@ -53,6 +53,8 @@ FILES:${PN} = " \
 
 SYSTEMD_SERVICE:${PN} = "mixer-ml-inference.service"
 # Disabled par défaut — user active via systemctl enable + set_assistant_mode.
-SYSTEMD_AUTO_ENABLE:${PN} = "disable"
+# V10-P4f : demarre au boot — sans lui le mode mastering est inerte
+# (mode accepte par mixer-pro mais aucun parametre pousse vers l insert)
+SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 COMPATIBLE_MACHINE = "(imx8mpevk|imx8mp-debix-model-ab)"
