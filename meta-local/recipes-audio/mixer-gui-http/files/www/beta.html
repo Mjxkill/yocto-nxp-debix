@@ -545,7 +545,7 @@ body{
     <div class="tab" tabindex="0">EFFETS</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
-    <div class="scene">GUI <b id="guiver">P4d</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
+    <div class="scene">GUI <b id="guiver">P4e</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
   </div>
 
 </div></div>
@@ -563,7 +563,15 @@ function fit(){
    * --force-device-scale-factor=1.25 → innerWidth logique = 1024 et le
    * rendu est natif net ; ce fit ne sert alors que de filet. */
   window.PANEL=window.PANEL||(location.pathname==="/panel");
-  const kw=(innerWidth-8)/1280, kh=(innerHeight-8)/800;
+  /* V10-P4e : sur l'écran embarqué, pas de bandeau BETA ni de marges —
+   * il poussait le châssis vers le bas (« coupé en bas », pris pour une
+   * barre chromium). Plein cadre exact 1280x800. */
+  if(window.PANEL){
+    const n=document.querySelector(".note");if(n)n.style.display="none";
+    document.body.style.margin="0";document.body.style.overflow="hidden";
+  }
+  const kw=window.PANEL?innerWidth/1280:(innerWidth-8)/1280;
+  const kh=window.PANEL?innerHeight/800:(innerHeight-8)/800;
   let k=Math.min(kw,window.PANEL?kh:1);
   if(!window.PANEL)k=Math.min(k,1);
   $("#stage").style.transform=k!==1?`scale(${k})`:"";
@@ -2347,6 +2355,10 @@ function beacon(msg){
   try{navigator.sendBeacon("/api/client-log",
     "beta "+(document.getElementById("guiver")||{}).textContent+" | "+msg+" | "+navigator.userAgent.slice(0,60));}catch(_){}
 }
+/* mouchard : remonte la taille réelle du viewport au journal board */
+if(window.PANEL)setTimeout(()=>{
+  beacon("viewport "+innerWidth+"x"+innerHeight+" dpr="+devicePixelRatio+" screen "+screen.width+"x"+screen.height);
+},3000);
 function loadControls(){
   $("#sfbody").innerHTML='<div class="sfsub">Lecture des contrôles ALSA…</div>';
   const t0=performance.now();
