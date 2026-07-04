@@ -298,6 +298,7 @@ body{
 .sfbar .dirt{font-size:8.5px;color:var(--warn);}
 .strip .id,.strip .src{cursor:pointer;}
 .strip .id:hover{color:var(--accent);}
+#stripfx,#stripfx *{user-select:text;-webkit-user-select:text;}
 @media (prefers-reduced-motion:reduce){
   .mlstate i{animation:none;}
 }
@@ -520,7 +521,7 @@ body{
     <div class="tab" tabindex="0">EFFETS</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
-    <div class="scene">GUI <b id="guiver">P2h</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
+    <div class="scene">GUI <b id="guiver">P2i</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
   </div>
 
 </div></div>
@@ -2255,6 +2256,10 @@ function openDrawer(mp){
   A.diag=null;
   loadControls();
 }
+function beacon(msg){
+  try{navigator.sendBeacon("/api/client-log",
+    "beta "+(document.getElementById("guiver")||{}).textContent+" | "+msg+" | "+navigator.userAgent.slice(0,60));}catch(_){}
+}
 function loadControls(){
   $("#sfbody").innerHTML='<div class="sfsub">Lecture des contrôles ALSA…</div>';
   const t0=performance.now();
@@ -2269,13 +2274,14 @@ function loadControls(){
     A.controls=parseAmixer(t);
     const n=Object.keys(A.controls).length;
     A.diag=Math.round(performance.now()-t0)+" ms · "+n+" contrôles";
-    if(n<300)A.diag+=" ⚠ INCOMPLET (attendu 339)";
+    if(n<300){A.diag+=" ⚠ INCOMPLET (attendu 339)";beacon("alsa/contents INCOMPLET n="+n);}
     initBq();render();
   }).catch(e=>{
     clearTimeout(to);
     A.controls={};A.diag=null;render();
+    beacon("alsa/contents ECHEC: "+(e.name==="AbortError"?"timeout 8s":e.name+" "+e.message));
     const body=$("#sfbody");
-    const msg=el("div","sfsub","⚠ Contrôles ALSA inaccessibles : "+(e.name==="AbortError"?"timeout 8 s":e.message)+" — les onglets TAC/DSP sont masqués. Donne-moi ce message !");
+    const msg=el("div","sfsub","⚠ Contrôles ALSA inaccessibles : "+(e.name==="AbortError"?"timeout 8 s":e.message)+" — les onglets TAC/DSP sont masqués.");
     msg.style.color="var(--warn)";
     body.insertBefore(msg,body.firstChild);
     const btn=el("button",null,"RÉESSAYER");btn.className="sftab";
@@ -2285,6 +2291,7 @@ function loadControls(){
 }
 $("#sfclose").addEventListener("click",()=>{$("#stripfx").style.display="none";A.open=false;});
 window.addEventListener("error",e=>{
+  beacon("JS error: "+e.message+" @"+(e.filename||"").split("/").pop()+":"+e.lineno);
   const b=$("#sfbody");
   if(b&&A.open){const m=el("div","sfsub","⚠ Erreur JS : "+e.message+" ("+(e.filename||"").split("/").pop()+":"+e.lineno+")");
     m.style.color="var(--warn)";b.insertBefore(m,b.firstChild);}

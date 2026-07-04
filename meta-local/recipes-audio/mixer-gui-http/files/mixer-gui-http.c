@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -1029,9 +1030,22 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			 * (ancienne + beta) → parse client sans contrôles TAC. */
 			char *buf = malloc(64 * 1024);
 			if (!buf) return MHD_NO;
+			struct timespec t0, t1;
+			clock_gettime(CLOCK_MONOTONIC, &t0);
 			int n = run_amixer_contents(buf, 64 * 1024);
-			if (n < 30000)   /* attendu ~61 KB — trace toute anomalie */
-				mlog("alsa/contents anomalie: n=%d", n);
+			clock_gettime(CLOCK_MONOTONIC, &t1);
+			{	/* V10-P2h : trace chaque hit (diagnostic panne distante) */
+				const union MHD_ConnectionInfo *ci = MHD_get_connection_info(
+					conn, MHD_CONNECTION_INFO_CLIENT_ADDRESS);
+				char ip[64] = "?";
+				if (ci && ci->client_addr && ci->client_addr->sa_family == AF_INET)
+					inet_ntop(AF_INET,
+						  &((struct sockaddr_in *)ci->client_addr)->sin_addr,
+						  ip, sizeof(ip));
+				long ms = (t1.tv_sec - t0.tv_sec) * 1000 +
+					  (t1.tv_nsec - t0.tv_nsec) / 1000000;
+				mlog("alsa/contents: client=%s n=%d ms=%ld", ip, n, ms);
+			}
 			enum MHD_Result ret;
 			if (n < 0)
 				ret = send_json(conn, 503,
@@ -1122,6 +1136,37 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		enum MHD_Result ret = send_json(conn, rc > 0 ? 200 : 503, reply);
 		free(reply);
 		return ret;
+	}
+
+	/* === Route POST /api/client-log === (V10-P2h diag)
+	 * Le front remonte ses erreurs fetch/JS ici (sendBeacon) — évite le
+	 * copier-coller utilisateur pour diagnostiquer les pannes distantes. */
+	if (!strcmp(method, "POST") && !strcmp(url, "/api/client-log")) {
+		struct post_buf *pb = *con_cls;
+		if (!pb) {
+			pb = calloc(1, sizeof(*pb));
+			if (!pb) return MHD_NO;
+			*con_cls = pb;
+			return MHD_YES;
+		}
+		if (*upload_data_size > 0) {
+			size_t room = POST_MAX_BYTES - pb->len;
+			size_t take = *upload_data_size < room ? *upload_data_size : room;
+			memcpy(pb->data + pb->len, upload_data, take);
+			pb->len += take;
+			*upload_data_size = 0;
+			return MHD_YES;
+		}
+		pb->data[pb->len < POST_MAX_BYTES ? pb->len : POST_MAX_BYTES - 1] = 0;
+		const union MHD_ConnectionInfo *ci = MHD_get_connection_info(
+			conn, MHD_CONNECTION_INFO_CLIENT_ADDRESS);
+		char ip[64] = "?";
+		if (ci && ci->client_addr && ci->client_addr->sa_family == AF_INET)
+			inet_ntop(AF_INET,
+				  &((struct sockaddr_in *)ci->client_addr)->sin_addr,
+				  ip, sizeof(ip));
+		mlog("client-log %s: %.300s", ip, pb->data);
+		return send_json(conn, 200, "{\"ok\":true}\n");
 	}
 
 	/* === Route POST /api/alsa/set === (E7.3b)
