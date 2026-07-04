@@ -967,13 +967,20 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 
 		if (!strcmp(url, "/api/state/full")) {
 			/* resync à la demande (gap de seq côté client) */
-			static char full[SC_FRAME];
-			int n = sc_build_full(full, sizeof(full));
+			/* V10-P2g : buffer par requête (le static était partagé
+			 * entre threads MHD → réponses corrompues à 2 clients). */
+			char *full = malloc(SC_FRAME);
+			if (!full) return MHD_NO;
+			int n = sc_build_full(full, SC_FRAME);
 			/* strip "data: " et le \n\n final pour renvoyer du JSON pur */
+			enum MHD_Result ret;
 			if (n > 8)
-				return send_text(conn, 200, "application/json",
-						 full + 6, (size_t)(n - 8));
-			return send_json(conn, 503, "{\"ok\":false,\"err\":\"state not ready\"}\n");
+				ret = send_text(conn, 200, "application/json",
+						full + 6, (size_t)(n - 8));
+			else
+				ret = send_json(conn, 503, "{\"ok\":false,\"err\":\"state not ready\"}\n");
+			free(full);
+			return ret;
 		}
 
 		if (!strcmp(url, "/api/debug/sse")) {
@@ -1017,13 +1024,21 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			 * Returns raw amixer -c <card> contents output as text/plain.
 			 * Parsed client-side (Alpine.js) into typed controls.
 			 */
-			static char buf[64 * 1024];
-			int n = run_amixer_contents(buf, sizeof(buf));
+			/* V10-P2g : buffer par requête — le static partagé entre
+			 * threads MHD corrompait la réponse dès 2 GUIs ouvertes
+			 * (ancienne + beta) → parse client sans contrôles TAC. */
+			char *buf = malloc(64 * 1024);
+			if (!buf) return MHD_NO;
+			int n = run_amixer_contents(buf, 64 * 1024);
+			enum MHD_Result ret;
 			if (n < 0)
-				return send_json(conn, 503,
+				ret = send_json(conn, 503,
 					"{\"ok\":false,\"err\":\"amixer contents failed\"}\n");
-			return send_text(conn, 200, "text/plain; charset=utf-8",
-					 buf, (size_t)n);
+			else
+				ret = send_text(conn, 200, "text/plain; charset=utf-8",
+						buf, (size_t)n);
+			free(buf);
+			return ret;
 		}
 
 		if (!strncmp(url, "/static/", 8)) {
@@ -1045,14 +1060,14 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			if (numid <= 0 || !endp || strcmp(endp, "/raw") != 0)
 				return send_json(conn, 400,
 					"{\"ok\":false,\"err\":\"bad numid path\"}\n");
-			static unsigned char buf[6000];
+			unsigned char buf[6000];   /* pile : par requête (V10-P2g) */
 			int sz = sof_blob_read((int)numid, buf, sizeof(buf));
 			if (sz < 0)
 				return send_json(conn, 503,
 					"{\"ok\":false,\"err\":\"tlv read failed\"}\n");
-			static char hex[12100];
+			char hex[12100];
 			hex_encode(buf, (size_t)sz, hex);
-			static char body[12300];
+			char body[12300];
 			snprintf(body, sizeof(body),
 				"{\"ok\":true,\"numid\":%ld,\"size\":%d,\"hex\":\"%s\"}\n",
 				numid, sz, hex);
@@ -1097,9 +1112,14 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		 * V9.5.21 : 64 KB — l'ajout des champs cat/ai/ao/ins par plugin a
 		 * porté la liste (345 plugins) à ~42 KB → 32 KB tronquait le JSON
 		 * → 0 effet dans la GUI. Aligné sur le lv2_buf 65536 de mixer-pro. */
-		static char reply[65536];
-		int rc = mixer_request(req, reply, sizeof(reply));
-		return send_json(conn, rc > 0 ? 200 : 503, reply);
+		/* V10-P2g : par requête — le static croisait les réponses
+		 * de tous les clients POST simultanés. */
+		char *reply = malloc(65536);
+		if (!reply) return MHD_NO;
+		int rc = mixer_request(req, reply, 65536);
+		enum MHD_Result ret = send_json(conn, rc > 0 ? 200 : 503, reply);
+		free(reply);
+		return ret;
 	}
 
 	/* === Route POST /api/alsa/set === (E7.3b)
@@ -1183,12 +1203,12 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			return send_json(conn, 400,
 				"{\"ok\":false,\"err\":\"bad hex field\"}\n");
 		size_t hex_len = (size_t)(hex_end - hex_start);
-		static char hex[12100];
+		char hex[12100];           /* pile : par requête (V10-P2g) */
 		if (hex_len >= sizeof(hex))
 			return send_json(conn, 400,
 				"{\"ok\":false,\"err\":\"hex too large\"}\n");
 		memcpy(hex, hex_start, hex_len); hex[hex_len] = 0;
-		static unsigned char buf[6000];
+		unsigned char buf[6000];
 		int sz = hex_decode(hex, buf, sizeof(buf));
 		if (sz < 0)
 			return send_json(conn, 400,
