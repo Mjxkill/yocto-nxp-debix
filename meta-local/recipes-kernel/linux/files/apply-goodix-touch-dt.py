@@ -56,11 +56,13 @@ def main(dts_path):
     insert_at = m.end(1)
     src = src[:insert_at] + TOUCH_NODE + src[insert_at:]
 
-    # 2. groupe pinctrl dans &iomuxc (apres l'ouverture du bloc)
-    m = re.search(r"&iomuxc \{\n", src)
-    if not m:
-        sys.exit("goodix-touch-dt: bloc &iomuxc introuvable")
-    src = src[:m.end()] + PINCTRL_GROUP + src[m.end():]
+    # 2. groupe pinctrl dans &iomuxc — DTC exige les proprietes AVANT les
+    # sous-noeuds : on s'ancre sur le premier sous-noeud (pinctrl_hog),
+    # jamais sur l'ouverture du bloc (pinctrl-names/pinctrl-0 la suivent).
+    anchor = "\tpinctrl_hog: hoggrp {"
+    if anchor not in src:
+        sys.exit("goodix-touch-dt: pinctrl_hog introuvable")
+    src = src.replace(anchor, PINCTRL_GROUP.lstrip("\n") + "\n" + anchor, 1)
 
     with open(dts_path, "w") as f:
         f.write(src)
