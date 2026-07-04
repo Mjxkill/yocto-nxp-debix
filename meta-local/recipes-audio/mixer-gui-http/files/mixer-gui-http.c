@@ -51,7 +51,7 @@
  * après scan lilv 348 plugins). Avant 200ms → connection refused
  * en bench. */
 #define SOCK_RECV_TIMEO_MS 10000
-#define MHD_THREAD_POOL   8       /* E7.1 : 4 SSE persistants + 4 REST/static */
+#define MHD_THREAD_POOL   16      /* V10-P2h : marge SSE multi-onglets (2 GUIs x N onglets + kiosk) */
 #define STREAM_PERIOD_US  33333   /* E7.1 : 30 Hz SSE */
 
 /* libmicrohttpd 1.0.x : MHD_Result enum introduit récemment.
@@ -1030,6 +1030,8 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			char *buf = malloc(64 * 1024);
 			if (!buf) return MHD_NO;
 			int n = run_amixer_contents(buf, 64 * 1024);
+			if (n < 30000)   /* attendu ~61 KB — trace toute anomalie */
+				mlog("alsa/contents anomalie: n=%d", n);
 			enum MHD_Result ret;
 			if (n < 0)
 				ret = send_json(conn, 503,
