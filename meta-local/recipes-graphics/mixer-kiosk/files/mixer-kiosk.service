@@ -23,7 +23,6 @@ ExecStartPre=/bin/sh -c 'until curl -sf http://localhost:8080/panel >/dev/null; 
 ExecStart=/usr/bin/chromium --kiosk --no-sandbox \
     --ozone-platform=wayland \
     --log-level=3 \
-    --force-device-scale-factor=1.25 \
     --disable-features=TranslateUI \
     --noerrdialogs --disable-infobars --no-first-run \
     --enable-gpu-rasterization --ignore-gpu-blocklist \
