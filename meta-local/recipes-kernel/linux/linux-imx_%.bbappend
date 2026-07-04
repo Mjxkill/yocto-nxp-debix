@@ -109,6 +109,13 @@ do_configure:append() {
             echo "CONFIG_IRQ_FORCED_THREADING_DEFAULT=y" >> "$cfg"
         fi
 
+        # V10-P4a - le defconfig NXP laisse CONFIG_USB_GADGET_DEBUG=y, qui
+        # compile les pr_debug du gadget : le path UAC2 imprime 2 printk PAR
+        # PAQUET USB (~4000 lignes/s pendant toute lecture) -> journald+syslogd
+        # ~45 % du core 0 + contention printk dans la completion USB.
+        # Mesure 2026-07-04 : 13 xruns/min (lecture+kiosk), 0 sans kiosk.
+        sed -i 's/^CONFIG_USB_GADGET_DEBUG=y/# CONFIG_USB_GADGET_DEBUG is not set/' "$cfg" 
+
         oe_runmake -C ${S} O=${B} olddefconfig
     fi
 }
