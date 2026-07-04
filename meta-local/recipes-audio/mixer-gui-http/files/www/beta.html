@@ -313,10 +313,13 @@ body{
   border-radius:4px;font-size:9px;padding:4px;width:104px;}
 .drchead{display:flex;align-items:center;gap:14px;width:100%;margin:2px 0 8px;}
 .drchead .lb{font-size:8.5px;letter-spacing:.14em;color:var(--mut);}
+.rtrow{display:flex;gap:0;align-items:flex-start;}
+.rtrow .rtgrp{margin:0;width:auto;padding:0 16px;border-left:1px solid var(--line);}
+.rtrow .rtgrp:first-child{padding-left:0;border-left:none;}
 .rtgrp{margin-bottom:10px;width:100%;}
 .rtgrp .gt{font-size:8px;font-weight:700;letter-spacing:.2em;color:var(--mut);
   border-left:2px solid rgba(229,161,60,.55);padding-left:7px;margin-bottom:7px;}
-.rtgrp .kgridf{gap:6px 5px;}
+.rtgrp .kgridf{gap:6px 5px;flex-wrap:nowrap;}
 .rtgrp .kunit .knob{width:37px;height:37px;}
 .rtgrp .kunit{width:44px;}
 .rtgrp .kunit .kv{font-size:8px;}
@@ -495,15 +498,13 @@ body{
 
   <!-- ---- page ROUTING ---- -->
   <div id="routepage" class="page hid" data-page="ROUTING" style="display:flex;flex-direction:column;padding:12px 16px;gap:10px;overflow-y:auto;">
-    <div class="fxgrid" style="grid-template-columns:1fr 1.6fr;">
-      <div class="fxcard"><div class="ct">REMAP MICS DSP <em>· M ← source TDM</em></div>
-        <div id="rt-remap" style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;"></div></div>
-      <div class="fxcard"><div class="ct">ROUTAGE D'UNE ENTRÉE <em>· vers les 18 sorties — valeurs lues du mixer</em></div>
-        <select id="rt-src" style="width:220px;background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:4px;font-size:10px;padding:4px;margin-bottom:10px;"></select>
-        <div id="rt-matrix"></div></div>
-    </div>
+    <div class="fxcard"><div class="ct">ROUTAGE D'UNE ENTRÉE <em>· vers les 18 sorties — valeurs lues du mixer</em></div>
+      <select id="rt-src" style="width:230px;background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:4px;font-size:10px;padding:4px;margin-bottom:10px;"></select>
+      <div id="rt-matrix" class="rtrow"></div></div>
     <div class="fxcard"><div class="ct">GAINS DE SORTIE <em>· trim final, persistés</em></div>
-      <div id="rt-outs"></div></div>
+      <div id="rt-outs" class="rtrow"></div></div>
+    <div class="fxcard"><div class="ct">REMAP MICS DSP <em>· M ← source TDM</em></div>
+      <div id="rt-remap" style="display:flex;gap:12px;"></div></div>
   </div>
 
   <!-- ---- page SYSTÈME ---- -->
