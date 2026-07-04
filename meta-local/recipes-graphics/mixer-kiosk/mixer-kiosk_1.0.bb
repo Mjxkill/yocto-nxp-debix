@@ -7,8 +7,8 @@ S = "${WORKDIR}"
 
 inherit systemd
 SYSTEMD_SERVICE:${PN} = "mixer-kiosk.service"
-# Pas d'auto-enable : activation manuelle apres validation GO/NO-GO (ARCHI V10 §5)
-SYSTEMD_AUTO_ENABLE = "disable"
+# V10-P4b : GO/NO-GO valide (TESTS_V10_P4a : 3x60s lecture 0 xrun) — boot auto
+SYSTEMD_AUTO_ENABLE = "enable"
 
 do_install() {
     install -d ${D}${systemd_system_unitdir}

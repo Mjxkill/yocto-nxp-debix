@@ -118,3 +118,10 @@ IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 
 # ML / NPU stack (TIM-VX, TFLite VX delegate, nnstreamer, etc.)
 IMAGE_INSTALL:append = " packagegroup-imx-ml"
+
+# V10-P4b — Kiosk console sur écran DSI (GO valide, fiche TESTS_V10_P4a).
+# PRÉREQUIS bblayers.conf (fichier de build NON versionné) :
+#   BBLAYERS += "${BSPDIR}/sources/meta-browser/meta-chromium"
+# (couche clonée dans sources/meta-browser, branche compatible scarthgap)
+# chromium-ozone-wayland tire ses RDEPENDS (libcxx, nspr, nss, upower).
+IMAGE_INSTALL:append = " chromium-ozone-wayland mixer-kiosk"

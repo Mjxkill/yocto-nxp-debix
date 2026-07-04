@@ -1,21 +1,28 @@
 [Unit]
-Description=V10 Mixer Console kiosk (chromium --kiosk sur ecran DSI 1024x600)
+Description=V10 Mixer Console kiosk (chromium --kiosk, ecran DSI 1280x800 paysage)
 After=weston.service mixer-gui-http.service
 Requires=weston.service
 Wants=mixer-gui-http.service
 
 [Service]
-# ARCHI V10 §5 : cores 0-1, jamais le core audio ; cgroup memoire dur.
+# Config VALIDEE GO/NO-GO (TESTS_V10_P4a, 3x60s 0 xrun) :
+#  - cores 0-1 seulement, jamais les cores audio isoles (2,3)
+#  - Nice 19 + CPUWeight 30 : cede TOUJOURS au daemon ML (nice 10) et aux IRQ
+#  - logs -> null OBLIGATOIRE : chromium spamme stdout et journald sature
 CPUAffinity=0 1
-Nice=10
+Nice=19
+CPUWeight=30
 MemoryMax=400M
 MemorySwapMax=0
+StandardOutput=null
+StandardError=null
 Environment=XDG_RUNTIME_DIR=/run/user/0
 Environment=WAYLAND_DISPLAY=wayland-1
+Environment=HOME=/root
 ExecStartPre=/bin/sh -c 'until curl -sf http://localhost:8080/panel >/dev/null; do sleep 1; done'
 ExecStart=/usr/bin/chromium --kiosk --no-sandbox \
     --ozone-platform=wayland \
-    --window-size=1024,600 \
+    --log-level=3 \
     --disable-features=TranslateUI \
     --noerrdialogs --disable-infobars --no-first-run \
     --enable-gpu-rasterization --ignore-gpu-blocklist \

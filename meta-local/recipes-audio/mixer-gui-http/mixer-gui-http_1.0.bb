@@ -13,6 +13,7 @@ SRC_URI = " \
     file://Makefile \
     file://mixer-gui-http.service \
     file://www/index.html \
+    file://www/beta.html \
 "
 
 S = "${WORKDIR}"
@@ -32,6 +33,8 @@ do_install() {
 
     install -d ${D}/var/www/mixer-gui
     install -m 0644 ${WORKDIR}/www/index.html ${D}/var/www/mixer-gui/index.html
+    # V10 : nouvelle console (/beta et /panel kiosk)
+    install -m 0644 ${WORKDIR}/www/beta.html ${D}/var/www/mixer-gui/beta.html
 
     install -d ${D}${systemd_unitdir}/system
     install -m 0644 ${WORKDIR}/mixer-gui-http.service \
@@ -41,10 +44,12 @@ do_install() {
 FILES:${PN} = " \
     ${bindir}/mixer-gui-http \
     /var/www/mixer-gui/index.html \
+    /var/www/mixer-gui/beta.html \
     ${systemd_unitdir}/system/mixer-gui-http.service \
 "
 
 SYSTEMD_SERVICE:${PN} = "mixer-gui-http.service"
-SYSTEMD_AUTO_ENABLE:${PN} = "disable"
+# V10-P4b : GO kiosk acté (TESTS_V10_P4a) — la GUI démarre au boot
+SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 COMPATIBLE_MACHINE = "(imx8mpevk|imx8mp-debix-model-ab)"
