@@ -490,12 +490,12 @@ body{
     <div class="fxgrid" style="grid-template-columns:1fr 1fr;">
       <div class="fxcard"><div class="ct">REMAP MICS DSP <em>· M ← source TDM</em></div>
         <div id="rt-remap" style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;"></div></div>
-      <div class="fxcard"><div class="ct">ROUTAGE D'UNE ENTRÉE <em>· vers les 18 sorties</em></div>
-        <select id="rt-src" style="width:100%;background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:4px;font-size:10px;padding:4px;margin-bottom:8px;"></select>
-        <div id="rt-matrix" style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;"></div></div>
+      <div class="fxcard"><div class="ct">ROUTAGE D'UNE ENTRÉE <em>· vers les 18 sorties — valeurs lues du mixer</em></div>
+        <select id="rt-src" style="width:220px;background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:4px;font-size:10px;padding:4px;margin-bottom:10px;"></select>
+        <div id="rt-matrix" class="kgridf"></div></div>
     </div>
     <div class="fxcard"><div class="ct">GAINS DE SORTIE <em>· trim final, persistés</em></div>
-      <div id="rt-outs" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;"></div></div>
+      <div id="rt-outs" class="kgridf"></div></div>
   </div>
 
   <!-- ---- page SYSTÈME ---- -->
@@ -535,7 +535,7 @@ body{
     <div class="tab" tabindex="0">EFFETS</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
-    <div class="scene">GUI <b id="guiver">P2j</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
+    <div class="scene">GUI <b id="guiver">P2k</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
   </div>
 
 </div></div>
@@ -1328,11 +1328,14 @@ function makeKnob(o){ // {label,min,max,val,unit,log,step,onchange}
   draw();
   k.addEventListener("pointerdown",e=>{
     const y0=e.clientY,n0=norm(val);k.setPointerCapture(e.pointerId);
+    u.classList.add("dragging");
     const mv=e=>{val=dnorm(Math.max(0,Math.min(1,n0+(y0-e.clientY)*0.006)));
       if(o.step===1)val=Math.round(val);draw();o.onchange(val);};
-    const up=()=>{k.removeEventListener("pointermove",mv);k.removeEventListener("pointerup",up);};
+    const up=()=>{k.removeEventListener("pointermove",mv);k.removeEventListener("pointerup",up);
+      u.classList.remove("dragging");};
     k.addEventListener("pointermove",mv);k.addEventListener("pointerup",up);
   });
+  u.setVal=v=>{val=v;draw();};   /* maj externe (suivi STORE) */
   return u;
 }
 window.MXKNOB=makeKnob;
@@ -1550,52 +1553,54 @@ function renderMastering(){
   });
 });
 
-/* ---------- ROUTING ---------- */
+/* ---------- ROUTING (V10-P2k : knobs console, valeurs réelles) ---------- */
 let routingBuilt=false;
+const rtMx=[],rtOuts=[];
+function rtLoadMatrix(src){
+  fetch("/api/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({op:"get_strip_routing",src})})
+  .then(r=>r.json()).then(j=>{
+    if(!j||!j.ok||!Array.isArray(j.master))return;
+    rtMx.forEach((u,o)=>{
+      if(u.classList.contains("dragging"))return;
+      const g=j.master[o]||0;
+      u.setVal(g<=0.000316?-60:Math.max(-60,20*Math.log10(g)));
+    });
+  }).catch(()=>{});
+}
 function buildRouting(){
   if(routingBuilt)return;routingBuilt=true;
   const rm=document.getElementById("rt-remap");
   for(let m=0;m<8;m++){
-    const d=document.createElement("div");
-    d.innerHTML=`<div style="font-size:8px;color:var(--mut);letter-spacing:.1em">M${m+1}</div>
-      <select data-mic="${m}" style="width:100%;background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:3px;font-size:9px;padding:2px;">${
-      [...Array(8)].map((_,s)=>`<option value="${s}">src ${s+1}</option>`).join("")}</select>`;
-    d.querySelector("select").addEventListener("change",e=>
-      post({op:"set_input_map",mic:m,slot:+e.target.value}));
+    const d=document.createElement("div");d.className="kcell";
+    const sel=document.createElement("select");
+    sel.dataset.mic=m;
+    sel.innerHTML=[...Array(8)].map((_,s)=>`<option value="${s}">src ${s+1}</option>`).join("");
+    sel.addEventListener("change",e=>post({op:"set_input_map",mic:m,slot:+e.target.value}));
+    d.appendChild(sel);
+    const lb=document.createElement("span");lb.className="kn";lb.textContent="M"+(m+1);
+    d.appendChild(lb);
     rm.appendChild(d);
   }
   const sel=document.getElementById("rt-src");
   sel.innerHTML=IN_NAMES.map((n,i)=>`<option value="${i}">${n} — entrée ${i}</option>`).join("");
+  sel.addEventListener("change",()=>rtLoadMatrix(+sel.value));
   const mx=document.getElementById("rt-matrix");
   OUT_NAMES.forEach((n,o)=>{
-    const d=document.createElement("div");
-    d.innerHTML=`<div style="font-size:8px;color:var(--mut)">${n}</div>
-      <input type="range" min="-60" max="6" step="0.5" value="-60"
-        style="width:100%;accent-color:var(--accent);height:4px;">
-      <div style="font-family:var(--mono);font-size:8px;color:var(--mut)" class="rv">-∞</div>`;
-    const inp=d.querySelector("input"),rv=d.querySelector(".rv");
-    inp.addEventListener("input",()=>{
-      const db=+inp.value;rv.textContent=db<=-59?"-∞":db.toFixed(1);
-      const gain=db<=-59?0:Math.pow(10,db/20);
-      postT("mx"+o,{op:"set_master",src:+sel.value,out:o,gain});
-    });
-    mx.appendChild(d);
+    const u=MXKNOB({label:n,min:-60,max:6,val:-60,unit:"dB",step:0.5,
+      onchange:db=>{
+        const gain=db<=-59?0:Math.pow(10,db/20);
+        postT("mx"+o,{op:"set_master",src:+sel.value,out:o,gain});
+      }});
+    rtMx.push(u);mx.appendChild(u);
   });
   const outs=document.getElementById("rt-outs");
   OUT_NAMES.forEach((n,o)=>{
-    const d=document.createElement("div");
-    d.innerHTML=`<div style="font-size:8px;color:var(--mut)">${n}</div>
-      <input type="range" min="-60" max="12" step="0.5" value="0"
-        style="width:100%;accent-color:var(--accent);height:4px;">
-      <div style="font-family:var(--mono);font-size:8px;color:var(--text)" class="ov">0.0</div>`;
-    const inp=d.querySelector("input"),ov=d.querySelector(".ov");
-    inp.dataset.out=o;
-    inp.addEventListener("input",()=>{
-      ov.textContent=(+inp.value).toFixed(1);
-      postT("og"+o,{op:"set_output_gain",out:o,db:+inp.value});
-    });
-    outs.appendChild(d);
+    const u=MXKNOB({label:n,min:-60,max:12,val:0,unit:"dB",step:0.5,
+      onchange:db=>postT("og"+o,{op:"set_output_gain",out:o,db})});
+    rtOuts.push(u);outs.appendChild(u);
   });
+  rtLoadMatrix(0);
 }
 function renderRouting(){
   buildRouting();
@@ -1605,12 +1610,10 @@ function renderRouting(){
       if(document.activeElement!==s)s.value=S.input_map.map[m];
     });
   if(S.output_gain&&S.output_gain.gains)
-    document.querySelectorAll("#rt-outs input").forEach((inp,o)=>{
-      if(document.activeElement===inp)return;
+    rtOuts.forEach((u,o)=>{
+      if(u.classList.contains("dragging"))return;
       const g=S.output_gain.gains[o]||1000;
-      const db=g<=0?-60:20*Math.log10(g/1000);
-      inp.value=db.toFixed(1);
-      inp.parentElement.querySelector(".ov").textContent=db.toFixed(1);
+      u.setVal(g<=0?-60:20*Math.log10(g/1000));
     });
 }
 
