@@ -557,10 +557,14 @@ const DPR=Math.min(devicePixelRatio||1,2);
 
 /* ---------- scale stage to viewport ---------- */
 function fit(){
-  const w=Math.min(innerWidth-8,1024);
-  const k=w/1024;
-  $("#stage").style.transform=k<1?`scale(${k})`:"";
-  $("#stagewrap").style.height=(600*Math.min(k,1))+"px";
+  /* V10-P4a : en mode PANEL (écran embarqué 1280x800 après rotation weston),
+   * on UPSCALE la console pour remplir l'écran (k jusqu'à 1.25). */
+  const kw=(innerWidth-8)/1024, kh=(innerHeight-8)/600;
+  let k=Math.min(kw,window.PANEL?kh:1);
+  if(!window.PANEL)k=Math.min(k,1);
+  $("#stage").style.transform=k!==1?`scale(${k})`:"";
+  $("#stage").style.transformOrigin="top center";
+  $("#stagewrap").style.height=(600*k)+"px";
 }
 addEventListener("resize",fit);fit();
 
@@ -976,6 +980,7 @@ function drawSpec(t){
     spctx.fillRect(b*bw+1,hs-bh,bw-2,bh);
   }
   /* --- waterfall : décale l'historique d'1px vers le bas, nouvelle ligne en haut --- */
+  if(!window.PANEL){
   wfctx.drawImage(wfCanvas,0,0,w,hw-1,0,1,w,hw-1);
   for(let b=0;b<NB;b++){
     const v=Math.min(1,specState[b]*1.25);
@@ -988,6 +993,7 @@ function drawSpec(t){
     wfctx.fillRect(b*bw,0,bw,1.6);
   }
   spctx.drawImage(wfCanvas,0,hs+2);
+  }
   spctx.fillStyle="rgba(233,229,218,.35)";
   // enveloppe ML (courbe ambre lissée par-dessus)
   spctx.strokeStyle="#e5a13c";spctx.lineWidth=1.6*DPR;
@@ -1013,6 +1019,11 @@ function drawSpec(t){
 let t0=performance.now();
 let tickErr=0,frameNo=0;
 window.LIVE=false;          /* bascule par le bridge SSE si la board répond */
+/* V10-P4a : mode PANEL (écran embarqué) — l'i.MX8MP rend la page en local :
+ * 30 fps + waterfall off pour laisser les cores 0-1 au daemon ML/IRQ.
+ * Mesure kiosk 60 fps plein rendu : cpu0/1 99 % → 13 xruns/min. */
+window.PANEL=location.pathname==="/panel";
+let frameSkip=false;
 let lastNow=0;
 /* V10-P2e : ballistiques en TEMPS REEL (dt), plus par frame - un rAF lent
  * (fenetre chargee, 15-20 fps) gardait les memes coefficients par frame et
@@ -1022,6 +1033,7 @@ const kdt=(dt,tau)=>1-Math.exp(-dt/tau);
 window.__fps={n:0,t:0,v:0};
 function tick(now){
  try{
+  if(window.PANEL){frameSkip=!frameSkip;if(frameSkip){requestAnimationFrame(tick);return;}}
   const t=(now-t0)/1000;
   const dt=Math.min(100,lastNow?now-lastNow:16.7);lastNow=now;
   window.__dt=dt;
