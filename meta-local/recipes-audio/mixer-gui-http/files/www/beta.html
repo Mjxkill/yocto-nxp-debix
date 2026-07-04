@@ -520,7 +520,7 @@ body{
     <div class="tab" tabindex="0">EFFETS</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
-    <div class="scene">FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b></div>
+    <div class="scene">GUI <b id="guiver">P2e</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
   </div>
 
 </div></div>
@@ -1003,7 +1003,9 @@ function tick(now){
   window.__dt=dt;
   window.__fps.n++;
   if(now-window.__fps.t>=1000){window.__fps.v=Math.round(window.__fps.n*1000/(now-window.__fps.t));
-    window.__fps.n=0;window.__fps.t=now;}
+    window.__fps.n=0;window.__fps.t=now;
+    const fe=document.getElementById("fpsro");
+    if(fe){fe.textContent=window.__fps.v;fe.style.color=window.__fps.v<30?"var(--warn)":"";}}
   const kAtk=kdt(dt,28),kRel=kdt(dt,110),kPk=Math.exp(-dt/1100);
   if(window.LIVE){
     st.forEach(s=>{
