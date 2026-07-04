@@ -313,6 +313,14 @@ body{
   border-radius:4px;font-size:9px;padding:4px;width:104px;}
 .drchead{display:flex;align-items:center;gap:14px;width:100%;margin:2px 0 8px;}
 .drchead .lb{font-size:8.5px;letter-spacing:.14em;color:var(--mut);}
+.rtgrp{margin-bottom:10px;width:100%;}
+.rtgrp .gt{font-size:8px;font-weight:700;letter-spacing:.2em;color:var(--mut);
+  border-left:2px solid rgba(229,161,60,.55);padding-left:7px;margin-bottom:7px;}
+.rtgrp .kgridf{gap:6px 5px;}
+.rtgrp .kunit .knob{width:37px;height:37px;}
+.rtgrp .kunit{width:44px;}
+.rtgrp .kunit .kv{font-size:8px;}
+.rtgrp .kunit .kn{font-size:7px;}
 @media (prefers-reduced-motion:reduce){
   .mlstate i{animation:none;}
 }
@@ -487,15 +495,15 @@ body{
 
   <!-- ---- page ROUTING ---- -->
   <div id="routepage" class="page hid" data-page="ROUTING" style="display:flex;flex-direction:column;padding:12px 16px;gap:10px;overflow-y:auto;">
-    <div class="fxgrid" style="grid-template-columns:1fr 1fr;">
+    <div class="fxgrid" style="grid-template-columns:1fr 1.6fr;">
       <div class="fxcard"><div class="ct">REMAP MICS DSP <em>· M ← source TDM</em></div>
         <div id="rt-remap" style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;"></div></div>
       <div class="fxcard"><div class="ct">ROUTAGE D'UNE ENTRÉE <em>· vers les 18 sorties — valeurs lues du mixer</em></div>
         <select id="rt-src" style="width:220px;background:var(--well);color:var(--text);border:1px solid var(--line-hi);border-radius:4px;font-size:10px;padding:4px;margin-bottom:10px;"></select>
-        <div id="rt-matrix" class="kgridf"></div></div>
+        <div id="rt-matrix"></div></div>
     </div>
     <div class="fxcard"><div class="ct">GAINS DE SORTIE <em>· trim final, persistés</em></div>
-      <div id="rt-outs" class="kgridf"></div></div>
+      <div id="rt-outs"></div></div>
   </div>
 
   <!-- ---- page SYSTÈME ---- -->
@@ -535,7 +543,7 @@ body{
     <div class="tab" tabindex="0">EFFETS</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
-    <div class="scene">GUI <b id="guiver">P2k</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
+    <div class="scene">GUI <b id="guiver">P2l</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
   </div>
 
 </div></div>
@@ -1568,6 +1576,15 @@ function rtLoadMatrix(src){
     });
   }).catch(()=>{});
 }
+const OUT_GROUPS=[["DSP OUT",0,8],["USB OUT",8,16],["TÉL OUT",16,18]];
+function rtGroup(parent,title){
+  const g=document.createElement("div");g.className="rtgrp";
+  const t=document.createElement("div");t.className="gt";t.textContent=title;
+  g.appendChild(t);
+  const grid=document.createElement("div");grid.className="kgridf";
+  g.appendChild(grid);parent.appendChild(g);
+  return grid;
+}
 function buildRouting(){
   if(routingBuilt)return;routingBuilt=true;
   const rm=document.getElementById("rt-remap");
@@ -1583,22 +1600,31 @@ function buildRouting(){
     rm.appendChild(d);
   }
   const sel=document.getElementById("rt-src");
-  sel.innerHTML=IN_NAMES.map((n,i)=>`<option value="${i}">${n} — entrée ${i}</option>`).join("");
+  const IN_GROUPS=[["DSP IN",0,8],["USB IN",8,16],["TÉL IN",16,18],["RETOURS FX",18,26]];
+  sel.innerHTML=IN_GROUPS.map(([t,a,b])=>
+    `<optgroup label="${t}">`+IN_NAMES.slice(a,b).map((n,k)=>
+      `<option value="${a+k}">${n} — entrée ${a+k}</option>`).join("")+"</optgroup>").join("");
   sel.addEventListener("change",()=>rtLoadMatrix(+sel.value));
   const mx=document.getElementById("rt-matrix");
-  OUT_NAMES.forEach((n,o)=>{
-    const u=MXKNOB({label:n,min:-60,max:6,val:-60,unit:"dB",step:0.5,
-      onchange:db=>{
-        const gain=db<=-59?0:Math.pow(10,db/20);
-        postT("mx"+o,{op:"set_master",src:+sel.value,out:o,gain});
-      }});
-    rtMx.push(u);mx.appendChild(u);
+  OUT_GROUPS.forEach(([t,a,b])=>{
+    const grid=rtGroup(mx,t);
+    for(let o=a;o<b;o++){
+      const u=MXKNOB({label:OUT_NAMES[o],min:-60,max:6,val:-60,unit:"dB",step:0.5,
+        onchange:db=>{
+          const gain=db<=-59?0:Math.pow(10,db/20);
+          postT("mx"+o,{op:"set_master",src:+sel.value,out:o,gain});
+        }});
+      rtMx.push(u);grid.appendChild(u);
+    }
   });
   const outs=document.getElementById("rt-outs");
-  OUT_NAMES.forEach((n,o)=>{
-    const u=MXKNOB({label:n,min:-60,max:12,val:0,unit:"dB",step:0.5,
-      onchange:db=>postT("og"+o,{op:"set_output_gain",out:o,db})});
-    rtOuts.push(u);outs.appendChild(u);
+  OUT_GROUPS.forEach(([t,a,b])=>{
+    const grid=rtGroup(outs,t);
+    for(let o=a;o<b;o++){
+      const u=MXKNOB({label:OUT_NAMES[o],min:-60,max:12,val:0,unit:"dB",step:0.5,
+        onchange:db=>postT("og"+o,{op:"set_output_gain",out:o,db})});
+      rtOuts.push(u);grid.appendChild(u);
+    }
   });
   rtLoadMatrix(0);
 }
