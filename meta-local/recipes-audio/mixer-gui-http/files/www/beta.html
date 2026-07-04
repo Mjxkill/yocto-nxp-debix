@@ -940,13 +940,13 @@ function drawSpec(t){
   const mAmp=(master.l+master.r)/2;
   for(let b=0;b<NB;b++){
     if(window.LIVE){
-      specState[b]+=(specTgt[b]-specState[b])*(specTgt[b]>specState[b]?0.5:0.18);
+      specState[b]+=(specTgt[b]-specState[b])*(specTgt[b]>specState[b]?kdt(window.__dt||16.7,25):kdt(window.__dt||16.7,90));
     }else{
       const f=b/NB;
       const shape=Math.pow(1-f,0.72);
       const wob=0.14*Math.sin(t*(1.1+f*5.3)+b*1.31)+0.09*Math.sin(t*0.37+b*0.7);
       const tgt=Math.max(0,(shape+wob)*mAmp*1.18);
-      specState[b]+= (tgt-specState[b])*(tgt>specState[b]?0.5:0.12);
+      specState[b]+= (tgt-specState[b])*(tgt>specState[b]?kdt(window.__dt||16.7,25):kdt(window.__dt||16.7,120));
     }
     const bh=specState[b]*hs*0.92;
     spctx.fillRect(b*bw+1,hs-bh,bw-2,bh);
@@ -989,18 +989,31 @@ function drawSpec(t){
 let t0=performance.now();
 let tickErr=0,frameNo=0;
 window.LIVE=false;          /* bascule par le bridge SSE si la board répond */
+let lastNow=0;
+/* V10-P2e : ballistiques en TEMPS REEL (dt), plus par frame - un rAF lent
+ * (fenetre chargee, 15-20 fps) gardait les memes coefficients par frame et
+ * multipliait les constantes de temps x3-6 (VU en retard de ~0.5-1 s).
+ * k = 1-exp(-dt/tau) : identique a 60 fps, correct a bas fps. */
+const kdt=(dt,tau)=>1-Math.exp(-dt/tau);
+window.__fps={n:0,t:0,v:0};
 function tick(now){
  try{
   const t=(now-t0)/1000;
+  const dt=Math.min(100,lastNow?now-lastNow:16.7);lastNow=now;
+  window.__dt=dt;
+  window.__fps.n++;
+  if(now-window.__fps.t>=1000){window.__fps.v=Math.round(window.__fps.n*1000/(now-window.__fps.t));
+    window.__fps.n=0;window.__fps.t=now;}
+  const kAtk=kdt(dt,28),kRel=kdt(dt,110),kPk=Math.exp(-dt/1100);
   if(window.LIVE){
     st.forEach(s=>{
       const tgt=s.liveTgt||0;
-      s.lvl+=(tgt-s.lvl)*(tgt>s.lvl?0.55:0.13);
-      s.pk=Math.max(s.pk*0.985,s.lvl);
+      s.lvl+=(tgt-s.lvl)*(tgt>s.lvl?kAtk:kRel);
+      s.pk=Math.max(s.pk*kPk,s.lvl);
     });
     const tl=master.liveTgtL||0, tr=master.liveTgtR||0;
-    master.l+=(tl-master.l)*(tl>master.l?0.5:0.12);
-    master.r+=(tr-master.r)*(tr>master.r?0.5:0.12);
+    master.l+=(tl-master.l)*(tl>master.l?kAtk:kRel);
+    master.r+=(tr-master.r)*(tr>master.r?kAtk:kRel);
   }
   if(!window.LIVE){
   let suml=0,sumr=0;
@@ -1008,20 +1021,21 @@ function tick(now){
     const active=!s.mute&&(!anySolo||s.solo);
     const sig=active?Math.max(0,s.base+0.22*Math.sin(t*s.rate+s.ph)+0.16*Math.sin(t*4.7*s.rate+s.ph*2)+(Math.random()-0.5)*0.1):0;
     const post=sig*s.fader*Math.pow(10,s.gain/40);
-    s.lvl+= (post-s.lvl)*(post>s.lvl?0.55:0.13);
-    s.pk=Math.max(s.pk*0.985,s.lvl);
+    s.lvl+= (post-s.lvl)*(post>s.lvl?kAtk:kRel);
+    s.pk=Math.max(s.pk*kPk,s.lvl);
     suml+=post*(i%2?0.8:1.05);sumr+=post*(i%2?1.05:0.8);
   });
   const mf=master.fader;
   const ml=Math.min(1,suml*0.34*mf),mr=Math.min(1,sumr*0.34*mf);
-  master.l+=(ml-master.l)*(ml>master.l?0.5:0.12);
-  master.r+=(mr-master.r)*(mr>master.r?0.5:0.12);
+  master.l+=(ml-master.l)*(ml>master.l?kAtk:kRel);
+  master.r+=(mr-master.r)*(mr>master.r?kAtk:kRel);
   }
-  master.pkl=Math.max(master.pkl*0.985,master.l);
-  master.pkr=Math.max(master.pkr*0.985,master.r);
-  // ballistique aiguilles (300ms VU)
-  master.needL+=(master.l-master.needL)*0.08;
-  master.needR+=(master.r-master.needR)*0.08;
+  master.pkl=Math.max(master.pkl*kPk,master.l);
+  master.pkr=Math.max(master.pkr*kPk,master.r);
+  // ballistique aiguilles VU (tau 150 ms, temps reel)
+  const kNd=kdt(dt,150);
+  master.needL+=(master.l-master.needL)*kNd;
+  master.needR+=(master.r-master.needR)*kNd;
 
   ctxs.forEach((c,i)=>drawMeter(c,st[i].lvl,st[i].pk));
   drawMeter(mctxs[0],master.l,master.pkl);
@@ -1602,7 +1616,8 @@ function renderSystem(){
       <div class="mn"><span>XRUN</span><b style="color:${s.xrun?"var(--warn)":"var(--good)"}">${s.xrun}</b></div>
       <div class="mn"><span>LATENCE</span><b>${((s.latency_us_one_way||0)/1000).toFixed(1)} ms</b></div>
       <div class="mn"><span>PROF CAP/MIX/ITER</span><b>${s.prof_cap_us}/${s.prof_mix_us}/${s.prof_iter_us} µs</b></div>
-      <div class="mn"><span>RING DROPS</span><b>${s.ring_drops}</b></div>`;
+      <div class="mn"><span>RING DROPS</span><b>${s.ring_drops}</b></div>
+      <div class="mn"><span>FPS GUI</span><b style="color:${(window.__fps&&window.__fps.v||0)<30?"var(--warn)":"var(--good)"}">${window.__fps&&window.__fps.v||"-"}</b></div>`;
   }
 }
 let driftTimer=null;
