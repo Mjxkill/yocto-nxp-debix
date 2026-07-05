@@ -39,10 +39,17 @@ Item {
         border.color: "#0a0d10"
         gradient: Gradient {
             GradientStop { position: 0; color: "#3a434b" }
-            GradientStop { position: 0.48; color: "#252c32" }
-            GradientStop { position: 0.52; color: "#e5a13c" }
-            GradientStop { position: 0.56; color: "#252c32" }
+            GradientStop { position: 0.5; color: "#252c32" }
             GradientStop { position: 1; color: "#181d22" }
+        }
+        // trait ambre EXPLICITE : l'arrêt de dégradé (~0.9 px) passait
+        // sous le pixel et disparaissait selon l'arrondi (retour user)
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - 6
+            height: 2
+            color: "#e5a13c"
         }
     }
 

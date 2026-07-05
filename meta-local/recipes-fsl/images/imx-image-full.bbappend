@@ -125,3 +125,6 @@ IMAGE_INSTALL:append = " packagegroup-imx-ml"
 # (couche clonée dans sources/meta-browser, branche compatible scarthgap)
 # chromium-ozone-wayland tire ses RDEPENDS (libcxx, nspr, nss, upower).
 IMAGE_INSTALL:append = " chromium-ozone-wayland mixer-kiosk"
+
+# V10-N4.4 — calibration tactile GT911 (générée par l'écran 5 mires)
+IMAGE_INSTALL:append = " goodix-calibration"

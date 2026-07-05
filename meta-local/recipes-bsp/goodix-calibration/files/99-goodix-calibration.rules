@@ -1,0 +1,2 @@
+# Calibration tactile GT911 — générée par mixer-console (5 mires)
+ATTRS{name}=="Goodix Capacitive TouchScreen", ENV{LIBINPUT_CALIBRATION_MATRIX}="1.01585 -0.00514 -0.01292 0.00505 1.04413 -0.03501"
