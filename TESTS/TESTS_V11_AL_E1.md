@@ -63,7 +63,7 @@ dev (paplay → gadget UAC2 → USB IN → OUT 1/2), écoute casque utilisateur.
   passage 2→3 Biquads/Ch (BQ10 actif sans power-cycle DAC).
 - 2e occurrence de l'off-by-one kernel MAX_REG=0x7E : **BQ6 (P16_R108-127)
   EIO comme BQ12** → slots canal B ordonnés {BQ10, BQ6}, fix kernel
-  buildé (Image prête, reboot à planifier).
+  déployé board 2026-07-06 (module snd-soc-tac5212.ko dans /lib/modules/6.6.36-rt35 — ATTENTION double arbo modules 6.6.36 ET 6.6.36-rt35, le kernel charge la rt35) ; BQ6+BQ12 écriture/relecture OK, anti-larsen 0 EIO au boot.
 
 **Daemon E1b** : slots PAR CANAL {5,9}/{10,6}, détection par canal (plus
 de max par paire), force '3 Biquads/Ch' au start, BQ1/BQ2 laissés au

@@ -56,10 +56,9 @@
 
 #define SLOTS_PER_CH   2
 /* slots AFS par canal local du TAC (A=canal impair 1, B=canal 2).
- * Canal B : BQ10 en PREMIER — BQ6 finit au reg 0x7F et déclenche le même
- * off-by-one kernel MAX_REG=0x7E que BQ12 (EIO) tant que le fix
- * apply-tac5212-bq12-maxreg n'est pas déployé. */
-static const int SLOT_BQ[2][SLOTS_PER_CH] = { { 5, 9 }, { 10, 6 } };
+ * BQ6/BQ12 exigent le fix kernel apply-tac5212-bq12-maxreg (MAX_REG
+ * 0x7E→0x7F, déployé board 2026-07-06) — sans lui, EIO sur ces slots. */
+static const int SLOT_BQ[2][SLOTS_PER_CH] = { { 5, 9 }, { 6, 10 } };
 
 /* ---- config (défauts = ARCHI) ---- */
 static struct {
