@@ -34,6 +34,9 @@ SRC_URI += "file://apply-sdram2-dt.py"
 # de imx8mp-debix-core-TD080B.dts, pads GPIO1_IO09/IO14 libres chez nous)
 SRC_URI += "file://apply-goodix-touch-dt.py"
 
+# V10-N6b — panneau DSI plein feux dès l'allumage (reset DCS interne = 12)
+SRC_URI += "file://apply-panel-max-brightness.py"
+
 # V7.0-E7.4.b — patch simple-card.c to support N codec phandles per DAI link
 # (upstream hardcodes num_codecs=1, blocking multi-TAC TDM binding)
 SRC_URI += "file://apply-simple-card-multicodec.py"
@@ -79,6 +82,8 @@ do_patch:append() {
     python3 ${WORKDIR}/apply-sdram2-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
     # V10-P4c tactile GT911 (i2c2 0x5d + pinctrl_mipi_tp)
     python3 ${WORKDIR}/apply-goodix-touch-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
+    # V10-N6b luminosité panneau max dès enable
+    python3 ${WORKDIR}/apply-panel-max-brightness.py ${S}
     # V7.0-E7.4.b simple-card multi-codec support (idempotent, backward-compat)
     python3 ${WORKDIR}/apply-simple-card-multicodec.py ${S}
     # V7.0-E7.4.b imx-card link_id : keep sequential default for SOF tplg match
