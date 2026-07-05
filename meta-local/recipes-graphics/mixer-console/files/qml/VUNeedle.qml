@@ -25,6 +25,7 @@ Item {
             grad.addColorStop(1, "#100d0b");
             ctx.fillStyle = grad;
             ctx.fillRect(0, 0, w, h);
+            // PIVOT commun aiguille/graduations : (w/2, h*1.12), arc ±50.4°
             const cx = w / 2, cy = h * 1.12, r = h * 0.92;
             for (let i = 0; i <= 10; i++) {
                 const a = -Math.PI * 0.28 + (i / 10) * Math.PI * 0.56;
@@ -39,17 +40,17 @@ Item {
         Component.onCompleted: requestPaint()
     }
 
-    Rectangle {   // aiguille GPU
+    Rectangle {   // aiguille GPU — même pivot que les graduations
         id: needle
         width: 2.4
-        height: vu.height * 0.86
+        height: vu.height * 0.90            // pointe au milieu des ticks (r-6)
         radius: 1
         color: "#e9e5da"
         antialiasing: true
         x: vu.width / 2 - width / 2
-        y: vu.height * 1.12 - height
+        y: vu.height * 1.12 - height        // bas du rect = pivot (w/2, 1.12h)
         transformOrigin: Item.Bottom
-        rotation: -50.4 + vu.shown * 100.8   // -0.28π .. +0.28π en degrés
+        rotation: -50.4 + vu.shown * 100.8  // ±50.4° = ±0.28π, aligné ticks
     }
 
     Text {

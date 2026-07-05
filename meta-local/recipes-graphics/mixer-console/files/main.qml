@@ -204,7 +204,7 @@ Window {
 
                             Row {
                                 width: parent.width
-                                height: 130
+                                height: 91      // retour utilisateur : x0.7
                                 spacing: 6
                                 VUNeedle {
                                     id: vuL
@@ -220,7 +220,7 @@ Window {
 
                             Row {
                                 width: parent.width
-                                height: parent.height - 130 - 60
+                                height: parent.height - 91 - 60
                                 spacing: 12
                                 Fader {
                                     id: masterFader
