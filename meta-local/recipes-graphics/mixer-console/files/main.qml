@@ -35,9 +35,12 @@ Window {
             return a;
         }
 
+        property int tickN: 0
         Connections {
             target: mixer
             function onUiTick() {
+                scene.tickN++;
+                const slow = (scene.tickN % 4) === 0;   // textes à ~5 Hz, DANS le tick
                 const iv = mixer.inLevels, ov = mixer.outLevels;
                 const strips = scene.banks[scene.currentBank].strips;
                 for (let i = 0; i < 8; i++) {
@@ -47,10 +50,15 @@ Window {
                     const v = d ? ((d.t === "in" ? iv : ov)[d.idx] || 0) : 0;
                     // epsilon : ne réveille le scenegraph que si ça a bougé
                     if (Math.abs(item.level - v) > 0.004) item.level = v;
+                    if (slow) item.updateDbro();
                 }
                 const l = ov.length > 0 ? ov[0] : 0, r = ov.length > 1 ? ov[1] : 0;
                 if (Math.abs(masterL.level - l) > 0.004) { masterL.level = l; vuL.level = l; }
                 if (Math.abs(masterR.level - r) > 0.004) { masterR.level = r; vuR.level = r; }
+                if (slow) {
+                    peakLTxt.text = "PEAK L  " + (l > 0.003 ? (l*60-60).toFixed(1) : "-∞");
+                    peakRTxt.text = "PEAK R  " + (r > 0.003 ? (r*60-60).toFixed(1) : "-∞");
+                }
             }
         }
 
@@ -251,13 +259,6 @@ Window {
                                     Text { id: peakLTxt; text: "PEAK L  -∞"; color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
                                     Text { id: peakRTxt; text: "PEAK R  -∞"; color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
                                     Text { text: "FW " + mixer.version; color: "#5c666e"; font.pixelSize: 9; font.family: "monospace" }
-                                    Timer {
-                                        interval: 200; running: true; repeat: true
-                                        onTriggered: {
-                                            peakLTxt.text = "PEAK L  " + (masterL.level > 0.003 ? (masterL.level*60-60).toFixed(1) : "-∞");
-                                            peakRTxt.text = "PEAK R  " + (masterR.level > 0.003 ? (masterR.level*60-60).toFixed(1) : "-∞");
-                                        }
-                                    }
                                 }
                             }
                         }

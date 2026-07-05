@@ -17,6 +17,14 @@ Item {
     signal sendToggled(int bus, bool on)
 
     property alias faderValue: fader.value
+    // appelée par le tick d'affichage global (1 tick sur 4) — AUCUN timer
+    // local : les timers désalignés créaient des frames hors tick (30 fps
+    // au lieu de 22)
+    function updateDbro() {
+        const on = level > 0.003;
+        dbro.text = on ? (level * 60 - 60).toFixed(1) : "-∞";
+        dbro.color = on ? "#e9e5da" : "#5c666e";
+    }
     property bool muted: false
     property var sendsOn: [false, false, false, false]
 
@@ -72,14 +80,6 @@ Item {
             color: "#5c666e"
             font.pixelSize: 11
             font.family: "monospace"
-            Timer {
-                interval: 200; running: true; repeat: true
-                onTriggered: {
-                    const on = strip.level > 0.003;
-                    dbro.text = on ? (strip.level * 60 - 60).toFixed(1) : "-∞";
-                    dbro.color = on ? "#e9e5da" : "#5c666e";
-                }
-            }
         }
 
         Row {
