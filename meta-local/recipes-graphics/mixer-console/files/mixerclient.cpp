@@ -33,14 +33,14 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, [this] {
         if (m_connected && m_pending.size() < 3)
-            request("{\"op\":\"get_meters\"}\n", TagMeters);
+            request("{\"op\":\"get_meters_lite\"}\n", TagMeters);
     });
     m_meterTimer.start();
 
     m_statTimer.setInterval(1000);
     connect(&m_statTimer, &QTimer::timeout, this, [this] {
         if (m_connected && m_pending.size() < 3)
-            request("{\"op\":\"get_stat\"}\n", TagStat);
+            request("{\"op\":\"get_state\"}\n", TagStat);
     });
     m_statTimer.start();
 

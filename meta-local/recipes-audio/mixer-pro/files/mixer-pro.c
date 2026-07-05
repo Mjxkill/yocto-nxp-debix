@@ -2742,6 +2742,26 @@ static void handle_cmd(int fd, const char *line)
 			        atomic_load_explicit(&g_out_gain_m[o], memory_order_relaxed));
 		dprintf(fd, "]}\n");
 
+	} else if (json_has_op(line, "get_meters_lite")) {
+		/* V10-N2 : peaks seuls (in/out/fx), SANS le payload analyzer
+		 * (~4.8 KB) — pour l'app native mixer-console qui poll à 30 Hz
+		 * et n'affiche pas encore de spectre. */
+		int n = 0;
+		n += snprintf(reply + n, sizeof(reply) - n, "{\"ok\":true,\"in\":[");
+		for (int i = 0; i < N_INPUT_TOTAL && n < (int)sizeof(reply); i++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", i ? "," : "",
+				      atomic_load_explicit(&g_st.peak_in[i], memory_order_relaxed));
+		n += snprintf(reply + n, sizeof(reply) - n, "],\"out\":[");
+		for (int o = 0; o < N_OUTPUT_TOTAL && n < (int)sizeof(reply); o++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", o ? "," : "",
+				      atomic_load_explicit(&g_st.peak_out[o], memory_order_relaxed));
+		n += snprintf(reply + n, sizeof(reply) - n, "],\"fx\":[");
+		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(reply); b++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", b ? "," : "",
+				      atomic_load_explicit(&g_st.peak_fx[b], memory_order_relaxed));
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
+		write(fd, reply, n);
+
 	} else if (json_has_op(line, "get_meters")) {
 		/* E7.1 + E7.5 : retourne peaks + analyzer (spectrum + scope) en
 		 * un seul round-trip, consommé par mixer-gui-http /api/stream.

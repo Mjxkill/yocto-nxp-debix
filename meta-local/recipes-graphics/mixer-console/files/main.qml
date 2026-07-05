@@ -44,14 +44,13 @@ Window {
                     const item = stripRep.itemAt(i);
                     if (!item) continue;
                     const d = i < strips.length ? strips[i] : null;
-                    if (!d) { item.level = 0; continue; }
-                    const arr = d.t === "in" ? iv : ov;
-                    item.level = arr.length > d.idx ? arr[d.idx] : 0;
+                    const v = d ? ((d.t === "in" ? iv : ov)[d.idx] || 0) : 0;
+                    // epsilon : ne réveille le scenegraph que si ça a bougé
+                    if (Math.abs(item.level - v) > 0.004) item.level = v;
                 }
-                masterL.level = ov.length > 0 ? ov[0] : 0;
-                masterR.level = ov.length > 1 ? ov[1] : 0;
-                vuL.level = masterL.level;
-                vuR.level = masterR.level;
+                const l = ov.length > 0 ? ov[0] : 0, r = ov.length > 1 ? ov[1] : 0;
+                if (Math.abs(masterL.level - l) > 0.004) { masterL.level = l; vuL.level = l; }
+                if (Math.abs(masterR.level - r) > 0.004) { masterR.level = r; vuR.level = r; }
             }
         }
 
