@@ -49,6 +49,24 @@ A.L.A. (métal + reflet balayant, GPU) → console. TDM aligné ce boot.
 8. flash.bin : patch binaire à tailles égales OK (FIT sans hash vérifié) ;
    ne JAMAIS recompiler u-boot sur cette board (ne boote pas).
 
+## N6e/N6f — Boot 100 % A.L.A. (logo kernel + persistance pendant tac-reset)
+
+Le « gros logo debix » restant au boot était le logo fbcon du KERNEL :
+Polyhex substitue `drivers/video/logo/logo_linux_clut224.ppm` (DEBIX 770×192,
+CONFIG_LOGO_LINUX_CLUT224=y). Ni U-Boot, ni boot.scr (vérifié : texte
+uniquement, aucune commande `bmp display`).
+
+| Changement | Détail |
+|---|---|
+| Logo kernel | PPM A.L.A. PLEIN ÉCRAN 800×1280 (dessiné paysage 1280×800 puis rotate 90° CCW — fbcon n'oriente pas), réplique la géométrie de l'IntroOverlay (mêmes textes/tailles/couleurs, SANS barre de progression — demande utilisateur, emplacement réservé pour position identique). ASCII P3 obligatoire (pnmtologo refuse P6 binaire). Générateur archivé : `files/gen-ala-kernel-logo.py` |
+| Persistance logo | getty@tty1 désactivé (c'était LUI qui effaçait le fb pendant le tac-reset) — board + ROOTFS_POSTPROCESS_COMMAND image. `vt.global_cursor_default=0` dans bootargs (curseur clignotant). Login local : série + ssh |
+| boot.scr | Rebrandé A.L.A. (echo + bootargs `ALA_Electrosens V1.0`), recette boot-script-rt alignée (mkimage -n, LIC_FILES_CHKSUM) |
+| Intro app | Reste affichée tant que `tac-reset.service` tourne (oneshot+RemainAfterExit : `activating`→`active`, sondé 500 ms via BootStatus/QProcess puis arrêt). Barre 3 étapes : 25 % démarrage → 65 % « INITIALISATION DES CONVERTISSEURS… » → 100 % connecté → fondu. Avant : intro fondue à ~23 s, tac-reset fini à 25,7 s → transitoires visibles sur les VU-mètres |
+
+Chaîne complète validée à froid : logo A.L.A. U-Boot → logo A.L.A. kernel
+plein écran (identique à l'intro, reste affiché en continu) → intro animée →
+console. **Test utilisateur : « c'est parfait » — VALIDÉ 2026-07-05.**
+
 ## Écarts / reste à faire
 
 - Sprint SOF « priming SAI RX » (voies décalées aléatoirement au boot,

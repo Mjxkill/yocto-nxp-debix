@@ -10,9 +10,53 @@
 #include <QFile>
 #include <QEvent>
 #include <QPointerEvent>
+#include <QProcess>
 #include <QDebug>
 #include "mixerclient.h"
 #include "calibration.h"
+
+/* V10-N6f — l'intro doit rester affichée tant que le tac-reset de boot
+ * tourne (ses transitoires sont visibles sur les VU-mètres). L'unité
+ * tac-reset.service est oneshot + RemainAfterExit : « activating » pendant
+ * le reset, « active » une fois fini. On sonde jusqu'à la fin (états
+ * inactive/failed = unité absente ou désactivée → ne pas bloquer l'intro). */
+class BootStatus : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(bool tacResetDone READ tacResetDone NOTIFY tacResetDoneChanged)
+public:
+    explicit BootStatus(QObject *parent = nullptr) : QObject(parent) {
+        m_poll.setInterval(500);
+        connect(&m_poll, &QTimer::timeout, this, &BootStatus::check);
+        m_poll.start();
+        check();
+    }
+    bool tacResetDone() const { return m_done; }
+signals:
+    void tacResetDoneChanged();
+private:
+    void check() {
+        if (m_done || m_proc)
+            return;
+        m_proc = new QProcess(this);
+        connect(m_proc, &QProcess::finished, this, [this] {
+            const QString st = QString::fromLatin1(
+                m_proc->readAllStandardOutput()).trimmed();
+            m_proc->deleteLater();
+            m_proc = nullptr;
+            if (st != QLatin1String("activating")) {
+                m_done = true;
+                m_poll.stop();
+                emit tacResetDoneChanged();
+            }
+        });
+        m_proc->start(QStringLiteral("systemctl"),
+                      {QStringLiteral("is-active"),
+                       QStringLiteral("tac-reset.service")});
+    }
+    QTimer m_poll;
+    QProcess *m_proc = nullptr;
+    bool m_done = false;
+};
 
 /* diag tactile (blocage au changement de page) : trace CHAQUE événement
  * pointeur brut reçu par la fenêtre — permet de distinguer « événement
@@ -98,10 +142,12 @@ int main(int argc, char *argv[])
     FpsMeter fps;
     MixerClient mixer;
     CalibrationHelper calibHelper;
+    BootStatus bootStatus;
     mixer.setEngine(&engine);
     engine.rootContext()->setContextProperty("fpsMeter", &fps);
     engine.rootContext()->setContextProperty("mixer", &mixer);
     engine.rootContext()->setContextProperty("calib", &calibHelper);
+    engine.rootContext()->setContextProperty("boot", &bootStatus);
     engine.load(QUrl(QStringLiteral("qrc:/MixerConsole/main.qml")));
     if (engine.rootObjects().isEmpty())
         return 1;

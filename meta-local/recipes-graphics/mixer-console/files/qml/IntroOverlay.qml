@@ -23,7 +23,10 @@ Rectangle {
     Timer {
         interval: 250; running: !intro.done; repeat: true
         onTriggered: {
-            if (mixer.connected && Date.now() - intro.t0 > 3000) {
+            // V10-N6f : rester affiché tant que le tac-reset de boot tourne
+            // (transitoires visibles sur les VU-mètres sinon)
+            if (mixer.connected && boot.tacResetDone
+                    && Date.now() - intro.t0 > 3000) {
                 intro.done = true;
                 fadeOut.start();
             }
@@ -126,7 +129,9 @@ Rectangle {
             width: 320; height: 3; radius: 2
             color: "#1b2126"
             Rectangle {
-                width: mixer.connected ? parent.width : parent.width * 0.25
+                width: mixer.connected
+                       ? (boot.tacResetDone ? parent.width : parent.width * 0.65)
+                       : parent.width * 0.25
                 height: parent.height; radius: 2
                 color: "#e5a13c"
                 Behavior on width { NumberAnimation { duration: 500 } }
@@ -134,7 +139,10 @@ Rectangle {
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: mixer.connected ? "MOTEUR AUDIO CONNECTÉ" : "DÉMARRAGE DU MOTEUR AUDIO…"
+            text: mixer.connected
+                  ? (boot.tacResetDone ? "MOTEUR AUDIO CONNECTÉ"
+                                       : "INITIALISATION DES CONVERTISSEURS…")
+                  : "DÉMARRAGE DU MOTEUR AUDIO…"
             color: "#5c666e"
             font.pixelSize: 11
             font.letterSpacing: 3

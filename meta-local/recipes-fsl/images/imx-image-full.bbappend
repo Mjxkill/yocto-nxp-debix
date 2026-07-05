@@ -132,3 +132,11 @@ IMAGE_INSTALL:append = " goodix-calibration"
 # V10-NATIVE — console écran native Qt6/eglfs (remplace le kiosk chromium
 # au boot ; chromium reste installé en fallback debug pour l'instant)
 IMAGE_INSTALL:append = " mixer-console"
+
+# V10-N6e — pas de getty sur la dalle : le logo boot kernel A.L.A. (plein
+# écran) doit rester affiché jusqu'au modeset de mixer-console. getty@tty1
+# effaçait le framebuffer pendant le tac-reset. Login local : série + ssh.
+ROOTFS_POSTPROCESS_COMMAND += "ala_disable_getty_tty1; "
+ala_disable_getty_tty1() {
+    rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/getty.target.wants/getty@tty1.service
+}

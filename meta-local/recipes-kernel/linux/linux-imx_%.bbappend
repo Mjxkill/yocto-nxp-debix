@@ -37,6 +37,10 @@ SRC_URI += "file://apply-goodix-touch-dt.py"
 # V10-N6b — panneau DSI plein feux dès l'allumage (reset DCS interne = 12)
 SRC_URI += "file://apply-panel-max-brightness.py"
 
+# V10-N6e — logo de boot kernel A.L.A. (Polyhex avait remplacé le logo
+# Linux clut224 par le logo DEBIX 770x192 — même mécanique, notre PPM)
+SRC_URI += "file://logo_ala_clut224.ppm"
+
 # V7.0-E7.4.b — patch simple-card.c to support N codec phandles per DAI link
 # (upstream hardcodes num_codecs=1, blocking multi-TAC TDM binding)
 SRC_URI += "file://apply-simple-card-multicodec.py"
@@ -84,6 +88,8 @@ do_patch:append() {
     python3 ${WORKDIR}/apply-goodix-touch-dt.py ${S}/arch/arm64/boot/dts/freescale/imx8mp-evk.dts
     # V10-N6b luminosité panneau max dès enable
     python3 ${WORKDIR}/apply-panel-max-brightness.py ${S}
+    # V10-N6e logo boot kernel A.L.A.
+    cp ${WORKDIR}/logo_ala_clut224.ppm ${S}/drivers/video/logo/logo_linux_clut224.ppm
     # V7.0-E7.4.b simple-card multi-codec support (idempotent, backward-compat)
     python3 ${WORKDIR}/apply-simple-card-multicodec.py ${S}
     # V7.0-E7.4.b imx-card link_id : keep sequential default for SOF tplg match

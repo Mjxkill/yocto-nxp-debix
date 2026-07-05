@@ -5,7 +5,7 @@ rcu_nocbs=2,3 aux bootargs, ce qui réserve les cores 2 et 3 pour mixer-pro \
 (configurés via CPUAffinity dans le .service)."
 HOMEPAGE = "https://github.com/Mjxkill/yocto-nxp-debix"
 LICENSE = "GPL-2.0-or-later"
-LIC_FILES_CHKSUM = "file://boot.cmd;beginline=1;endline=1;md5=8ebef8cbb1d0893d1336ce149c97b068"
+LIC_FILES_CHKSUM = "file://boot.cmd;beginline=1;endline=1;md5=c6a341cac315f3283703d7714b4a0e1a"
 
 SRC_URI = "file://boot.cmd"
 
@@ -18,7 +18,7 @@ inherit deploy
 # Compile boot.cmd → boot.scr et l'installe directement sur la partition
 # /boot (FAT mmcblk1p1) au runtime via package install scripts.
 do_compile() {
-    mkimage -A arm -O linux -T script -C none -n "Debix RT boot" \
+    mkimage -A arm -O linux -T script -C none -n "A.L.A. RT boot" \
         -d ${WORKDIR}/boot.cmd ${B}/boot.scr
 }
 
