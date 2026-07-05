@@ -154,8 +154,8 @@ Window {
                         anchors.leftMargin: 18
                         spacing: 22
                         Column {
-                            Text { text: "MODEL AB"; color: "#e9e5da"; font.pixelSize: 19; font.bold: true; font.letterSpacing: 4 }
-                            Text { text: "ELECTROSENS"; color: "#e5a13c"; font.pixelSize: 9; font.letterSpacing: 5 }
+                            Text { text: "A.L.A."; color: "#e9e5da"; font.pixelSize: 20; font.bold: true; font.letterSpacing: 5 }
+                            Text { text: "AUDIO LIVE ASSISTANT · ELECTROSENS R&D"; color: "#e5a13c"; font.pixelSize: 8; font.letterSpacing: 2 }
                         }
                         Column {
                             Text { text: "LATENCE"; color: "#8b959d"; font.pixelSize: 9; font.letterSpacing: 2 }
