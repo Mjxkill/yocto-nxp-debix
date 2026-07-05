@@ -2071,15 +2071,40 @@ function parseMbCfg(payload){
         enable_emp_deemp=view.getUint32(8,true);
   const reservedBytes=payload.slice(12,44),empBytes=payload.slice(44,100),
         deempBytes=payload.slice(100,156),crossBytes=payload.slice(156,324);
-  const total=Math.max(1,Math.floor((size-MBDRC_HDR)/DRC_PARAMS_SIZE));
-  const ppb=Math.max(1,Math.floor(total/Math.max(1,num_bands)));
+  /* V10-FX blob V3 : détection par taille (miroir firmware + stripfx.js) —
+   * section optionnelle crossover PAR CANAL (ppb×168 o) après drc_coef */
+  const trailing=size-MBDRC_HDR;
+  const oneBand=Math.max(1,num_bands)*DRC_PARAMS_SIZE, oneBandX=oneBand+168;
+  let ppb, xoverPerCh=false;
+  if(trailing%oneBandX===0&&trailing/oneBandX>1&&trailing/oneBandX<=8){
+    ppb=trailing/oneBandX; xoverPerCh=true;
+  }else{
+    ppb=Math.max(1,Math.floor(trailing/oneBand));
+  }
   const drc=[];
   for(let b=0;b<num_bands;b++){const row=[];
     for(let c=0;c<ppb;c++)
       row.push(parseDrcParams(view,MBDRC_HDR+(b*ppb+c)*DRC_PARAMS_SIZE));
+    /* normalisation à 8 entrées (copies profondes) — pack per-channel */
+    while(row.length<8){
+      const src=row[row.length-1],cp={};
+      for(const k in src)cp[k]=k==="_raw"?new Uint8Array(src._raw):src[k];
+      row.push(cp);
+    }
     drc.push(row);}
+  const fcsGlobal=extractFcs(crossBytes,num_bands,48000);
+  const fcsCh=[],xbase=MBDRC_HDR+num_bands*ppb*DRC_PARAMS_SIZE;
+  for(let c=0;c<8;c++){
+    if(xoverPerCh){
+      const cc=Math.min(c,ppb-1);
+      fcsCh.push(extractFcs(payload.slice(xbase+cc*168,xbase+(cc+1)*168),num_bands,48000));
+    }else{
+      fcsCh.push({low:fcsGlobal.low,mid:fcsGlobal.mid,high:fcsGlobal.high});
+    }
+  }
   return{size,num_bands,enable_emp_deemp,reservedBytes,empBytes,deempBytes,crossBytes,
-    crossover_fcs:extractFcs(crossBytes,num_bands,48000),drc,params_per_band:ppb};
+    crossover_fcs:fcsGlobal,xover_per_ch:xoverPerCh,crossover_fcs_ch:fcsCh,
+    drc,params_per_band:8};
 }
 function packDrcCfg(p){
   const N=p.params.length,tot=DRC_CFG_HDR+N*DRC_PARAMS_SIZE;
@@ -2089,12 +2114,19 @@ function packDrcCfg(p){
   return buf;
 }
 function packMbCfg(p){
-  const tot=MBDRC_HDR+p.num_bands*p.params_per_band*DRC_PARAMS_SIZE;
+  /* V10-FX : blob V3 si xover par canal (8 sections de 168 o après drc_coef) */
+  const xover=p.xover_per_ch===true, ppb=p.params_per_band;
+  const tot=MBDRC_HDR+p.num_bands*ppb*DRC_PARAMS_SIZE+(xover?ppb*168:0);
   const buf=new Uint8Array(tot),dv=new DataView(buf.buffer);
   dv.setUint32(0,tot,true);dv.setUint32(4,p.num_bands,true);dv.setUint32(8,p.enable_emp_deemp,true);
   buf.set(p.reservedBytes,12);buf.set(p.empBytes,44);buf.set(p.deempBytes,100);buf.set(p.crossBytes,156);
-  for(let b=0;b<p.num_bands;b++)for(let c=0;c<p.params_per_band;c++)
-    buf.set(packDrcParams(p.drc[b][c]),MBDRC_HDR+(b*p.params_per_band+c)*DRC_PARAMS_SIZE);
+  for(let b=0;b<p.num_bands;b++)for(let c=0;c<ppb;c++)
+    buf.set(packDrcParams(p.drc[b][c]),MBDRC_HDR+(b*ppb+c)*DRC_PARAMS_SIZE);
+  if(xover){
+    const xbase=MBDRC_HDR+p.num_bands*ppb*DRC_PARAMS_SIZE;
+    for(let c=0;c<ppb;c++)
+      buf.set(packCross(p.num_bands,48000,p.crossover_fcs_ch[c]),xbase+c*168);
+  }
   return buf;
 }
 const drcDefaults=()=>({enabled:1,threshold_dB:-30,knee_dB:20,ratio:10,pre_delay_ms:6,
@@ -2237,20 +2269,32 @@ function drcEditor(c){
         tabs.appendChild(t);
       }
       inner.appendChild(tabs);
-      const fcs=b.parsed.crossover_fcs;
+      /* V10-FX : crossover PAR CANAL (blob V3) — le knob édite le canal
+       * courant, le 1er réglage bascule le blob en layout V3 */
+      const xch=A.idx%8;
+      const fcs=b.parsed.crossover_fcs_ch[xch];
       const xk=nb===2?["low"]:nb===3?["low","high"]:["low","mid","high"];
       const xg=el("div","kgridf");xg.style.marginBottom="8px";
       xk.forEach(k=>{
-        xg.appendChild(MXKNOB({label:"Xover "+k,min:20,max:20000,val:fcs[k],unit:"Hz",
+        xg.appendChild(MXKNOB({label:"Xover "+k+" (canal)",min:20,max:20000,val:fcs[k],unit:"Hz",
           log:true,step:1,onchange:v=>{
             fcs[k]=Math.max(20,Math.min(Math.round(v),20000));
-            b.parsed.crossBytes=packCross(nb,48000,fcs);touch();
+            b.parsed.xover_per_ch=true;touch();
           }}));
       });
       inner.appendChild(xg);
     }
     const head=el("div","drchead");
-    head.appendChild(pwr(p.enabled===1,on=>{p.enabled=on?1:0;touch();}));
+    head.appendChild(pwr(p.enabled===1,on=>{
+      /* V10-FX : sur multiband, ACTIF/OFF = le canal sur TOUTES les bandes */
+      if(b.kind==="multiband"){
+        const ch=A.idx%8;
+        for(const row of b.parsed.drc)row[Math.min(ch,row.length-1)].enabled=on?1:0;
+      }else{
+        p.enabled=on?1:0;
+      }
+      touch();
+    }));
     head.appendChild(el("span","lb","ACTIF"));
     head.appendChild(dirt);
     inner.appendChild(head);

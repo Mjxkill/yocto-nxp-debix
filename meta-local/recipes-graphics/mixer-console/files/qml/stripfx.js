@@ -300,20 +300,60 @@ function parseBlob(hex, fullName) {
               emp = view.getUint32(8, true);
         const reservedBytes = payload.slice(12, 44), empBytes = payload.slice(44, 100),
               deempBytes = payload.slice(100, 156), crossBytes = payload.slice(156, 324);
-        const total = Math.max(1, Math.floor((size - MBDRC_HDR) / DRC_PARAMS_SIZE));
-        const ppb = Math.max(1, Math.floor(total / Math.max(1, num_bands)));
+        /* V10-FX blob V3 : détection par arithmétique de taille (miroir
+         * firmware multiband_drc_init_coef) — une section crossover PAR
+         * CANAL (ppb × 168 o) peut suivre les drc_coef. */
+        const trailing = size - MBDRC_HDR;
+        const oneBand = Math.max(1, num_bands) * DRC_PARAMS_SIZE;
+        const oneBandX = oneBand + 168;
+        let ppb, xoverPerCh = false;
+        if (trailing % oneBandX === 0 && trailing / oneBandX > 1
+                && trailing / oneBandX <= 8) {
+            ppb = trailing / oneBandX;
+            xoverPerCh = true;
+        } else {
+            ppb = Math.max(1, Math.floor(trailing / oneBand));
+        }
         const drc = [];
         for (let b = 0; b < num_bands; b++) {
             const row = [];
             for (let c = 0; c < ppb; c++)
                 row.push(parseDrcParams(view, MBDRC_HDR + (b * ppb + c) * DRC_PARAMS_SIZE));
+            /* V10-FX : normalisation à 8 entrées par bande (copies
+             * profondes) — l'édition par canal est toujours possible,
+             * le pack écrit systématiquement le layout per-channel. */
+            while (row.length < 8) {
+                const src = row[row.length - 1];
+                const cp = {};
+                for (const k in src) cp[k] = k === "_raw" ? new Uint8Array(src._raw) : src[k];
+                row.push(cp);
+            }
             drc.push(row);
+        }
+        const ppbNorm = 8;
+        /* crossover_fcs_ch : TOUJOURS exposé par canal (8 entrées) — V2 :
+         * répliques du global ; V3 : sections décodées. L'édition d'un
+         * canal pose xover_per_ch=true → le pack écrit le blob V3. */
+        const fcsGlobal = extractFcs(crossBytes, num_bands, 48000);
+        const fcsCh = [];
+        const xbase = MBDRC_HDR + num_bands * ppb * DRC_PARAMS_SIZE;
+        for (let c = 0; c < 8; c++) {
+            if (xoverPerCh) {
+                const cc = Math.min(c, ppb - 1);
+                fcsCh.push(extractFcs(payload.slice(xbase + cc * 168,
+                                                    xbase + (cc + 1) * 168),
+                                      num_bands, 48000));
+            } else {
+                fcsCh.push({ low: fcsGlobal.low, mid: fcsGlobal.mid,
+                             high: fcsGlobal.high });
+            }
         }
         return { kind: "multiband", abiHdr: abiHdr, size: size, num_bands: num_bands,
                  enable_emp_deemp: emp, reservedBytes: reservedBytes, empBytes: empBytes,
                  deempBytes: deempBytes, crossBytes: crossBytes,
-                 crossover_fcs: extractFcs(crossBytes, num_bands, 48000),
-                 drc: drc, params_per_band: ppb };
+                 crossover_fcs: fcsGlobal,
+                 xover_per_ch: xoverPerCh, crossover_fcs_ch: fcsCh,
+                 drc: drc, params_per_band: ppbNorm };
     }
     const size = view.getUint32(0, true), reservedBytes = payload.slice(4, 20);
     const N = Math.max(1, Math.floor((size - DRC_CFG_HDR) / DRC_PARAMS_SIZE));
@@ -327,7 +367,13 @@ function parseBlob(hex, fullName) {
 function packBlob(b) {
     let cfg;
     if (b.kind === "multiband") {
-        const tot = MBDRC_HDR + b.num_bands * b.params_per_band * DRC_PARAMS_SIZE;
+        /* V10-FX : blob V3 si xover par canal — 8 sections de 168 o après
+         * les drc_coef (le firmware clampe ch ≥ ppb sur la dernière). Le
+         * ppb passe à 8 en V3 (une entrée drc ET une entrée xover par ch). */
+        const xover = b.xover_per_ch === true;
+        const ppbOut = xover ? 8 : b.params_per_band;
+        const tot = MBDRC_HDR + b.num_bands * ppbOut * DRC_PARAMS_SIZE
+                    + (xover ? ppbOut * 168 : 0);
         cfg = new Uint8Array(tot);
         const dv = new DataView(cfg.buffer);
         dv.setUint32(0, tot, true); dv.setUint32(4, b.num_bands, true);
@@ -335,9 +381,17 @@ function packBlob(b) {
         cfg.set(b.reservedBytes, 12); cfg.set(b.empBytes, 44);
         cfg.set(b.deempBytes, 100); cfg.set(b.crossBytes, 156);
         for (let band = 0; band < b.num_bands; band++)
-            for (let c = 0; c < b.params_per_band; c++)
-                cfg.set(packDrcParams(b.drc[band][c]),
-                        MBDRC_HDR + (band * b.params_per_band + c) * DRC_PARAMS_SIZE);
+            for (let c = 0; c < ppbOut; c++) {
+                const src = b.drc[band][Math.min(c, b.params_per_band - 1)];
+                cfg.set(packDrcParams(src),
+                        MBDRC_HDR + (band * ppbOut + c) * DRC_PARAMS_SIZE);
+            }
+        if (xover) {
+            const xbase = MBDRC_HDR + b.num_bands * ppbOut * DRC_PARAMS_SIZE;
+            for (let c = 0; c < ppbOut; c++)
+                cfg.set(packCross(b.num_bands, 48000, b.crossover_fcs_ch[c]),
+                        xbase + c * 168);
+        }
     } else {
         const tot = DRC_CFG_HDR + b.params.length * DRC_PARAMS_SIZE;
         cfg = new Uint8Array(tot);
@@ -359,11 +413,15 @@ function packBlob(b) {
 function selfTest(hex, fullName) {
     const b = parseBlob(hex, fullName);
     if (!b) return "parse KO";
+    /* V10-FX : le 1er pack peut NORMALISER (V2 legacy → per-channel 8
+     * entrées, ajout section xover V3) — la taille peut donc changer au
+     * 1er tour. L'invariant devient l'idempotence du 2e tour. */
     const hex2 = packBlob(b);
-    if (hex2.length !== hex.length)
-        return "taille " + hex.length + "→" + hex2.length;
     const b2 = parseBlob(hex2, fullName);
     if (!b2) return "re-parse KO";
+    const hex3 = packBlob(b2);
+    if (hex3.length !== hex2.length)
+        return "taille instable " + hex2.length + "→" + hex3.length;
     const p1 = b.kind === "multiband" ? b.drc[0][0] : b.params[0];
     const p2 = b2.kind === "multiband" ? b2.drc[0][0] : b2.params[0];
     for (const k of ["enabled", "threshold_dB", "knee_dB", "ratio", "attack_ms"])

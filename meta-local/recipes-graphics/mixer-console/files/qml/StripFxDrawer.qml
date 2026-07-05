@@ -372,7 +372,9 @@ Rectangle {
                     }
                 }
 
-                // crossovers
+                // crossovers — V10-FX : PAR CANAL (blob V3). Le knob édite
+                // le canal courant du drawer ; le 1er réglage fait passer
+                // le blob en layout V3 (xover_per_ch).
                 Row {
                     visible: blob && blob.kind === "multiband"
                     spacing: 14
@@ -382,16 +384,19 @@ Rectangle {
                                   : blob.num_bands === 3 ? ["low", "high"] : ["low", "mid", "high"])
                         Knob {
                             from: 20; to: 20000; unit: "Hz"
-                            Component.onCompleted: value = blob.crossover_fcs[modelData]
+                            Component.onCompleted: value =
+                                blob.crossover_fcs_ch[drawer.chanIdx % 8][modelData]
                             onMoved: (v) => {
-                                blob.crossover_fcs[modelData] = Math.max(20, Math.min(Math.round(v), 20000));
-                                blob.crossBytes = FX.packCross(blob.num_bands, 48000, blob.crossover_fcs);
+                                const ch = drawer.chanIdx % 8;
+                                blob.crossover_fcs_ch[ch][modelData] =
+                                    Math.max(20, Math.min(Math.round(v), 20000));
+                                blob.xover_per_ch = true;
                                 blob.dirty = true; blobChanged();
                             }
                             Text {
                                 anchors.top: parent.top; anchors.topMargin: -12
                                 anchors.horizontalCenter: parent.horizontalCenter
-                                text: "XOVER " + modelData.toUpperCase()
+                                text: "XOVER " + modelData.toUpperCase() + " · CANAL"
                                 color: "#8b959d"; font.pixelSize: 9
                             }
                         }
@@ -421,7 +426,16 @@ Rectangle {
                             onTapped: {
                                 const p = parent.pp;
                                 if (!p) return;
-                                p.enabled = p.enabled === 1 ? 0 : 1;
+                                const v = p.enabled === 1 ? 0 : 1;
+                                // V10-FX : sur multiband, OFF/ACTIF = le
+                                // canal courant sur TOUTES les bandes
+                                if (blob.kind === "multiband") {
+                                    const ch = drawer.chanIdx % 8;
+                                    for (const row of blob.drc)
+                                        row[Math.min(ch, row.length - 1)].enabled = v;
+                                } else {
+                                    p.enabled = v;
+                                }
                                 blob.dirty = true; blobChanged();
                             }
                         }
