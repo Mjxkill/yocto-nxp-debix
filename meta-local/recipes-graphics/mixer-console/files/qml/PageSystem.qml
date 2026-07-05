@@ -148,6 +148,12 @@ Item {
                     }
                     Timer { id: resetTimer; interval: 3000; onTriggered: tacBtn.busy = false }
                 }
+                Rectangle {
+                    width: parent.width; height: 44; radius: 5
+                    color: "#1b2126"; border.color: "#39434b"
+                    Text { anchors.centerIn: parent; text: "CALIBRER LE TACTILE"; color: "#e9e5da"; font.pixelSize: 12; font.bold: true }
+                    TapHandler { onTapped: calib.start() }
+                }
             }
         }
     }

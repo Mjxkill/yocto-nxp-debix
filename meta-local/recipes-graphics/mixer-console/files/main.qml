@@ -8,6 +8,8 @@ Window {
     visibility: Window.FullScreen
     color: "#0c0f12"
 
+    CalibrationOverlay { }
+
     Item {
         id: scene
         width: 1280

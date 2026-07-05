@@ -11,6 +11,8 @@ SRC_URI = " \
     file://main.cpp \
     file://mixerclient.h \
     file://mixerclient.cpp \
+    file://calibration.h \
+    file://calibration.cpp \
     file://main.qml \
     file://qml/Strip.qml \
     file://qml/Fader.qml \
@@ -22,6 +24,7 @@ SRC_URI = " \
     file://qml/PageMastering.qml \
     file://qml/PageRouting.qml \
     file://qml/PageSystem.qml \
+    file://qml/CalibrationOverlay.qml \
 "
 
 S = "${WORKDIR}"

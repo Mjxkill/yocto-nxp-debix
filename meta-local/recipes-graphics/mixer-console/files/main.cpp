@@ -11,12 +11,14 @@
 #include <QPointerEvent>
 #include <QDebug>
 #include "mixerclient.h"
+#include "calibration.h"
 
 /* diag tactile (blocage au changement de page) : trace CHAQUE événement
  * pointeur brut reçu par la fenêtre — permet de distinguer « événement
  * jamais arrivé » (driver/eglfs) de « arrivé mais pas délivré » (grab). */
 class TouchLogger : public QObject {
 public:
+    CalibrationHelper *calib = nullptr;
     bool eventFilter(QObject *obj, QEvent *ev) override {
         switch (ev->type()) {
         case QEvent::TouchBegin:
@@ -33,6 +35,8 @@ public:
             qWarning() << "TOUCH-EV" << ev->type()
                        << int(p.x()) << int(p.y())
                        << "npts" << pe->points().size() << ids;
+            if (calib && ev->type() == QEvent::TouchBegin)
+                calib->feedTouch(p.x(), p.y());
             break;
         }
         default:
@@ -76,13 +80,16 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
     FpsMeter fps;
     MixerClient mixer;
+    CalibrationHelper calibHelper;
     mixer.setEngine(&engine);
     engine.rootContext()->setContextProperty("fpsMeter", &fps);
     engine.rootContext()->setContextProperty("mixer", &mixer);
+    engine.rootContext()->setContextProperty("calib", &calibHelper);
     engine.load(QUrl(QStringLiteral("qrc:/MixerConsole/main.qml")));
     if (engine.rootObjects().isEmpty())
         return 1;
     TouchLogger tlog;
+    tlog.calib = &calibHelper;
     if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().first())) {
         fps.attach(w);
         w->installEventFilter(&tlog);
