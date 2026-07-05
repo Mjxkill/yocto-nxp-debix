@@ -48,4 +48,33 @@ notch RBJ Q30 −9 dB (approfondi jusqu'à −18), libération 60 s.
   suppression < 1 s ? statut : `socat - UNIX-CONNECT:/run/anti-larsen.sock`
   → notch listé à la bonne fréquence ; musique non dégradée ensuite.
 
-## Test utilisateur : EN ATTENTE
+## E1b — révision per-channel (datasheet) + VALIDATION UTILISATEUR
+
+Nuit du 2026-07-05→06, tests tone 123 Hz injecté par USB depuis le PC de
+dev (paplay → gadget UAC2 → USB IN → OUT 1/2), écoute casque utilisateur.
+
+**Découvertes (datasheet TAC5212 SLASF23A Table 7-48 + A/B à l'oreille) :**
+- Allocation biquads DAC MODULO 4 CANAUX (famille TAC5x1x 4ch) : sur
+  TAC5212, canal 1 = BQ1/5/9, canal 2 = BQ2/6/10, **BQ3/4/7/8/11/12 =
+  canaux inexistants (morts)**. Le plan initial « slots 7-12 » était nul.
+- Format coefficients : **N1/D1 divisés par 2** (validé : format plein
+  sature D1 des notchs graves → filtre inopérant). coef_halved=1 défaut.
+- Écriture à chaud OK (clignotement 5 s/5 s audible), y compris le
+  passage 2→3 Biquads/Ch (BQ10 actif sans power-cycle DAC).
+- 2e occurrence de l'off-by-one kernel MAX_REG=0x7E : **BQ6 (P16_R108-127)
+  EIO comme BQ12** → slots canal B ordonnés {BQ10, BQ6}, fix kernel
+  buildé (Image prête, reboot à planifier).
+
+**Daemon E1b** : slots PAR CANAL {5,9}/{10,6}, détection par canal (plus
+de max par paire), force '3 Biquads/Ch' au start, BQ1/BQ2 laissés au
+panneau BIQUADS utilisateur.
+
+**Validation bout-en-bout** : tone 123 Hz continu = larsen synthétique
+(raie pure, PNR>50 dB, non-décroissant, sans harmoniques) → détection ~1 s,
+notchs posés ch0=BQ5 / ch1=BQ10, **« ils sont atténués tous les 2 »
+(utilisateur, casque)**. Libération auto 60 s après arrêt du tone.
+
+Reste : reboot kernel (BQ6/12), larsen acoustique réel à l'occasion,
+E2 (persistance notchs fixes) + E3 (GUI) + slots morts grisés drawer.
+
+## Test utilisateur : VALIDÉ (atténuation entendue sur les 2 canaux)
