@@ -48,6 +48,10 @@ signals:
     void statChanged();
     void spectrumChanged();
     void insertChanged();
+    /* tick d'affichage coalescé 22 Hz (½ vsync 44) : le QML ne met à jour
+     * la scène QU'ICI → 1 rendu par tick au lieu de 45 rendus/s irréguliers
+     * (42 % des cycles = driver Vivante PAR frame, mesuré perf) */
+    void uiTick();
 
 private:
     enum Tag { TagMeters, TagStat, TagAnalyzer, TagInsert, TagIgnore };
@@ -66,6 +70,7 @@ private:
     QTimer m_statTimer;
     QTimer m_analyzerTimer;
     QTimer m_insertTimer;
+    QTimer m_uiTick;
     QTimer m_reconnect;
 
     bool m_connected = false;
@@ -74,6 +79,7 @@ private:
     double m_latencyMs = 0;
     QString m_version;
     QVariantList m_spectrum;      /* 64 bins 0..1 */
+    bool m_dirty = false;
     QVariantList m_mlEnvL, m_mlEnvR;   /* 64 gains dB */
     bool m_mlActive = false;
 };

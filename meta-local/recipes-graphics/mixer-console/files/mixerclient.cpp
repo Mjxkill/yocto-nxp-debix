@@ -63,6 +63,16 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
     });
     m_insertTimer.start();
 
+    /* tick d'affichage : coalesce meters/spectre/ML en UN rendu à 22 Hz */
+    m_uiTick.setInterval(45);
+    connect(&m_uiTick, &QTimer::timeout, this, [this] {
+        if (m_dirty) {
+            m_dirty = false;
+            emit uiTick();
+        }
+    });
+    m_uiTick.start();
+
     connectSocket();
 }
 
@@ -136,6 +146,7 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
         };
         smooth(m_in, in);
         smooth(m_out, out);
+        m_dirty = true;
         emit metersChanged();
     } else if (tag == TagAnalyzer) {
         /* analyzer[3].s = 128 bins int8 dB → 64 bins 0..1 (max de paires) */
@@ -155,6 +166,7 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
                     const double db = qMax(a, b);
                     m_spectrum[i] = qBound(0.0, (db + 90.0) / 90.0, 1.0);
                 }
+                m_dirty = true;
                 emit spectrumChanged();
             }
         }

@@ -26,15 +26,14 @@ Rectangle {
                 width: (barsRow.width - (box.nb - 1)) / box.nb
                 height: barsRow.height
                 property real v: 0
+                // couleur UNIE sans opacity : les 64 barres restent dans
+                // UN batch scenegraph (le gradient+opacity par barre =
+                // 64 draw calls → 36 fps, saccades)
                 Rectangle {
                     anchors.bottom: parent.bottom
                     width: parent.width
                     height: parent.height * parent.v * 0.92
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: "#4cc470" }
-                        GradientStop { position: 1.0; color: "#2e6e48" }
-                    }
-                    opacity: 0.85
+                    color: "#3da55f"
                 }
             }
         }
@@ -77,7 +76,7 @@ Rectangle {
     // ---- alimentation (impérative, epsilon) ----
     Connections {
         target: mixer
-        function onSpectrumChanged() {
+        function onUiTick() {
             const sp = mixer.spectrum;
             for (let i = 0; i < box.nb && i < sp.length; i++) {
                 const item = barsRep.itemAt(i);

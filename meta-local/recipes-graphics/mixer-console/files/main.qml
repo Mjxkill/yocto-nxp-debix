@@ -37,7 +37,7 @@ Window {
 
         Connections {
             target: mixer
-            function onMetersChanged() {
+            function onUiTick() {
                 const iv = mixer.inLevels, ov = mixer.outLevels;
                 const strips = scene.banks[scene.currentBank].strips;
                 for (let i = 0; i < 8; i++) {
