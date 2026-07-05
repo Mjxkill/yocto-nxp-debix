@@ -46,7 +46,7 @@ do_install() {
         ${D}${systemd_unitdir}/system/mixer-ml-inference.service
 }
 
-FILES:${PN} = " \
+FILES:${PN} = "/etc/mixer-pro  \
     ${bindir}/mixer-ml-inference \
     ${systemd_unitdir}/system/mixer-ml-inference.service \
 "
