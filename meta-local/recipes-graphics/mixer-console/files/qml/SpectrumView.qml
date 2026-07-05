@@ -73,17 +73,24 @@ Rectangle {
         font.letterSpacing: 3
     }
 
-    // ---- alimentation (impérative, epsilon) ----
-    Connections {
-        target: mixer
-        function onUiTick() {
+    // ---- alimentation : lissage par frame vsync (cibles 10 Hz) ----
+    FrameAnimation {
+        running: true
+        onTriggered: {
+            const dt = Math.min(frameTime, 0.1);
+            const kA = 1 - Math.exp(-dt / 0.025);
+            const kR = 1 - Math.exp(-dt / 0.090);
             const sp = mixer.spectrum;
             for (let i = 0; i < box.nb && i < sp.length; i++) {
                 const item = barsRep.itemAt(i);
-                if (item && Math.abs(item.v - sp[i]) > 0.01)
-                    item.v = sp[i];
+                if (!item) continue;
+                const t = sp[i];
+                item.v += (t - item.v) * (t > item.v ? kA : kR);
             }
         }
+    }
+    Connections {
+        target: mixer
         function onInsertChanged() {
             env.pts = mixer.mlActive ? mixer.mlEnvL : [];
             env.requestPaint();      // 5 Hz max, petit canvas

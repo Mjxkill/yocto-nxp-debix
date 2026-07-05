@@ -125,27 +125,23 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
     const QJsonObject o = doc.object();
 
     if (tag == TagMeters) {
-        /* Ballistique ICI (attack ~30 ms, release ~110 ms à pas de 33 ms) :
-         * le QML reçoit des valeurs déjà lissées → aucune animation continue
-         * côté scenegraph (les Behaviors 30 Hz coûtaient ~40 % CPU). */
-        static constexpr double K_ATK = 0.67, K_REL = 0.26;
+        /* V10-N3.4 : le client expose des CIBLES brutes 30 Hz — la
+         * ballistique est faite PAR FRAME côté QML (FrameAnimation alignée
+         * vsync 44 Hz), modèle rAF du web : le QTimer 45 ms n'était jamais
+         * en phase avec le vsync 22.7 ms → battement 2/3 vsync = saccades. */
         const QJsonArray in = o.value(QLatin1String("in")).toArray();
         const QJsonArray out = o.value(QLatin1String("out")).toArray();
-        auto smooth = [](QVariantList &cur, const QJsonArray &raw) {
+        auto fill = [](QVariantList &cur, const QJsonArray &raw) {
             if (cur.size() != raw.size()) {
                 cur.clear();
                 for (int i = 0; i < raw.size(); ++i)
                     cur.append(0.0);
             }
-            for (int i = 0; i < raw.size(); ++i) {
-                const double tgt = dbNorm(raw.at(i).toDouble());
-                const double prev = cur.at(i).toDouble();
-                const double k = tgt > prev ? K_ATK : K_REL;
-                cur[i] = prev + (tgt - prev) * k;
-            }
+            for (int i = 0; i < raw.size(); ++i)
+                cur[i] = dbNorm(raw.at(i).toDouble());
         };
-        smooth(m_in, in);
-        smooth(m_out, out);
+        fill(m_in, in);
+        fill(m_out, out);
         m_dirty = true;
         emit metersChanged();
     } else if (tag == TagAnalyzer) {
