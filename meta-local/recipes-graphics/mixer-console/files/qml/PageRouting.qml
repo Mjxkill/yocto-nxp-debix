@@ -57,7 +57,7 @@ Item {
 
         // ---- ROUTAGE D'UNE ENTRÉE ----
         Rectangle {
-            width: parent.width; height: 190
+            width: parent.width; height: 205
             color: "#171c21"; radius: 8; border.color: "#060809"
             Column {
                 anchors.fill: parent; anchors.margins: 12; spacing: 8
@@ -81,19 +81,22 @@ Item {
                     Repeater {
                         id: mxRep
                         model: 18
-                        Knob {
-                            width: 62; height: 96
-                            from: -60; to: 6
-                            label: page.outNames[index]
-                            onMoved: (db) => mixer.call({ op: "set_master", src: page.srcIdx, out: index,
-                                gain: db <= -59 ? 0 : Math.pow(10, db / 20) }, function(){})
+                        Column {
+                            spacing: 3
                             Text {
-                                anchors.top: parent.top; anchors.topMargin: -2
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: page.outNames[index]
                                 color: index < 8 ? "#e5a13c" : (index < 16 ? "#8b959d" : "#4cc470")
-                                font.pixelSize: 9; font.bold: true
+                                font.pixelSize: 10; font.bold: true
                             }
+                            Knob {
+                                id: mxKnob
+                                width: 62; height: 78
+                                from: -60; to: 6
+                                onMoved: (db) => mixer.call({ op: "set_master", src: page.srcIdx, out: index,
+                                    gain: db <= -59 ? 0 : Math.pow(10, db / 20) }, function(){})
+                            }
+                            property alias value: mxKnob.value
                         }
                     }
                 }
@@ -102,7 +105,7 @@ Item {
 
         // ---- GAINS DE SORTIE ----
         Rectangle {
-            width: parent.width; height: 170
+            width: parent.width; height: 185
             color: "#171c21"; radius: 8; border.color: "#060809"
             Column {
                 anchors.fill: parent; anchors.margins: 12; spacing: 8
@@ -112,17 +115,21 @@ Item {
                     Repeater {
                         id: outRep
                         model: 18
-                        Knob {
-                            width: 62; height: 96
-                            from: -60; to: 12
-                            onMoved: (db) => mixer.setOutputGain(index, db)
+                        Column {
+                            spacing: 3
                             Text {
-                                anchors.top: parent.top; anchors.topMargin: -2
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: page.outNames[index]
                                 color: index < 8 ? "#e5a13c" : (index < 16 ? "#8b959d" : "#4cc470")
-                                font.pixelSize: 9; font.bold: true
+                                font.pixelSize: 10; font.bold: true
                             }
+                            Knob {
+                                id: outKnob
+                                width: 62; height: 78
+                                from: -60; to: 12
+                                onMoved: (db) => mixer.setOutputGain(index, db)
+                            }
+                            property alias value: outKnob.value
                         }
                     }
                 }

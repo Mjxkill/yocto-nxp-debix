@@ -8,6 +8,7 @@ Item {
     property real to: 12
     property string unit: "dB"
     property string label: ""
+    property bool interacting: false
     signal moved(real v)
 
     width: 50
@@ -71,7 +72,9 @@ Item {
         preventStealing: true
         property real y0: 0
         property real v0: 0
-        onPressed: (e) => { y0 = e.y; v0 = knob.value; }
+        onPressed: (e) => { y0 = e.y; v0 = knob.value; knob.interacting = true; }
+        onReleased: knob.interacting = false
+        onCanceled: knob.interacting = false
         onPositionChanged: (e) => {
             const span = knob.to - knob.from;
             let v = v0 + (y0 - e.y) * span / 200.0;

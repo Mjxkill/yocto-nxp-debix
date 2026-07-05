@@ -75,7 +75,7 @@ Rectangle {
 
     // ---- alimentation : lissage par frame vsync (cibles 10 Hz) ----
     FrameAnimation {
-        running: true
+        running: box.visible
         onTriggered: {
             const dt = Math.min(frameTime, 0.1);
             const kA = 1 - Math.exp(-dt / 0.025);

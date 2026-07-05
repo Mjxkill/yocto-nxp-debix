@@ -4,6 +4,7 @@ import QtQuick
 Item {
     id: fader
     property real value: 0.72
+    property bool interacting: false
     signal moved(real v)
     width: 38
 
@@ -55,7 +56,9 @@ Item {
             fader.value = Math.max(0, Math.min(1, v));
             fader.moved(fader.value);
         }
-        onPressed: (e) => apply(e.y - 8)
+        onPressed: (e) => { fader.interacting = true; apply(e.y - 8); }
         onPositionChanged: (e) => apply(e.y - 8)
+        onReleased: fader.interacting = false
+        onCanceled: fader.interacting = false
     }
 }

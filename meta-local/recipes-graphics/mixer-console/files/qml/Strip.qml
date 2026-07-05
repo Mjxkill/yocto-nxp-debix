@@ -17,6 +17,30 @@ Item {
     signal sendToggled(int bus, bool on)
 
     property alias faderValue: fader.value
+    property alias faderInteracting: fader.interacting
+    property alias gainKnobItem: gainKnob
+    /* synchronise la tranche depuis l'état réel mixer-pro
+     * (get_strip_routing : master[], gain, mute, sends[]) */
+    function syncFromRouting(r) {
+        if (fader.interacting || gainKnob.interacting) return;
+        if (r.master !== undefined) {
+            const g = r.master[0] || 0;
+            const db = g > 0.000316 ? Math.max(-72, 20 * Math.log10(g)) : -72;
+            fader.value = (db + 72) / 84;
+        }
+        if (r.gain !== undefined && r.gain > 0)
+            gainKnob.value = Math.max(-12, Math.min(12, 20 * Math.log10(r.gain)));
+        if (r.mute !== undefined) muted = r.mute === 1;
+        if (r.sends !== undefined) {
+            const so = [];
+            for (let b = 0; b < 4; b++) so.push((r.sends[b * 2] || 0) > 0.001);
+            sendsOn = so;
+        }
+    }
+    function syncOutGain(db) {
+        if (fader.interacting) return;
+        fader.value = (Math.max(-72, db) + 72) / 84;
+    }
     // appelée par le tick d'affichage global (1 tick sur 4) — AUCUN timer
     // local : les timers désalignés créaient des frames hors tick (30 fps
     // au lieu de 22)

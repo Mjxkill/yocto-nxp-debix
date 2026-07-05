@@ -37,6 +37,50 @@ Window {
         }
 
         property int tickN: 0
+        /* SYNC bidirectionnelle (retour utilisateur N4) : recharge l'état
+         * réel des tranches — à l'entrée de banque et toutes les 2 s
+         * (les réglages faits sur la GUI web se répercutent ici). Les
+         * tranches en cours de manipulation sont épargnées. */
+        function syncBank() {
+            if (scene.currentPage !== 0) return;
+            const strips = scene.banks[scene.currentBank].strips;
+            for (let i = 0; i < 8; i++) {
+                const d = i < strips.length ? strips[i] : null;
+                const item = stripRep.itemAt(i);
+                if (!d || !item) continue;
+                if (d.t === "in") {
+                    (function(it) {
+                        mixer.call({ op: "get_strip_routing", src: d.idx },
+                                   function(r) { if (r.ok) it.syncFromRouting(r); });
+                    })(item);
+                }
+            }
+            mixer.call({ op: "get_output_gain" }, function(r) {
+                if (!r.gains) return;
+                for (let i = 0; i < 8; i++) {
+                    const d = i < strips.length ? strips[i] : null;
+                    const item = stripRep.itemAt(i);
+                    if (d && item && d.t === "out" && r.gains[d.idx] !== undefined)
+                        item.syncOutGain(r.gains[d.idx] > 0
+                            ? 20 * Math.log10(r.gains[d.idx] / 1000.0) : -72);
+                }
+            });
+        }
+        onCurrentBankChanged: syncBank()
+        Timer { interval: 2000; running: scene.currentPage === 0; repeat: true
+                triggeredOnStart: true; onTriggered: scene.syncBank() }
+
+        /* diag réactivité tactile : si le GUI thread se fige > 300 ms,
+         * trace la durée au journal (retour utilisateur : « le changement
+         * de page bloque le tactile ») */
+        property double hbLast: 0
+        Timer { interval: 100; running: true; repeat: true
+                onTriggered: {
+                    const now = Date.now();
+                    if (scene.hbLast > 0 && now - scene.hbLast > 300)
+                        console.warn("GUI-THREAD-BLOCKED", now - scene.hbLast, "ms, page", scene.currentPage);
+                    scene.hbLast = now;
+                } }
         // Horloge = le VSYNC lui-même (FrameAnimation) — modèle rAF du web.
         // Ballistique par frame avec dt réel : attack 30 ms, release 110 ms,
         // aiguilles 150 ms. Un QTimer n'est JAMAIS en phase avec le vsync.
