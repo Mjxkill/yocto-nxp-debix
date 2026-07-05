@@ -61,12 +61,16 @@ Window {
                 masterR.level += (r - masterR.level) * (r > masterR.level ? kA : kR);
                 vuL.level += (l - vuL.level) * kN;
                 vuR.level += (r - vuR.level) * kN;
-                if ((scene.tickN % 8) === 0) {   // textes ~5 Hz
-                    for (let i = 0; i < 8; i++) {
-                        const item = stripRep.itemAt(i);
-                        if (item) item.updateDbro();
-                    }
+                // textes en ROUND-ROBIN : 1 élément par frame (une rafale
+                // de 10 re-shapes tous les 8 ticks faisait pomper le
+                // QSGRenderThread — observation utilisateur)
+                const ph = scene.tickN % 10;
+                if (ph < 8) {
+                    const item = stripRep.itemAt(ph);
+                    if (item) item.updateDbro();
+                } else if (ph === 8) {
                     peakLTxt.text = "PEAK L  " + (l > 0.003 ? (l*60-60).toFixed(1) : "-∞");
+                } else {
                     peakRTxt.text = "PEAK R  " + (r > 0.003 ? (r*60-60).toFixed(1) : "-∞");
                 }
             }
