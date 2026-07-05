@@ -8,6 +8,16 @@ Window {
     visibility: Window.FullScreen
     color: "#0c0f12"
 
+    // Rotation du CONTENU : QT_QPA_EGLFS_ROTATION ne s'applique pas au
+    // scenegraph QtQuick — la dalle est physiquement 800x1280 portrait,
+    // la scène logique est 1280x800 paysage tournée ici.
+    Item {
+        id: scene
+        width: 1280
+        height: 800
+        anchors.centerIn: parent
+        rotation: 270
+
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
@@ -55,7 +65,7 @@ Window {
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: root.width + "×" + root.height + "  ·  " + fpsMeter.fps + " FPS"
+                text: scene.width + "×" + scene.height + " (dalle " + root.width + "×" + root.height + " @44 Hz)  ·  " + fpsMeter.fps + " FPS"
                 color: "#8b959d"
                 font.pixelSize: 13
                 font.family: "monospace"
@@ -71,5 +81,6 @@ Window {
                 loops: Animation.Infinite
             }
         }
+    }
     }
 }
