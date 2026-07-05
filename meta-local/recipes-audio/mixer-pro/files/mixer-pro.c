@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <math.h>
 #include <pthread.h>
+#include <poll.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -3036,49 +3037,109 @@ static void *control_thread(void *arg)
 		return NULL;
 	}
 	chmod(MIXER_SOCK_PATH, 0660);
-	if (listen(srv, 4) < 0) {
+	if (listen(srv, 8) < 0) {
 		mlog("listen: %s", strerror(errno));
 		close(srv);
 		return NULL;
 	}
 	mlog("control socket listening on %s", MIXER_SOCK_PATH);
 
+	/* V10-N1.4 — MULTI-CLIENT (poll) : l'ancienne boucle servait UN client
+	 * jusqu'à EOF — une connexion persistante (app native mixer-console,
+	 * meters 30 Hz) affamait tous les autres (mixer-gui-http = GUI web).
+	 * Jusqu'à CTL_MAX_CLIENTS simultanés, buffer d'accumulation PAR client
+	 * (V9.4.3 : 16 KB pour les blobs DRC hex ; l'ancien buffer static
+	 * unique aurait d'ailleurs été une corruption en multi-client).
+	 * handle_cmd (dprintf bloquant) inchangé : clients locaux de confiance,
+	 * risque d'un client-qui-ne-lit-pas identique à l'existant. */
+#define CTL_MAX_CLIENTS 8
+	static struct {
+		int fd;
+		size_t pos;
+		char buf[16384];
+	} cl[CTL_MAX_CLIENTS];
+	for (int i = 0; i < CTL_MAX_CLIENTS; i++)
+		cl[i].fd = -1;
+
 	while (atomic_load(&g_st.running)) {
-		int cli = accept(srv, NULL, NULL);
-		if (cli < 0) {
+		struct pollfd pfd[1 + CTL_MAX_CLIENTS];
+		int idx_of[1 + CTL_MAX_CLIENTS];
+		nfds_t nf = 0;
+		pfd[nf].fd = srv;
+		pfd[nf].events = POLLIN;
+		idx_of[nf++] = -1;
+		for (int i = 0; i < CTL_MAX_CLIENTS; i++) {
+			if (cl[i].fd < 0)
+				continue;
+			pfd[nf].fd = cl[i].fd;
+			pfd[nf].events = POLLIN;
+			idx_of[nf++] = i;
+		}
+
+		int pr = poll(pfd, nf, 500);
+		if (pr < 0) {
 			if (errno == EINTR) continue;
-			mlog("accept: %s", strerror(errno));
+			mlog("poll: %s", strerror(errno));
 			break;
 		}
-		/* V9.4.3 : buffer 16 KB + accumulation pour tenir les blobs ALSA
-		 * BYTES (DRC 4096 octets = 8192 chars hex + JSON wrapper).
-		 * read() peut retourner < sizeof - 1 même si plus est dispo →
-		 * accumuler jusqu'à '\n', puis dispatcher les lignes complètes. */
-		static char buf[16384];
-		size_t pos = 0;
-		ssize_t n;
-		while ((n = read(cli, buf + pos, sizeof(buf) - 1 - pos)) > 0) {
-			pos += n;
-			buf[pos] = 0;
-			char *line = buf, *next;
+		if (pr == 0)
+			continue;
+
+		for (nfds_t k = 0; k < nf; k++) {
+			if (!(pfd[k].revents & (POLLIN | POLLERR | POLLHUP)))
+				continue;
+
+			if (idx_of[k] < 0) {          /* socket serveur : accept */
+				int c = accept(srv, NULL, NULL);
+				if (c < 0)
+					continue;
+				int slot = -1;
+				for (int i = 0; i < CTL_MAX_CLIENTS; i++)
+					if (cl[i].fd < 0) { slot = i; break; }
+				if (slot < 0) {
+					dprintf(c, "{\"ok\":false,\"err\":\"too many clients\"}\n");
+					close(c);
+					continue;
+				}
+				cl[slot].fd = c;
+				cl[slot].pos = 0;
+				continue;
+			}
+
+			int i = idx_of[k];
+			ssize_t n = read(cl[i].fd, cl[i].buf + cl[i].pos,
+					 sizeof(cl[i].buf) - 1 - cl[i].pos);
+			if (n <= 0) {                 /* EOF ou erreur : libère */
+				close(cl[i].fd);
+				cl[i].fd = -1;
+				continue;
+			}
+			cl[i].pos += (size_t)n;
+			cl[i].buf[cl[i].pos] = 0;
+			char *line = cl[i].buf, *next;
 			while (line && *line) {
 				next = strchr(line, '\n');
-				if (!next) break;   /* ligne incomplète : attendre plus */
+				if (!next) break;         /* ligne incomplète */
 				*next++ = 0;
-				if (*line) handle_cmd(cli, line);
+				if (*line) handle_cmd(cl[i].fd, line);
 				line = next;
 			}
 			if (line && *line) {
 				size_t rem = strlen(line);
-				memmove(buf, line, rem);
-				pos = rem;
+				memmove(cl[i].buf, line, rem);
+				cl[i].pos = rem;
 			} else {
-				pos = 0;
+				cl[i].pos = 0;
 			}
+			/* ligne plus longue que le buffer : reset défensif */
+			if (cl[i].pos >= sizeof(cl[i].buf) - 1)
+				cl[i].pos = 0;
 		}
-		close(cli);
 	}
 
+	for (int i = 0; i < CTL_MAX_CLIENTS; i++)
+		if (cl[i].fd >= 0)
+			close(cl[i].fd);
 	close(srv);
 	unlink(MIXER_SOCK_PATH);
 	return NULL;
