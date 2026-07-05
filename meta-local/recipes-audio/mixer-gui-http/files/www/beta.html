@@ -1938,7 +1938,10 @@ function rbjBlob(type,fHz,q,gainDb,fs){
     case 8:b0=1-al;b1=-2*cw;b2=1+al;a0=1+al;a1=-2*cw;a2=1-al;break;
     default:return[0x7f,0xff,0xff,0xff,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
   }
-  const N0=b0/a0,N1=b1/a0,N2=b2/a0,D1=-a1/a0,D2=-a2/a0;
+  /* V11-AL : hardware TAC = (N0+2·N1·z⁻¹+N2·z⁻²)/(2³¹−2·D1·z⁻¹−D2·z⁻²)
+   * → N1/D1 stockés DIVISÉS PAR 2 (sinon D1 des filtres graves sature
+   * le Q1.31 → filtre inopérant, validé à l'oreille) */
+  const N0=b0/a0,N1=b1/a0/2,N2=b2/a0,D1=-a1/a0/2,D2=-a2/a0;
   const q31=x=>{let v=Math.round(Math.max(-1,Math.min(0.9999999995,x))*0x80000000);
     if(v<-0x80000000)v=-0x80000000;if(v>0x7FFFFFFF)v=0x7FFFFFFF;if(v<0)v+=0x100000000;
     return[(v>>>24)&255,(v>>>16)&255,(v>>>8)&255,v&255];};

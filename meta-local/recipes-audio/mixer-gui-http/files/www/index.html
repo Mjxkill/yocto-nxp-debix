@@ -3880,8 +3880,10 @@ function mixerApp() {
        *   y = N0·x + N1·x⁻¹ + N2·x⁻² + D1·y⁻¹ + D2·y⁻²
        * → D1 = -a1/a0,  D2 = -a2/a0
        */
-      const N0 = b0 / a0, N1 = b1 / a0, N2 = b2 / a0;
-      const D1 = -a1 / a0, D2 = -a2 / a0;
+      /* V11-AL : hardware TAC = (N0+2·N1·z⁻¹+N2·z⁻²)/(2³¹−2·D1·z⁻¹−D2·z⁻²)
+       * → N1/D1 stockés DIVISÉS PAR 2 (validé à l'oreille 2026-07-06) */
+      const N0 = b0 / a0, N1 = b1 / a0 / 2, N2 = b2 / a0;
+      const D1 = -a1 / a0 / 2, D2 = -a2 / a0;
       const q31be = (x) => {
         let v = Math.round(Math.max(-1, Math.min(0.9999999995, x)) * 0x80000000);
         if (v < -0x80000000) v = -0x80000000;
