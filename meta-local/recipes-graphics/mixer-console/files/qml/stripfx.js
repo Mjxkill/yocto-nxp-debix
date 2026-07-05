@@ -194,7 +194,10 @@ function packDrcParams(p) {
     const dv = new DataView(buf.buffer);
     const w = (i, v) => dv.setInt32(i * 4, v | 0, true);
     const thr = +p.threshold_dB || 0, knee = +p.knee_dB || 0, ratio = Math.max(1.0001, +p.ratio || 1);
-    const pre = (+p.pre_delay_ms || 0) / 1000, att = Math.max(0.001, (+p.attack_ms || 0) / 1000);
+    /* clamp attack à 0.05 ms (anti div/0) — l'ancien plancher 1 ms
+     * ALTÉRAIT les blobs réels (DRC1.0 board : attack 0.919 ms), attrapé
+     * par l'autotest round-trip. Fix miroir dans beta.html. */
+    const pre = (+p.pre_delay_ms || 0) / 1000, att = Math.max(0.00005, (+p.attack_ms || 0) / 1000);
     const mlin = db2mag(+p.master_gain_dB || 0);
     const lt = db2mag(thr), slope = 1 / ratio, kt = db2mag(thr + knee);
     const slopeAt = (x, k) => {

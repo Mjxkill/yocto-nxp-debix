@@ -1974,7 +1974,9 @@ function packDrcParams(p,Fs){
   const buf=new Uint8Array(88);buf.set(p._raw);
   const dv=new DataView(buf.buffer),w=(i,v)=>dv.setInt32(i*4,v|0,true);
   const thr=+p.threshold_dB||0,knee=+p.knee_dB||0,ratio=Math.max(1.0001,+p.ratio||1);
-  const pre=(+p.pre_delay_ms||0)/1000,att=Math.max(0.001,(+p.attack_ms||0)/1000);
+  /* clamp 0.05 ms (l'ancien 1 ms altérait les attacks réels < 1 ms —
+   * bug attrapé par l'autotest round-trip du natif N5, fix miroir) */
+  const pre=(+p.pre_delay_ms||0)/1000,att=Math.max(0.00005,(+p.attack_ms||0)/1000);
   const mlin=db2mag(+p.master_gain_dB||0);
   const lt=db2mag(thr),slope=1/ratio,kt=db2mag(thr+knee);
   const slopeAt=(x,k)=>{
