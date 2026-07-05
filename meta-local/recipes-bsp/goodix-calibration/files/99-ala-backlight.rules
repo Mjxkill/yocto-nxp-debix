@@ -1,0 +1,3 @@
+# A.L.A. : dalle a fond des que le backlight du panneau DSI apparait
+# (tmpfiles courait AVANT le probe du panneau : sans effet)
+ACTION=="add", SUBSYSTEM=="backlight", ATTR{brightness}="255"

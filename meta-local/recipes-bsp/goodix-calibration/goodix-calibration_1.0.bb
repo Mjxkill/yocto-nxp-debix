@@ -6,12 +6,15 @@ regle ici apres une recalibration definitive."
 LICENSE = "GPL-2.0-or-later"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-2.0-or-later;md5=fed54355545ffd980b814dab4a3b312c"
 
-SRC_URI = "file://99-goodix-calibration.rules"
+SRC_URI = "file://99-goodix-calibration.rules \
+           file://99-ala-backlight.rules"
 S = "${WORKDIR}"
 
 do_install() {
     install -d ${D}${sysconfdir}/udev/rules.d
     install -m 0644 ${WORKDIR}/99-goodix-calibration.rules \
+        ${D}${sysconfdir}/udev/rules.d/
+    install -m 0644 ${WORKDIR}/99-ala-backlight.rules \
         ${D}${sysconfdir}/udev/rules.d/
 }
 

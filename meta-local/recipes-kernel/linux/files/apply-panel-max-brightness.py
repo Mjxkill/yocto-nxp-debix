@@ -17,10 +17,16 @@ ANCHOR = """	msleep(100);
 INSERT = """	msleep(100);
 
 	/* V10-N6b : le panneau reset sa luminosite DCS a 12/255 -> plein
-	 * feux des l'allumage (l'userspace peut ensuite la moduler). */
+	 * feux des l'allumage. props AUSSI : backlight_enable() repousse
+	 * props.brightness au panneau (sinon il ecrase notre 255 par le 12
+	 * lu au probe). L'userspace module ensuite librement. */
 	ret = mipi_dsi_dcs_set_display_brightness(dsi, 255);
 	if (ret < 0)
 		dev_warn(dev, "set_display_brightness failed (%d)\\n", ret);
+	if (panel->backlight)
+		panel->backlight->props.brightness = 255;
+	if (panel->backlight2)
+		panel->backlight2->props.brightness = 255;
 
 	backlight_enable(panel->backlight);
 	backlight_enable(panel->backlight2);
