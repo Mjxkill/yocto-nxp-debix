@@ -74,6 +74,20 @@ struct mixer_state {
 	float input_gain[N_INPUT_TOTAL];
 	float input_target[N_INPUT_TOTAL];
 
+	/* V12-AMX — automix Dugan (gain sharing). L'auto-gain COMPOSE avec
+	 * le fader (multiplicateur séparé, jamais input_target). Non-membre
+	 * ⇒ automix_gain ≡ 1.0 (chemin identique à avant). Énergie mesurée
+	 * POST-fader (E_i × ig²) : une tranche baissée ne vole pas de part
+	 * de gain aux micros actifs (raffinement critic). */
+	int   automix_on;                       /* global (écrit ctl, lu audio) */
+	float automix_resp_ms;                  /* slew des gains (déf. 100) */
+	float automix_floor;                    /* plancher lin (déf. −15 dB) */
+	int   automix_member[N_INPUT_TOTAL];
+	float automix_weight[N_INPUT_TOTAL];    /* lin (déf. 1.0) */
+	float automix_env[N_INPUT_TOTAL];       /* enveloppe énergie (audio) */
+	float automix_gain[N_INPUT_TOTAL];      /* lissé, appliqué (audio) */
+	float automix_gtarget[N_INPUT_TOTAL];   /* cible Dugan par bloc */
+
 	/* E6.e : 1 moteur d'effet par bus (4 bus × stéréo, géré par fx_engine).
 	 * Defaults : 0=compressor, 1=reverb, 2=delay, 3=eq.
 	 */
@@ -1299,6 +1313,69 @@ static void smooth_gains(void)
 	for (int i = 0; i < N_INPUT_TOTAL; i++)
 		g_st.input_gain[i] +=
 			alpha * (g_st.input_target[i] - g_st.input_gain[i]);
+
+	/* V12-AMX : slew des auto-gains vers la cible Dugan (resp_ms).
+	 * alpha_amx par BLOC (smooth_gains est appelé par bloc de 2 ms).
+	 * automix OFF ⇒ retour en douceur vers 1.0 (chemin d'origine). */
+	{
+		const float alpha_amx = 1.0f - expf(-2.0f /
+			(g_st.automix_resp_ms > 1.0f ? g_st.automix_resp_ms : 1.0f));
+		for (int i = 0; i < N_INPUT_TOTAL; i++) {
+			const float tgt = g_st.automix_on
+					  ? g_st.automix_gtarget[i] : 1.0f;
+			g_st.automix_gain[i] += alpha_amx *
+				(tgt - g_st.automix_gain[i]);
+		}
+	}
+}
+
+/* V12-AMX — calcul Dugan par bloc (appelé par audio_thread AVANT mix_block).
+ * Énergie post-fader : e_i = mean(x²) × ig². Enveloppe asymétrique
+ * (attack 10 ms, release 200 ms — parole). Cible : part d'énergie
+ * pondérée, plancher automix_floor, non-membres ≡ 1.0. */
+static void automix_update(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
+			   uint32_t N)
+{
+	if (!g_st.automix_on)
+		return;
+	const float ka = 1.0f - expf(-2.0f / 10.0f);    /* attack 10 ms/2 ms */
+	const float kr = 1.0f - expf(-2.0f / 200.0f);   /* release 200 ms */
+	float wsum = 0.0f;
+
+	for (int i = 0; i < N_INPUT_REAL; i++) {
+		if (!g_st.automix_member[i])
+			continue;
+		float acc = 0.0f;
+		const float *x = in_block[i];
+		for (uint32_t f = 0; f < N; f++)
+			acc += x[f] * x[f];
+		const float ig = g_st.input_gain[i];
+		float e = (acc / (float)N) * ig * ig;
+		if (g_st.mute_mask & (1u << i))
+			e = 0.0f;
+		float *env = &g_st.automix_env[i];
+		*env += (e > *env ? ka : kr) * (e - *env);
+		wsum += *env * g_st.automix_weight[i];
+	}
+
+	const float eps = 1e-12f;
+	for (int i = 0; i < N_INPUT_REAL; i++) {
+		if (!g_st.automix_member[i]) {
+			g_st.automix_gtarget[i] = 1.0f;
+			continue;
+		}
+		float share = (g_st.automix_env[i] * g_st.automix_weight[i] + eps)
+			      / (wsum + eps * 8.0f);
+		/* Dugan : atténuation en dB = 10·log10(part d'énergie) →
+		 * multiplicateur d'AMPLITUDE = sqrt(part). 2 micros égaux =
+		 * −3 dB chacun (NOM constant), conforme au standard. */
+		float g = sqrtf(share);
+		if (g < g_st.automix_floor)
+			g = g_st.automix_floor;
+		if (g > 1.0f)
+			g = 1.0f;
+		g_st.automix_gtarget[i] = g;
+	}
 }
 
 /* V9.3 : mix_block — process N samples en 1 passe (vs mix_frame × N).
@@ -1366,7 +1443,8 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 	for (int i = 0; i < N_INPUT_REAL; i++) {
 		if (g_st.mute_mask & (1u << i))
 			continue;
-		const float ig = g_st.input_gain[i];
+		/* V12-AMX : l'auto-gain compose avec le fader (≡1 hors automix) */
+		const float ig = g_st.input_gain[i] * g_st.automix_gain[i];
 		for (int b = 0; b < N_BUS_FX_CH; b++) {
 			const float g = ig * g_st.send_gain[i][b];
 			if (g == 0.0f) continue;   /* sparse skip */
@@ -1407,7 +1485,8 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 	for (int s = 0; s < N_INPUT_REAL; s++) {
 		if (g_st.mute_mask & (1u << s))
 			continue;
-		const float ig = g_st.input_gain[s];
+		/* V12-AMX : idem phase A — cohérence sends/master */
+		const float ig = g_st.input_gain[s] * g_st.automix_gain[s];
 		const float *src = in_block[s];
 		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
 			const float g = ig * g_st.master_gain[s][o];
@@ -1613,6 +1692,7 @@ static void *audio_thread(void *arg)
 		}
 
 		/* MIX BLOCK — 1 appel pour 96 frames (vs 96 calls × 1 frame) */
+		automix_update(in_block, PERIOD_FRAMES);   /* V12-AMX */
 		mix_block(in_block, out_block, bus_pre_block, ret_post_block, PERIOD_FRAMES);
 
 		/* V9.5.12 — Export SHM tap USB IN [8,9] pour daemon mixer-ml-inference
@@ -2409,6 +2489,65 @@ static void handle_cmd(int fd, const char *line)
 		            "\"mode\":\"%s\",\"source\":\"%s\"}\n",
 		        mode ? "mastering" : "passthrough",
 		        src  ? "usb"       : "hw");
+
+	} else if (json_has_op(line, "set_automix")) {
+		/* V12-AMX : adhésion + poids par tranche.
+		 * {"op":"set_automix","src":N,"on":0|1,"weight_db":F} */
+		int src, on = 0;
+		float wdb = 0.0f;
+		if (json_get_int(line, "src", &src) < 0 ||
+		    src < 0 || src >= N_INPUT_REAL) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_automix src\"}\n");
+			return;
+		}
+		(void)json_get_int(line, "on", &on);
+		(void)json_get_float(line, "weight_db", &wdb);
+		pthread_mutex_lock(&g_st.target_lock);
+		g_st.automix_member[src] = on ? 1 : 0;
+		g_st.automix_weight[src] = powf(10.0f, wdb / 20.0f);
+		if (!on)
+			g_st.automix_gtarget[src] = 1.0f;
+		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_automix\",\"src\":%d,"
+			    "\"on\":%d}\n", src, on ? 1 : 0);
+
+	} else if (json_has_op(line, "set_automix_cfg")) {
+		/* {"op":"set_automix_cfg","on":0|1,"resp_ms":F,"floor_db":F} */
+		int on = -1;
+		float resp = -1.0f, floordb = 1.0f;
+		(void)json_get_int(line, "on", &on);
+		(void)json_get_float(line, "resp_ms", &resp);
+		(void)json_get_float(line, "floor_db", &floordb);
+		pthread_mutex_lock(&g_st.target_lock);
+		if (on >= 0)
+			g_st.automix_on = on ? 1 : 0;
+		if (resp >= 10.0f && resp <= 2000.0f)
+			g_st.automix_resp_ms = resp;
+		if (floordb <= 0.0f && floordb >= -40.0f)
+			g_st.automix_floor = powf(10.0f, floordb / 20.0f);
+		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_automix_cfg\",\"on\":%d}\n",
+			g_st.automix_on);
+
+	} else if (json_has_op(line, "get_automix")) {
+		/* état + gains courants (dB) pour la GUI */
+		int n = snprintf(reply, sizeof(reply),
+			"{\"ok\":true,\"on\":%d,\"resp_ms\":%.0f,"
+			"\"floor_db\":%.1f,\"members\":[",
+			g_st.automix_on, g_st.automix_resp_ms,
+			20.0f * log10f(g_st.automix_floor + 1e-9f));
+		for (int i = 0; i < N_INPUT_REAL; i++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%d",
+				      i ? "," : "", g_st.automix_member[i]);
+		n += snprintf(reply + n, sizeof(reply) - n, "],\"gains_db\":[");
+		for (int i = 0; i < N_INPUT_REAL; i++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%.1f",
+				      i ? "," : "",
+				      20.0f * log10f(g_st.automix_gain[i] + 1e-9f));
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
+		write(fd, reply, n);
 
 	} else if (json_has_op(line, "get_assistant")) {
 		/* Renvoie état Mixer Assistant. Le daemon mixer-ml-inference
@@ -3275,6 +3414,16 @@ static void save_mixer_state(void)
 	fprintf(f, "assistant %d %d\n",
 	        atomic_load_explicit(&g_assistant_mode,   memory_order_relaxed),
 	        atomic_load_explicit(&g_assistant_source, memory_order_relaxed));
+	/* V12-AMX */
+	fprintf(f, "automix %d %.1f %.4f\n", g_st.automix_on,
+	        g_st.automix_resp_ms, g_st.automix_floor);
+	fprintf(f, "automix_members");
+	for (int i = 0; i < N_INPUT_REAL; i++)
+		fprintf(f, " %d", g_st.automix_member[i]);
+	fprintf(f, "\nautomix_weights");
+	for (int i = 0; i < N_INPUT_REAL; i++)
+		fprintf(f, " %.4f", g_st.automix_weight[i]);
+	fprintf(f, "\n");
 	fprintf(f, "mute_mask %u\n", g_st.mute_mask);
 	fprintf(f, "input_gains");
 	for (int i = 0; i < N_INPUT_TOTAL; i++)
@@ -3335,6 +3484,31 @@ static void load_mixer_state(void)
 	if (fscanf(f, "assistant %d %d\n", &am, &as) == 2) {
 		atomic_store_explicit(&g_assistant_mode,   am ? 1 : 0, memory_order_relaxed);
 		atomic_store_explicit(&g_assistant_source, as ? 1 : 0, memory_order_relaxed);
+	}
+	/* V12-AMX (optionnel — absent des états antérieurs) */
+	{
+		int aon;
+		float aresp, afloor;
+		if (fscanf(f, " automix %d %f %f\n", &aon, &aresp, &afloor) == 3) {
+			g_st.automix_on = aon ? 1 : 0;
+			if (aresp >= 10.0f && aresp <= 2000.0f)
+				g_st.automix_resp_ms = aresp;
+			if (afloor > 0.0f && afloor <= 1.0f)
+				g_st.automix_floor = afloor;
+			if (fscanf(f, " automix_members") == 0)
+				for (int i = 0; i < N_INPUT_REAL; i++) {
+					int v;
+					if (fscanf(f, "%d", &v) != 1) break;
+					g_st.automix_member[i] = v ? 1 : 0;
+				}
+			if (fscanf(f, " automix_weights") == 0)
+				for (int i = 0; i < N_INPUT_REAL; i++) {
+					float v;
+					if (fscanf(f, "%f", &v) != 1) break;
+					if (v >= 0.01f && v <= 100.0f)
+						g_st.automix_weight[i] = v;
+				}
+		}
 	}
 	unsigned mm = 0;
 	if (fscanf(f, "mute_mask %u\n", &mm) == 1)
@@ -3465,6 +3639,18 @@ int main(int argc, char **argv)
 		g_st.input_target[i] = 1.0f;
 	}
 	g_st.mute_mask = 0;
+	/* V12-AMX : défauts — off, gains unité, poids 1, resp 100 ms,
+	 * plancher −15 dB (part de gain minimale d'un membre) */
+	g_st.automix_on = 0;
+	g_st.automix_resp_ms = 100.0f;
+	g_st.automix_floor = 0.1778f;
+	for (int i = 0; i < N_INPUT_TOTAL; i++) {
+		g_st.automix_member[i] = 0;
+		g_st.automix_weight[i] = 1.0f;
+		g_st.automix_env[i] = 0.0f;
+		g_st.automix_gain[i] = 1.0f;
+		g_st.automix_gtarget[i] = 1.0f;
+	}
 	pthread_mutex_init(&g_st.target_lock, NULL);
 	atomic_store(&g_st.running, 1);
 
