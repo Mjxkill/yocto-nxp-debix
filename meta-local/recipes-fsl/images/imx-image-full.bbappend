@@ -128,3 +128,7 @@ IMAGE_INSTALL:append = " chromium-ozone-wayland mixer-kiosk"
 
 # V10-N4.4 — calibration tactile GT911 (générée par l'écran 5 mires)
 IMAGE_INSTALL:append = " goodix-calibration"
+
+# V10-NATIVE — console écran native Qt6/eglfs (remplace le kiosk chromium
+# au boot ; chromium reste installé en fallback debug pour l'instant)
+IMAGE_INSTALL:append = " mixer-console"
