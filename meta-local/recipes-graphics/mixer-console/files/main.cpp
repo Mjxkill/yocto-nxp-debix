@@ -7,6 +7,7 @@
 #include <QQuickWindow>
 #include <QElapsedTimer>
 #include <QTimer>
+#include <QFile>
 #include <QEvent>
 #include <QPointerEvent>
 #include <QDebug>
@@ -64,12 +65,28 @@ public:
     void attach(QQuickWindow *w) {
         connect(w, &QQuickWindow::frameSwapped, this,
                 [this] { ++m_frames; }, Qt::DirectConnection);
+        /* V10-N6d — luminosité : le modeset de CETTE app re-initialise le
+         * panneau (retour à son défaut 12/255) APRÈS toutes les écritures
+         * udev/ExecStartPre. La seule séquence sûre : écrire une fois la
+         * première frame affichée. */
+        connect(w, &QQuickWindow::frameSwapped, this, [this] {
+            if (m_blDone)
+                return;
+            m_blDone = true;
+            QTimer::singleShot(300, this, [] {
+                QFile f(QStringLiteral(
+                    "/sys/class/backlight/32e60000.mipi_dsi.0/brightness"));
+                if (f.open(QIODevice::WriteOnly))
+                    f.write("255");
+            });
+        });
     }
 signals:
     void fpsChanged();
 private:
     QElapsedTimer m_clock;
     QTimer m_tick;
+    bool m_blDone = false;
     int m_frames = 0;
     int m_fps = 0;
 };
