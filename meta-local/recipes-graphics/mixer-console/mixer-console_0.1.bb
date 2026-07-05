@@ -25,6 +25,8 @@ SRC_URI = " \
     file://qml/PageRouting.qml \
     file://qml/PageSystem.qml \
     file://qml/CalibrationOverlay.qml \
+    file://qml/StripFxDrawer.qml \
+    file://qml/stripfx.js \
 "
 
 S = "${WORKDIR}"

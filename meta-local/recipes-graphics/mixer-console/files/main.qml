@@ -123,6 +123,14 @@ Window {
             }
         }
 
+        StripFxDrawer {
+            id: fxDrawer
+            anchors.fill: parent
+            anchors.margins: 10
+            anchors.topMargin: 66
+            anchors.bottomMargin: 54
+        }
+
         Rectangle {   // châssis
             anchors.fill: parent
             radius: 10
@@ -250,6 +258,7 @@ Window {
                                 chanType: def ? def.t : "in"
                                 chanIndex: def ? def.idx : 0
                                 // level poussé imperativement par onMetersChanged (1 conversion/tick)
+                                onNameTapped: { if (def) fxDrawer.open(def.idx, def.t === "out"); }
                                 onFaderMoved: (db) => {
                                     if (!def) return;
                                     if (def.t === "in") {

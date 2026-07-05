@@ -24,6 +24,8 @@ qt_add_qml_module(mixer-console
         qml/PageRouting.qml
         qml/PageSystem.qml
         qml/CalibrationOverlay.qml
+        qml/StripFxDrawer.qml
+        qml/stripfx.js
 )
 
 target_link_libraries(mixer-console PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)

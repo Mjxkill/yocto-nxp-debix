@@ -11,6 +11,7 @@ Item {
     property real level: 0          // meter 0..1 (posé par la page)
     property bool isOut: chanType === "out"
     // callbacks posés par la page (via signaux)
+    signal nameTapped()
     signal faderMoved(real db)
     signal gainMoved(real db)
     signal muteToggled(bool m)
@@ -64,6 +65,7 @@ Item {
             font.pixelSize: 14
             font.bold: true
             font.letterSpacing: 2
+            TapHandler { margin: 8; onTapped: strip.nameTapped() }
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
