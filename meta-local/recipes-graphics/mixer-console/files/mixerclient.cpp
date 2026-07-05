@@ -51,19 +51,21 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
     m_statTimer.start();
 
     /* spectre : get_meters COMPLET (payload analyzer ~5 Ko) à 10 Hz —
-     * V10-N8 : page MIXER uniquement (SpectrumView du master) */
+     * V10-N8b : pages MIXER (0) et MASTERING (2) — l'index 2 est celui de
+     * PageMastering dans main.qml (le gating 0-1 de N8 gelait la page) */
     m_analyzerTimer.setInterval(100);
     connect(&m_analyzerTimer, &QTimer::timeout, this, [this] {
-        if (m_activePage == 0 && m_connected && m_pending.size() < 3)
+        if ((m_activePage == 0 || m_activePage == 2)
+            && m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_meters\"}\n", TagAnalyzer);
     });
     m_analyzerTimer.start();
 
     /* enveloppe ML (insert chain slot 0) à 5 Hz —
-     * V10-N8 : pages MIXER (overlay spectre) et MASTERING (grande env) */
+     * V10-N8b : pages MIXER (0, overlay spectre) et MASTERING (2) */
     m_insertTimer.setInterval(200);
     connect(&m_insertTimer, &QTimer::timeout, this, [this] {
-        if ((m_activePage == 0 || m_activePage == 1)
+        if ((m_activePage == 0 || m_activePage == 2)
             && m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_insert\"}\n", TagInsert);
     });

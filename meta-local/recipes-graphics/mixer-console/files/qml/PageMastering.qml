@@ -41,15 +41,21 @@ Item {
         anchors.margins: 14
         spacing: 12
 
-        // ---- colonne gauche : enveloppe ML géante ----
+        // ---- colonne gauche : FFT live (haut) + enveloppe ML (bas) ----
         Rectangle {
             width: parent.width * 0.62; height: parent.height
             color: "#171c21"; radius: 8; border.color: "#060809"
             Column {
                 anchors.fill: parent; anchors.margins: 12; spacing: 6
+                // V10-N8b : spectre temps réel du master (demande utilisateur
+                // — la page mastering n'avait que l'enveloppe)
+                SpectrumView {
+                    width: parent.width
+                    height: parent.height * 0.46
+                }
                 Text { text: "ENVELOPPE SPECTRALE ML · 64 PT · ±12 dB"; color: "#e5a13c"; font.pixelSize: 11; font.bold: true; font.letterSpacing: 3 }
                 Rectangle {
-                    width: parent.width; height: parent.height - 30
+                    width: parent.width; height: parent.height - parent.height * 0.46 - 42
                     color: "#0b0e11"; radius: 6; border.color: "#05070a"
                     Canvas {
                         id: envCv
