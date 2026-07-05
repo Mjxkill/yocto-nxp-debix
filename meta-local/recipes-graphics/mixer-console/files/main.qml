@@ -1,5 +1,5 @@
-// V10-NATIVE N0 — châssis console + animation témoin + FPS.
-// Tokens de la maquette validée : anthracite #14181c, ambre #e5a13c.
+// V10-NATIVE N1 — page MIXER : banques 8 tranches + master (meters réels).
+// Scène logique 1280x800 tournée 270° sur la dalle physique 800x1280 @44 Hz.
 import QtQuick
 
 Window {
@@ -8,9 +8,6 @@ Window {
     visibility: Window.FullScreen
     color: "#0c0f12"
 
-    // Rotation du CONTENU : QT_QPA_EGLFS_ROTATION ne s'applique pas au
-    // scenegraph QtQuick — la dalle est physiquement 800x1280 portrait,
-    // la scène logique est 1280x800 paysage tournée ici.
     Item {
         id: scene
         width: 1280
@@ -18,69 +15,285 @@ Window {
         anchors.centerIn: parent
         rotation: 270
 
-    Rectangle {
-        anchors.fill: parent
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: "#181d22" }
-            GradientStop { position: 0.22; color: "#14181c" }
-            GradientStop { position: 1.0; color: "#12161a" }
+        // ---- banques (layers console, identiques au web) ----
+        property int currentBank: 0
+        property var banks: [
+            { label: "IN DSP",  strips: mkStrips("M", "MIC", "in", 0, 8) },
+            { label: "IN USB",  strips: mkStrips("U", "USB", "in", 8, 8) },
+            { label: "TÉLÉPHONE", strips: [
+                { n: "P1", sub: "TEL IN",  t: "in",  idx: 16 },
+                { n: "P2", sub: "TEL IN",  t: "in",  idx: 17 },
+                { n: "P1", sub: "TEL OUT", t: "out", idx: 16 },
+                { n: "P2", sub: "TEL OUT", t: "out", idx: 17 } ] },
+            { label: "OUT DSP", strips: mkStrips("S", "DSP OUT", "out", 0, 8) },
+            { label: "OUT USB", strips: mkStrips("U", "USB OUT", "out", 8, 8) }
+        ]
+        function mkStrips(prefix, sub, type, base, count) {
+            const a = [];
+            for (let i = 0; i < count; i++)
+                a.push({ n: prefix + (i + 1), sub: sub, t: type, idx: base + i });
+            return a;
         }
 
-        Column {
-            anchors.centerIn: parent
-            spacing: 18
-
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: "MODEL AB"
-                color: "#e9e5da"
-                font.pixelSize: 42
-                font.bold: true
-                font.letterSpacing: 8
+        Connections {
+            target: mixer
+            function onMetersChanged() {
+                const iv = mixer.inLevels, ov = mixer.outLevels;
+                const strips = scene.banks[scene.currentBank].strips;
+                for (let i = 0; i < 8; i++) {
+                    const item = stripRep.itemAt(i);
+                    if (!item) continue;
+                    const d = i < strips.length ? strips[i] : null;
+                    if (!d) { item.level = 0; continue; }
+                    const arr = d.t === "in" ? iv : ov;
+                    item.level = arr.length > d.idx ? arr[d.idx] : 0;
+                }
+                masterL.level = ov.length > 0 ? ov[0] : 0;
+                masterR.level = ov.length > 1 ? ov[1] : 0;
+                vuL.level = masterL.level;
+                vuR.level = masterR.level;
             }
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: "CONSOLE NATIVE · N0 · EGLFS SANS WAYLAND"
-                color: "#e5a13c"
-                font.pixelSize: 15
-                font.letterSpacing: 4
+        }
+
+        Rectangle {   // châssis
+            anchors.fill: parent
+            radius: 10
+            border.color: "#060809"
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: "#181d22" }
+                GradientStop { position: 0.22; color: "#14181c" }
+                GradientStop { position: 1.0; color: "#12161a" }
             }
 
-            // animation témoin : un "VU" qui respire à 60 fps (coût GPU réel)
-            Row {
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 6
-                Repeater {
-                    model: 16
+            Column {
+                anchors.fill: parent
+
+                // ===== topbar =====
+                Rectangle {
+                    width: parent.width; height: 60
+                    color: "#1a2026"
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 18
+                        spacing: 22
+                        Column {
+                            Text { text: "MODEL AB"; color: "#e9e5da"; font.pixelSize: 19; font.bold: true; font.letterSpacing: 4 }
+                            Text { text: "ELECTROSENS"; color: "#e5a13c"; font.pixelSize: 9; font.letterSpacing: 5 }
+                        }
+                        Column {
+                            Text { text: "LATENCE"; color: "#8b959d"; font.pixelSize: 9; font.letterSpacing: 2 }
+                            Text { text: mixer.latencyMs.toFixed(1) + " ms"; color: "#e9e5da"; font.pixelSize: 15; font.family: "monospace" }
+                        }
+                        Column {
+                            Text { text: "XRUN"; color: "#8b959d"; font.pixelSize: 9; font.letterSpacing: 2 }
+                            Text { text: mixer.xrun; color: mixer.xrun ? "#e5a13c" : "#4cc470"; font.pixelSize: 15; font.family: "monospace" }
+                        }
+                    }
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.right: parent.right
+                        anchors.rightMargin: 18
+                        spacing: 10
+                        Rectangle {
+                            width: 9; height: 9; radius: 5
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: mixer.connected ? "#4cc470" : "#e05545"
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: mixer.connected ? "LIVE" : "HORS LIGNE"
+                            color: "#8b959d"; font.pixelSize: 11; font.letterSpacing: 3
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: fpsMeter.fps + " FPS"
+                            color: "#5c666e"; font.pixelSize: 10; font.family: "monospace"
+                        }
+                    }
+                }
+
+                // ===== barre de banques =====
+                Rectangle {
+                    width: parent.width; height: 38
+                    color: "#161b20"
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 14
+                        spacing: 6
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "BANQUE"; color: "#5c666e"; font.pixelSize: 9; font.letterSpacing: 2
+                        }
+                        Repeater {
+                            model: scene.banks.length
+                            Rectangle {
+                                width: bkTxt.width + 26; height: 27; radius: 4
+                                color: scene.currentBank === index ? "#2a2214" : "#1b2126"
+                                border.color: scene.currentBank === index ? "#e5a13c" : "#39434b"
+                                Text {
+                                    id: bkTxt
+                                    anchors.centerIn: parent
+                                    text: scene.banks[index].label
+                                    color: scene.currentBank === index ? "#e5a13c" : "#8b959d"
+                                    font.pixelSize: 11; font.bold: true; font.letterSpacing: 1.5
+                                }
+                                MouseArea { anchors.fill: parent; onClicked: scene.currentBank = index }
+                            }
+                        }
+                    }
+                }
+
+                // ===== plan de travail =====
+                Row {
+                    width: parent.width
+                    height: parent.height - 60 - 38 - 46
+
+                    // -- 8 tranches --
+                    Row {
+                        id: bankRow
+                        width: parent.width - 320
+                        height: parent.height
+                        Repeater {
+                            id: stripRep
+                            model: 8
+                            Strip {
+                                width: bankRow.width / 8
+                                height: bankRow.height
+                                property var def: index < scene.banks[scene.currentBank].strips.length
+                                                  ? scene.banks[scene.currentBank].strips[index] : null
+                                visible: def !== null
+                                name: def ? def.n : ""
+                                sub: def ? def.sub : ""
+                                chanType: def ? def.t : "in"
+                                chanIndex: def ? def.idx : 0
+                                // level poussé imperativement par onMetersChanged (1 conversion/tick)
+                                onFaderMoved: (db) => {
+                                    if (!def) return;
+                                    if (def.t === "in") {
+                                        mixer.setMaster(def.idx, 0, db);
+                                        mixer.setMaster(def.idx, 1, db);
+                                    } else {
+                                        mixer.setOutputGain(def.idx, db);
+                                    }
+                                }
+                                onGainMoved: (db) => { if (def && def.t === "in") mixer.setInputGain(def.idx, db); }
+                                onMuteToggled: (m) => { if (def && def.t === "in") mixer.setMute(def.idx, m); }
+                                onSendToggled: (bus, on) => {
+                                    if (!def || def.t !== "in") return;
+                                    mixer.setSend(def.idx, bus * 2, on ? 0 : -72);
+                                    mixer.setSend(def.idx, bus * 2 + 1, on ? 0 : -72);
+                                }
+                            }
+                        }
+                    }
+
+                    // -- master --
                     Rectangle {
-                        width: 14
-                        radius: 3
-                        height: 40 + 60 * Math.abs(Math.sin(pulse.v + index * 0.42))
-                        anchors.bottom: parent.bottom
-                        color: index < 10 ? "#4cc470" : (index < 13 ? "#e5a13c" : "#e05545")
-                        opacity: 0.9
+                        width: 320
+                        height: parent.height
+                        color: "#171c21"
+                        border.color: "#060809"
+
+                        Column {
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 10
+
+                            Text { text: "MASTER"; color: "#e5a13c"; font.pixelSize: 12; font.bold: true; font.letterSpacing: 4 }
+
+                            Row {
+                                width: parent.width
+                                height: 130
+                                spacing: 6
+                                VUNeedle {
+                                    id: vuL
+                                    width: (parent.width - 6) / 2; height: parent.height
+                                    channel: "LEFT"
+                                }
+                                VUNeedle {
+                                    id: vuR
+                                    width: (parent.width - 6) / 2; height: parent.height
+                                    channel: "RIGHT"
+                                }
+                            }
+
+                            Row {
+                                width: parent.width
+                                height: parent.height - 130 - 60
+                                spacing: 12
+                                Fader {
+                                    id: masterFader
+                                    height: parent.height
+                                    value: 0.857
+                                    onMoved: (v) => {
+                                        const db = v * 84 - 72;
+                                        mixer.setOutputGain(0, db);
+                                        mixer.setOutputGain(1, db);
+                                    }
+                                }
+                                MeterBar {
+                                    id: masterL
+                                    width: 15; height: parent.height
+                                }
+                                MeterBar {
+                                    id: masterR
+                                    width: 15; height: parent.height
+                                }
+                                Column {
+                                    spacing: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    Text { id: peakLTxt; text: "PEAK L  -∞"; color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
+                                    Text { id: peakRTxt; text: "PEAK R  -∞"; color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
+                                    Text { text: "FW " + mixer.version; color: "#5c666e"; font.pixelSize: 9; font.family: "monospace" }
+                                    Timer {
+                                        interval: 200; running: true; repeat: true
+                                        onTriggered: {
+                                            peakLTxt.text = "PEAK L  " + (masterL.level > 0.003 ? (masterL.level*60-60).toFixed(1) : "-∞");
+                                            peakRTxt.text = "PEAK R  " + (masterR.level > 0.003 ? (masterR.level*60-60).toFixed(1) : "-∞");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ===== navbar =====
+                Rectangle {
+                    width: parent.width; height: 46
+                    color: "#1a2026"
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 14
+                        spacing: 6
+                        Repeater {
+                            model: ["MIXER", "EFFETS", "MASTERING", "ROUTING", "SYSTÈME"]
+                            Rectangle {
+                                width: nvTxt.width + 34; height: 32; radius: 5
+                                color: index === 0 ? "#2a2214" : "transparent"
+                                border.color: index === 0 ? "#e5a13c" : "transparent"
+                                Text {
+                                    id: nvTxt
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    color: index === 0 ? "#e5a13c" : "#5c666e"
+                                    font.pixelSize: 12; font.letterSpacing: 2
+                                }
+                            }
+                        }
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.right: parent.right
+                        anchors.rightMargin: 16
+                        text: "CONSOLE NATIVE N1 · " + scene.width + "×" + scene.height
+                        color: "#5c666e"; font.pixelSize: 10; font.family: "monospace"
                     }
                 }
             }
-
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: scene.width + "×" + scene.height + " (dalle " + root.width + "×" + root.height + " @44 Hz)  ·  " + fpsMeter.fps + " FPS"
-                color: "#8b959d"
-                font.pixelSize: 13
-                font.family: "monospace"
-            }
         }
-
-        QtObject {
-            id: pulse
-            property real v: 0
-            NumberAnimation on v {
-                from: 0; to: Math.PI * 2
-                duration: 1600
-                loops: Animation.Infinite
-            }
-        }
-    }
     }
 }

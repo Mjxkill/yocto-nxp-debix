@@ -7,6 +7,7 @@
 #include <QQuickWindow>
 #include <QElapsedTimer>
 #include <QTimer>
+#include "mixerclient.h"
 
 class FpsMeter : public QObject {
     Q_OBJECT
@@ -41,7 +42,9 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     QQmlApplicationEngine engine;
     FpsMeter fps;
+    MixerClient mixer;
     engine.rootContext()->setContextProperty("fpsMeter", &fps);
+    engine.rootContext()->setContextProperty("mixer", &mixer);
     engine.load(QUrl(QStringLiteral("qrc:/MixerConsole/main.qml")));
     if (engine.rootObjects().isEmpty())
         return 1;

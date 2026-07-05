@@ -1,0 +1,64 @@
+/* V10-NATIVE N1 — MixerClient : client socket Unix direct de mixer-pro.
+ * Protocole JSON ligne-par-ligne existant (/run/mixer-pro.sock) :
+ * meters 30 Hz, stat 1 Hz, commandes fire-and-forget.
+ * Les réponses arrivent dans l'ordre des requêtes → simple FIFO de tags. */
+#pragma once
+#include <QObject>
+#include <QLocalSocket>
+#include <QTimer>
+#include <QVariantList>
+
+class MixerClient : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
+    Q_PROPERTY(QVariantList inLevels READ inLevels NOTIFY metersChanged)
+    Q_PROPERTY(QVariantList outLevels READ outLevels NOTIFY metersChanged)
+    Q_PROPERTY(int xrun READ xrun NOTIFY statChanged)
+    Q_PROPERTY(double latencyMs READ latencyMs NOTIFY statChanged)
+    Q_PROPERTY(QString version READ version NOTIFY statChanged)
+
+public:
+    explicit MixerClient(QObject *parent = nullptr);
+
+    bool connected() const { return m_connected; }
+    QVariantList inLevels() const { return m_in; }
+    QVariantList outLevels() const { return m_out; }
+    int xrun() const { return m_xrun; }
+    double latencyMs() const { return m_latencyMs; }
+    QString version() const { return m_version; }
+
+    /* commandes console — mêmes ops que la GUI web */
+    Q_INVOKABLE void setMaster(int src, int out, double gainDb);
+    Q_INVOKABLE void setInputGain(int src, double gainDb);
+    Q_INVOKABLE void setMute(int src, bool mute);
+    Q_INVOKABLE void setOutputGain(int out, double db);
+    Q_INVOKABLE void setSend(int in, int bus, double gainDb);
+
+signals:
+    void connectedChanged();
+    void metersChanged();
+    void statChanged();
+
+private:
+    enum Tag { TagMeters, TagStat, TagIgnore };
+
+    void connectSocket();
+    void request(const QByteArray &json, Tag tag);
+    void command(const QJsonObject &obj);
+    void onReadyRead();
+    void handleLine(const QByteArray &line, Tag tag);
+    static double dbNorm(double peak);   /* peak s32 → 0..1 (-60..0 dB) */
+
+    QLocalSocket m_sock;
+    QByteArray m_buf;
+    QList<Tag> m_pending;
+    QTimer m_meterTimer;
+    QTimer m_statTimer;
+    QTimer m_reconnect;
+
+    bool m_connected = false;
+    QVariantList m_in, m_out;
+    int m_xrun = 0;
+    double m_latencyMs = 0;
+    QString m_version;
+};

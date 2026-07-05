@@ -6,12 +6,18 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick)
 
-qt_add_executable(mixer-console main.cpp)
+qt_add_executable(mixer-console main.cpp mixerclient.cpp)
 
 qt_add_qml_module(mixer-console
     URI MixerConsole
     VERSION 1.0
-    QML_FILES main.qml
+    QML_FILES
+        main.qml
+        qml/Strip.qml
+        qml/Fader.qml
+        qml/Knob.qml
+        qml/MeterBar.qml
+        qml/VUNeedle.qml
 )
 
 target_link_libraries(mixer-console PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)

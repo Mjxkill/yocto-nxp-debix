@@ -9,7 +9,14 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-2.0-or-later;md5=fed5435554
 SRC_URI = " \
     file://CMakeLists.txt \
     file://main.cpp \
+    file://mixerclient.h \
+    file://mixerclient.cpp \
     file://main.qml \
+    file://qml/Strip.qml \
+    file://qml/Fader.qml \
+    file://qml/Knob.qml \
+    file://qml/MeterBar.qml \
+    file://qml/VUNeedle.qml \
 "
 
 S = "${WORKDIR}"
