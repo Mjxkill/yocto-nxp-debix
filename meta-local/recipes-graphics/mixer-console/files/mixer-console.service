@@ -1,0 +1,25 @@
+[Unit]
+Description=A.L.A. console native (Qt6/QML eglfs, sans wayland)
+After=mixer-pro.service
+Wants=mixer-pro.service
+
+[Service]
+Type=simple
+# Dalle a fond AVANT d'afficher : ecriture sysfs avec retentative (l'ecriture
+# DCS du driver au prepare est ignoree par le panneau ; la voie sysfs est
+# prouvee — on insiste jusqu'a ce que le device existe et accepte)
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 50); do \
+    [ -w /sys/class/backlight/32e60000.mipi_dsi.0/brightness ] && \
+    echo 255 > /sys/class/backlight/32e60000.mipi_dsi.0/brightness && exit 0; \
+    sleep 0.2; done; exit 0'
+Environment=QT_QPA_PLATFORM=eglfs
+Environment=QT_QPA_EGLFS_KMS_CONFIG=/etc/mixer-console-kms.json
+ExecStart=/usr/bin/mixer-console
+# cores non-audio ; le GPU porte le rendu (mesures TESTS_V10_P4a/N-series)
+CPUAffinity=1
+Nice=10
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

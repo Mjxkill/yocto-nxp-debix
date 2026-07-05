@@ -27,14 +27,27 @@ SRC_URI = " \
     file://qml/CalibrationOverlay.qml \
     file://qml/StripFxDrawer.qml \
     file://qml/IntroOverlay.qml \
+    file://mixer-console.service \
     file://qml/stripfx.js \
 "
 
 S = "${WORKDIR}"
 
-inherit qt6-cmake
+inherit qt6-cmake systemd
 
 DEPENDS = "qtbase qtdeclarative qtdeclarative-native"
 RDEPENDS:${PN} = "qtbase qtdeclarative"
+
+do_install:append() {
+    install -d ${D}${systemd_system_unitdir}
+    install -m 0644 ${WORKDIR}/mixer-console.service ${D}${systemd_system_unitdir}/
+    # config KMS : le DSI est card1 (eglfs choisit card0 par défaut)
+    install -d ${D}${sysconfdir}
+    echo "{ \"device\": \"/dev/dri/card1\" }" > ${D}${sysconfdir}/mixer-console-kms.json
+}
+
+FILES:${PN} += "${systemd_system_unitdir}/mixer-console.service ${sysconfdir}/mixer-console-kms.json"
+SYSTEMD_SERVICE:${PN} = "mixer-console.service"
+SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 COMPATIBLE_MACHINE = "(imx8mpevk|imx8mp-debix-model-ab)"
