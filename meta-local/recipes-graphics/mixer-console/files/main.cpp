@@ -7,7 +7,40 @@
 #include <QQuickWindow>
 #include <QElapsedTimer>
 #include <QTimer>
+#include <QEvent>
+#include <QPointerEvent>
+#include <QDebug>
 #include "mixerclient.h"
+
+/* diag tactile (blocage au changement de page) : trace CHAQUE événement
+ * pointeur brut reçu par la fenêtre — permet de distinguer « événement
+ * jamais arrivé » (driver/eglfs) de « arrivé mais pas délivré » (grab). */
+class TouchLogger : public QObject {
+public:
+    bool eventFilter(QObject *obj, QEvent *ev) override {
+        switch (ev->type()) {
+        case QEvent::TouchBegin:
+        case QEvent::TouchEnd:
+        case QEvent::MouseButtonPress:
+        case QEvent::MouseButtonRelease: {
+            auto *pe = static_cast<QPointerEvent *>(ev);
+            const QPointF p = pe->points().isEmpty()
+                              ? QPointF() : pe->points().first().position();
+            QString ids;
+            for (const auto &pt : pe->points())
+                ids += QString::number(pt.id()) + ":"
+                       + QString::number(int(pt.state())) + " ";
+            qWarning() << "TOUCH-EV" << ev->type()
+                       << int(p.x()) << int(p.y())
+                       << "npts" << pe->points().size() << ids;
+            break;
+        }
+        default:
+            break;
+        }
+        return QObject::eventFilter(obj, ev);
+    }
+};
 
 class FpsMeter : public QObject {
     Q_OBJECT
@@ -49,8 +82,11 @@ int main(int argc, char *argv[])
     engine.load(QUrl(QStringLiteral("qrc:/MixerConsole/main.qml")));
     if (engine.rootObjects().isEmpty())
         return 1;
-    if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().first()))
+    TouchLogger tlog;
+    if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().first())) {
         fps.attach(w);
+        w->installEventFilter(&tlog);
+    }
     return app.exec();
 }
 

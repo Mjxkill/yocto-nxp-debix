@@ -545,7 +545,7 @@ body{
     <div class="tab" tabindex="0">EFFETS</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
-    <div class="scene">GUI <b id="guiver">P4e</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
+    <div class="scene">GUI <b id="guiver">P4f</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
   </div>
 
 </div></div>
@@ -772,6 +772,43 @@ document.querySelectorAll(".send4 button").forEach(b=>{
   });
 });
 applyBank(0);
+
+/* V10-N4.2 — sync RETOUR (LCD/API → web) : toutes les 2 s, recharge
+ * l'état réel des tranches d'entrée de la banque affichée
+ * (get_strip_routing : fader/gain/mute/sends). Pas pendant un geste. */
+window.__uiDrag=0;
+document.addEventListener("pointerdown",()=>{window.__uiDrag++;},true);
+document.addEventListener("pointerup",()=>{window.__uiDrag=Math.max(0,window.__uiDrag-1);},true);
+document.addEventListener("pointercancel",()=>{window.__uiDrag=Math.max(0,window.__uiDrag-1);},true);
+setInterval(()=>{
+  if(!window.LIVE||window.__uiDrag>0||document.hidden)return;
+  BANKS[curBank].strips.forEach((sd,i)=>{
+    if(sd.t!=="in")return;
+    fetch("/api/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({op:"get_strip_routing",src:sd.idx})})
+    .then(r=>r.json()).then(j=>{
+      if(!j||!j.ok||window.__uiDrag>0)return;
+      const s=st[i],el=bank.children[i];
+      const g=(j.master&&j.master[0])||0;
+      const db=g>0.000316?Math.max(-72,20*Math.log10(g)):-72;
+      s.fader=(db+72)/84;
+      placeCap(el.querySelector(".ftrack"),s.fader);
+      if(j.gain>0){
+        s.gain=Math.max(-12,Math.min(12,20*Math.log10(j.gain)));
+        knobArc(el.querySelector(".knob"),s.gain);
+        el.querySelector(".kval").textContent=s.gain.toFixed(1)+" dB";
+      }
+      s.mute=j.mute===1;
+      el.querySelector(".sq.mute").classList.toggle("on",s.mute);
+      if(j.sends){
+        const so=[];
+        for(let b=0;b<4;b++)so.push((j.sends[b*2]||0)>0.001?1:0);
+        s.sends=so;
+        el.querySelectorAll(".send4 button").forEach((bt,k)=>bt.classList.toggle("on",!!so[k]));
+      }
+    }).catch(()=>{});
+  });
+},2000);
 
 document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));t.classList.add("on");

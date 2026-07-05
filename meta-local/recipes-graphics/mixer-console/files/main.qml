@@ -217,7 +217,7 @@ Window {
                                     color: scene.currentBank === index ? "#e5a13c" : "#8b959d"
                                     font.pixelSize: 11; font.bold: true; font.letterSpacing: 1.5
                                 }
-                                MouseArea { anchors.fill: parent; onClicked: scene.currentBank = index }
+                                TapHandler { onTapped: scene.currentBank = index }
                             }
                         }
                     }
@@ -359,7 +359,7 @@ Window {
                                     color: scene.currentPage === index ? "#e5a13c" : "#5c666e"
                                     font.pixelSize: 12; font.letterSpacing: 2
                                 }
-                                MouseArea { anchors.fill: parent; onClicked: scene.currentPage = index }
+                                TapHandler { onTapped: scene.currentPage = index }
                             }
                         }
                     }
