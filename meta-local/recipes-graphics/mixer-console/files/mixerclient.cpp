@@ -2,6 +2,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QQmlEngine>
 #include <QtMath>
 
 static const char *SOCK_PATH = "/run/mixer-pro.sock";
@@ -12,6 +13,7 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
     connect(&m_sock, &QLocalSocket::connected, this, [this] {
         m_connected = true;
         m_pending.clear();
+        m_cbs.clear();
         m_buf.clear();
         emit connectedChanged();
         /* tap analyzer 3 = sorties master 0/1 (spectre post-mastering),
@@ -120,8 +122,11 @@ double MixerClient::dbNorm(double peak)
 void MixerClient::handleLine(const QByteArray &line, Tag tag)
 {
     const QJsonDocument doc = QJsonDocument::fromJson(line);
-    if (!doc.isObject())
+    if (!doc.isObject()) {
+        if (tag == TagGeneric && !m_cbs.isEmpty())
+            m_cbs.dequeue();
         return;
+    }
     const QJsonObject o = doc.object();
 
     if (tag == TagMeters) {
@@ -182,6 +187,10 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
         m_mlEnvL = l;
         m_mlEnvR = r;
         emit insertChanged();
+    } else if (tag == TagGeneric) {
+        QJSValue cb = m_cbs.isEmpty() ? QJSValue() : m_cbs.dequeue();
+        if (m_engine && cb.isCallable())
+            cb.call({ m_engine->toScriptValue(o.toVariantMap()) });
     } else if (tag == TagStat) {
         m_xrun = o.value(QLatin1String("xrun")).toInt();
         m_latencyMs = o.value(QLatin1String("latency_us_one_way")).toDouble() / 1000.0;
@@ -191,6 +200,16 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
 }
 
 static double dbToGain(double db) { return db <= -71.0 ? 0.0 : qPow(10.0, db / 20.0); }
+
+void MixerClient::call(const QVariantMap &op, const QJSValue &cb)
+{
+    if (!m_connected) {
+        return;
+    }
+    m_cbs.enqueue(cb);
+    request(QJsonDocument(QJsonObject::fromVariantMap(op))
+                .toJson(QJsonDocument::Compact) + "\n", TagGeneric);
+}
 
 void MixerClient::setMaster(int src, int out, double gainDb)
 {

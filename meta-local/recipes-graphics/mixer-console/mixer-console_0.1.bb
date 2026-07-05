@@ -18,6 +18,10 @@ SRC_URI = " \
     file://qml/MeterBar.qml \
     file://qml/VUNeedle.qml \
     file://qml/SpectrumView.qml \
+    file://qml/PageEffects.qml \
+    file://qml/PageMastering.qml \
+    file://qml/PageRouting.qml \
+    file://qml/PageSystem.qml \
 "
 
 S = "${WORKDIR}"

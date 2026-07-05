@@ -7,6 +7,10 @@
 #include <QLocalSocket>
 #include <QTimer>
 #include <QVariantList>
+#include <QJSValue>
+#include <QQueue>
+
+class QQmlEngine;
 
 class MixerClient : public QObject {
     Q_OBJECT
@@ -41,6 +45,10 @@ public:
     Q_INVOKABLE void setMute(int src, bool mute);
     Q_INVOKABLE void setOutputGain(int out, double db);
     Q_INVOKABLE void setSend(int in, int bus, double gainDb);
+    /* canal générique : n'importe quel op JSON du protocole mixer-pro,
+     * callback JS appelé avec l'objet réponse (pages ROUTING/EFFETS/…) */
+    Q_INVOKABLE void call(const QVariantMap &op, const QJSValue &cb);
+    void setEngine(QQmlEngine *e) { m_engine = e; }
 
 signals:
     void connectedChanged();
@@ -54,7 +62,7 @@ signals:
     void uiTick();
 
 private:
-    enum Tag { TagMeters, TagStat, TagAnalyzer, TagInsert, TagIgnore };
+    enum Tag { TagMeters, TagStat, TagAnalyzer, TagInsert, TagGeneric, TagIgnore };
 
     void connectSocket();
     void request(const QByteArray &json, Tag tag);
@@ -63,6 +71,8 @@ private:
     void handleLine(const QByteArray &line, Tag tag);
     static double dbNorm(double peak);   /* peak s32 → 0..1 (-60..0 dB) */
 
+    QQmlEngine *m_engine = nullptr;
+    QQueue<QJSValue> m_cbs;
     QLocalSocket m_sock;
     QByteArray m_buf;
     QList<Tag> m_pending;

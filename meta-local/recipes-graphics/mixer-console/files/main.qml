@@ -15,6 +15,7 @@ Window {
         anchors.centerIn: parent
         rotation: 270
 
+        property int currentPage: 0
         // ---- banques (layers console, identiques au web) ----
         property int currentBank: 0
         property var banks: [
@@ -40,7 +41,7 @@ Window {
         // Ballistique par frame avec dt réel : attack 30 ms, release 110 ms,
         // aiguilles 150 ms. Un QTimer n'est JAMAIS en phase avec le vsync.
         FrameAnimation {
-            running: true
+            running: scene.currentPage === 0
             onTriggered: {
                 scene.tickN++;
                 const dt = Math.min(frameTime, 0.1);
@@ -134,8 +135,20 @@ Window {
                     }
                 }
 
+                // ===== pages 1-4 (visible-switch, état conservé) =====
+                Item {
+                    width: parent.width
+                    height: parent.height - 60 - 46
+                    visible: scene.currentPage !== 0
+                    PageEffects   { anchors.fill: parent; visible: scene.currentPage === 1 }
+                    PageMastering { anchors.fill: parent; visible: scene.currentPage === 2 }
+                    PageRouting   { anchors.fill: parent; visible: scene.currentPage === 3 }
+                    PageSystem    { anchors.fill: parent; visible: scene.currentPage === 4 }
+                }
+
                 // ===== barre de banques =====
                 Rectangle {
+                    visible: scene.currentPage === 0
                     width: parent.width; height: 38
                     color: "#161b20"
                     Row {
@@ -166,8 +179,9 @@ Window {
                     }
                 }
 
-                // ===== plan de travail =====
+                // ===== plan de travail (page MIXER) =====
                 Row {
+                    visible: scene.currentPage === 0
                     width: parent.width
                     height: parent.height - 60 - 38 - 46
 
@@ -292,15 +306,16 @@ Window {
                             model: ["MIXER", "EFFETS", "MASTERING", "ROUTING", "SYSTÈME"]
                             Rectangle {
                                 width: nvTxt.width + 34; height: 32; radius: 5
-                                color: index === 0 ? "#2a2214" : "transparent"
-                                border.color: index === 0 ? "#e5a13c" : "transparent"
+                                color: scene.currentPage === index ? "#2a2214" : "transparent"
+                                border.color: scene.currentPage === index ? "#e5a13c" : "transparent"
                                 Text {
                                     id: nvTxt
                                     anchors.centerIn: parent
                                     text: modelData
-                                    color: index === 0 ? "#e5a13c" : "#5c666e"
+                                    color: scene.currentPage === index ? "#e5a13c" : "#5c666e"
                                     font.pixelSize: 12; font.letterSpacing: 2
                                 }
+                                MouseArea { anchors.fill: parent; onClicked: scene.currentPage = index }
                             }
                         }
                     }

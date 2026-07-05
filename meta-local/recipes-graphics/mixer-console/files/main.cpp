@@ -43,6 +43,7 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
     FpsMeter fps;
     MixerClient mixer;
+    mixer.setEngine(&engine);
     engine.rootContext()->setContextProperty("fpsMeter", &fps);
     engine.rootContext()->setContextProperty("mixer", &mixer);
     engine.load(QUrl(QStringLiteral("qrc:/MixerConsole/main.qml")));

@@ -19,6 +19,10 @@ qt_add_qml_module(mixer-console
         qml/MeterBar.qml
         qml/VUNeedle.qml
         qml/SpectrumView.qml
+        qml/PageEffects.qml
+        qml/PageMastering.qml
+        qml/PageRouting.qml
+        qml/PageSystem.qml
 )
 
 target_link_libraries(mixer-console PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
