@@ -1,0 +1,18 @@
+[Unit]
+Description=V11-AL anti-larsen automatique (AFS — notchs BQ TAC 7-12)
+# Apres tac-reset + ala-fx-restore : les registres TAC sont dans leur etat
+# final, le daemon part d'un etat connu (slots AFS rendus flat au start)
+After=mixer-pro.service tac-reset.service ala-fx-restore.service
+Wants=mixer-pro.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/anti-larsen
+Restart=on-failure
+RestartSec=5
+# core 0 nice 10 — modele ml-inference ; cores 2-3 RT intouchables
+CPUAffinity=0
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

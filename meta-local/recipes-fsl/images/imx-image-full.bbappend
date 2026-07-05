@@ -133,6 +133,10 @@ IMAGE_INSTALL:append = " goodix-calibration"
 # au boot ; chromium reste installé en fallback debug pour l'instant)
 IMAGE_INSTALL:append = " mixer-console"
 
+# V11-AL — anti-larsen automatique (AFS, notchs BQ TAC 7-12).
+# enable=0 par défaut dans /etc/mixer-pro/anti-larsen.conf.
+IMAGE_INSTALL:append = " anti-larsen"
+
 # V10-N6e — pas de getty sur la dalle : le logo boot kernel A.L.A. (plein
 # écran) doit rester affiché jusqu'au modeset de mixer-console. getty@tty1
 # effaçait le framebuffer pendant le tac-reset. Login local : série + ssh.

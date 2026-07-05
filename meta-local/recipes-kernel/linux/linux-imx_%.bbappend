@@ -41,6 +41,10 @@ SRC_URI += "file://apply-panel-max-brightness.py"
 # Linux clut224 par le logo DEBIX 770x192 — même mécanique, notre PPM)
 SRC_URI += "file://logo_ala_clut224.ppm"
 
+# V11-AL — fix off-by-one TAC5212_MAX_REG (0x7E→0x7F) : le BQ12 va
+# jusqu'au reg 0x7F de sa page, le regmap rejetait le dernier octet (EIO)
+SRC_URI += "file://apply-tac5212-bq12-maxreg.py"
+
 # V7.0-E7.4.b — patch simple-card.c to support N codec phandles per DAI link
 # (upstream hardcodes num_codecs=1, blocking multi-TAC TDM binding)
 SRC_URI += "file://apply-simple-card-multicodec.py"
@@ -91,6 +95,8 @@ do_patch:append() {
     # V10-N6e logo boot kernel A.L.A.
     cp ${WORKDIR}/logo_ala_clut224.ppm ${S}/drivers/video/logo/logo_linux_clut224.ppm
     # V7.0-E7.4.b simple-card multi-codec support (idempotent, backward-compat)
+    # V11-AL fix BQ12 (MAX_REG 0x7E→0x7F)
+    python3 ${WORKDIR}/apply-tac5212-bq12-maxreg.py ${S}
     python3 ${WORKDIR}/apply-simple-card-multicodec.py ${S}
     # V7.0-E7.4.b imx-card link_id : keep sequential default for SOF tplg match
     python3 ${WORKDIR}/apply-imx-card-linkid.py ${S}
