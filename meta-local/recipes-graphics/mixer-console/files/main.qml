@@ -218,9 +218,14 @@ Window {
                                 }
                             }
 
+                            SpectrumView {
+                                width: parent.width
+                                height: 170
+                            }
+
                             Row {
                                 width: parent.width
-                                height: parent.height - 91 - 60
+                                height: parent.height - 91 - 170 - 70
                                 spacing: 12
                                 Fader {
                                     id: masterFader

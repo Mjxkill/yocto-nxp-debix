@@ -16,6 +16,10 @@ class MixerClient : public QObject {
     Q_PROPERTY(int xrun READ xrun NOTIFY statChanged)
     Q_PROPERTY(double latencyMs READ latencyMs NOTIFY statChanged)
     Q_PROPERTY(QString version READ version NOTIFY statChanged)
+    Q_PROPERTY(QVariantList spectrum READ spectrum NOTIFY spectrumChanged)
+    Q_PROPERTY(QVariantList mlEnvL READ mlEnvL NOTIFY insertChanged)
+    Q_PROPERTY(QVariantList mlEnvR READ mlEnvR NOTIFY insertChanged)
+    Q_PROPERTY(bool mlActive READ mlActive NOTIFY insertChanged)
 
 public:
     explicit MixerClient(QObject *parent = nullptr);
@@ -26,6 +30,10 @@ public:
     int xrun() const { return m_xrun; }
     double latencyMs() const { return m_latencyMs; }
     QString version() const { return m_version; }
+    QVariantList spectrum() const { return m_spectrum; }
+    QVariantList mlEnvL() const { return m_mlEnvL; }
+    QVariantList mlEnvR() const { return m_mlEnvR; }
+    bool mlActive() const { return m_mlActive; }
 
     /* commandes console — mêmes ops que la GUI web */
     Q_INVOKABLE void setMaster(int src, int out, double gainDb);
@@ -38,9 +46,11 @@ signals:
     void connectedChanged();
     void metersChanged();
     void statChanged();
+    void spectrumChanged();
+    void insertChanged();
 
 private:
-    enum Tag { TagMeters, TagStat, TagIgnore };
+    enum Tag { TagMeters, TagStat, TagAnalyzer, TagInsert, TagIgnore };
 
     void connectSocket();
     void request(const QByteArray &json, Tag tag);
@@ -54,6 +64,8 @@ private:
     QList<Tag> m_pending;
     QTimer m_meterTimer;
     QTimer m_statTimer;
+    QTimer m_analyzerTimer;
+    QTimer m_insertTimer;
     QTimer m_reconnect;
 
     bool m_connected = false;
@@ -61,4 +73,7 @@ private:
     int m_xrun = 0;
     double m_latencyMs = 0;
     QString m_version;
+    QVariantList m_spectrum;      /* 64 bins 0..1 */
+    QVariantList m_mlEnvL, m_mlEnvR;   /* 64 gains dB */
+    bool m_mlActive = false;
 };

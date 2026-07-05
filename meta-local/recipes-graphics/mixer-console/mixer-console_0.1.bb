@@ -17,6 +17,7 @@ SRC_URI = " \
     file://qml/Knob.qml \
     file://qml/MeterBar.qml \
     file://qml/VUNeedle.qml \
+    file://qml/SpectrumView.qml \
 "
 
 S = "${WORKDIR}"

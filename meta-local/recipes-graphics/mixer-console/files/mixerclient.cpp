@@ -14,6 +14,9 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
         m_pending.clear();
         m_buf.clear();
         emit connectedChanged();
+        /* tap analyzer 3 = sorties master 0/1 (spectre post-mastering),
+         * idempotent — la GUI web pose le même */
+        command({{"op", "set_tap"}, {"tap", 3}, {"kind", 3}, {"a", 0}, {"b", 1}});
     });
     connect(&m_sock, &QLocalSocket::disconnected, this, [this] {
         m_connected = false;
@@ -43,6 +46,22 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
             request("{\"op\":\"get_state\"}\n", TagStat);
     });
     m_statTimer.start();
+
+    /* spectre : get_meters COMPLET (payload analyzer) à 10 Hz seulement */
+    m_analyzerTimer.setInterval(100);
+    connect(&m_analyzerTimer, &QTimer::timeout, this, [this] {
+        if (m_connected && m_pending.size() < 3)
+            request("{\"op\":\"get_meters\"}\n", TagAnalyzer);
+    });
+    m_analyzerTimer.start();
+
+    /* enveloppe ML (insert chain slot 0) à 5 Hz */
+    m_insertTimer.setInterval(200);
+    connect(&m_insertTimer, &QTimer::timeout, this, [this] {
+        if (m_connected && m_pending.size() < 3)
+            request("{\"op\":\"get_insert\"}\n", TagInsert);
+    });
+    m_insertTimer.start();
 
     connectSocket();
 }
@@ -118,6 +137,43 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
         smooth(m_in, in);
         smooth(m_out, out);
         emit metersChanged();
+    } else if (tag == TagAnalyzer) {
+        /* analyzer[3].s = 128 bins int8 dB → 64 bins 0..1 (max de paires) */
+        const QJsonArray taps = o.value(QLatin1String("analyzer")).toArray();
+        if (taps.size() > 3) {
+            const QJsonArray sp = taps.at(3).toObject()
+                                      .value(QLatin1String("s")).toArray();
+            if (sp.size() >= 128) {
+                if (m_spectrum.size() != 64) {
+                    m_spectrum.clear();
+                    for (int i = 0; i < 64; ++i)
+                        m_spectrum.append(0.0);
+                }
+                for (int i = 0; i < 64; ++i) {
+                    const double a = sp.at(i * 2).toDouble();
+                    const double b = sp.at(i * 2 + 1).toDouble();
+                    const double db = qMax(a, b);
+                    m_spectrum[i] = qBound(0.0, (db + 90.0) / 90.0, 1.0);
+                }
+                emit spectrumChanged();
+            }
+        }
+    } else if (tag == TagInsert) {
+        /* chain[0] spectral_env : l[64]/r[64] gains dB (enveloppe NPU) */
+        const QJsonArray chain = o.value(QLatin1String("chain")).toArray();
+        bool act = o.value(QLatin1String("active")).toBool();
+        QVariantList l, r;
+        if (!chain.isEmpty()) {
+            const QJsonObject c0 = chain.at(0).toObject();
+            for (const auto &v : c0.value(QLatin1String("l")).toArray())
+                l.append(v.toDouble());
+            for (const auto &v : c0.value(QLatin1String("r")).toArray())
+                r.append(v.toDouble());
+        }
+        m_mlActive = act && l.size() == 64;
+        m_mlEnvL = l;
+        m_mlEnvR = r;
+        emit insertChanged();
     } else if (tag == TagStat) {
         m_xrun = o.value(QLatin1String("xrun")).toInt();
         m_latencyMs = o.value(QLatin1String("latency_us_one_way")).toDouble() / 1000.0;
