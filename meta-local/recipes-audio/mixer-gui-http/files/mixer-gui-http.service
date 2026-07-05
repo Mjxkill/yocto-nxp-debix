@@ -11,8 +11,10 @@ Restart=on-failure
 RestartSec=5
 User=root
 
-# V8.33 — Cores non isolés (0,1) pour ne pas polluer les cores audio (2,3)
-CPUAffinity=0 1
+# V8.33 — cores non isolés pour ne pas polluer les cores audio (2,3)
+# V10-N8 — core 0 uniquement : le core 1 est réservé au QSGRenderThread
+# de la console native (mesure jank 2026-07-05)
+CPUAffinity=0
 
 [Install]
 WantedBy=multi-user.target

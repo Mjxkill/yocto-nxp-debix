@@ -9,7 +9,8 @@ Rectangle {
     color: "#0b0e11"
     border.color: "#05070a"
     radius: 6
-    clip: true
+    // V10-N8 : clip retiré (casse le batching) — barres bornées à 0.92h
+    // et Canvas anchors.fill : rien ne peut déborder
 
     property int nb: 64
 
@@ -74,10 +75,15 @@ Rectangle {
     }
 
     // ---- alimentation : lissage par frame vsync (cibles 10 Hz) ----
+    // V10-N8 : décimation ×2 (22 Hz) — 64 barres cosmétiques mises à jour
+    // à 44 Hz = 64 items dirty/frame + conversion QVariantList par frame ;
+    // à 22 Hz l'œil ne voit pas la différence, le scenegraph si.
+    property int _tick: 0
     FrameAnimation {
         running: box.visible
         onTriggered: {
-            const dt = Math.min(frameTime, 0.1);
+            if ((box._tick++ & 1) === 1) return;
+            const dt = Math.min(frameTime * 2, 0.1);
             const kA = 1 - Math.exp(-dt / 0.025);
             const kR = 1 - Math.exp(-dt / 0.090);
             const sp = mixer.spectrum;

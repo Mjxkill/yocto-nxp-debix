@@ -97,14 +97,24 @@ Rectangle {
         }, function() { cb(null); });
     }
 
-    function applyBlob(numid) {
+    /* V10-N7 : callback delegate — le texte « non appliqué » est lié au
+     * signal blobChanged() DU DELEGATE ; émettre blobsChanged() (map
+     * globale) ne le rafraîchissait jamais. On vérifie aussi le ok:true
+     * du serveur au lieu de croire le HTTP 200. */
+    function applyBlob(numid, done) {
         const b = blobs[numid];
         if (!b || b.selftest !== "OK") return;
         const hex = FX.packBlob(b);
         xhr("POST", "/api/dsp/blob/set",
             JSON.stringify({ numid: numid, hex: hex }),
-            function() { b.dirty = false; blobsChanged(); },
-            function(e) { status = "⚠ écriture blob : " + e; });
+            function(txt) {
+                let ok = false;
+                try { ok = JSON.parse(txt).ok === true; } catch (e) {}
+                if (ok) { b.dirty = false; status = "✓ appliqué au DSP"; }
+                else { status = "⚠ écriture blob refusée"; }
+                if (done) done(ok);
+            },
+            function(e) { status = "⚠ écriture blob : " + e; if (done) done(false); });
     }
 
     // ================== UI ==================
@@ -113,29 +123,39 @@ Rectangle {
         anchors.margins: 12
         spacing: 8
 
-        // entête
-        Row {
-            spacing: 10
+        // entête — ancrages FIXES (V10-N7c : le Row en flux poussait le ✕
+        // hors position dès que le statut s'allongeait ; et TapHandler sans
+        // gesturePolicy annule le tap au moindre glissement du doigt)
+        Item {
+            width: parent.width; height: 36
             Rectangle {
-                width: 40; height: 30; radius: 4; color: "#1b2126"; border.color: "#39434b"
+                id: prevBtn
+                width: 48; height: 36; radius: 4; color: "#1b2126"; border.color: "#39434b"
                 Text { anchors.centerIn: parent; text: "‹"; color: "#e5a13c"; font.pixelSize: 17 }
-                TapHandler { onTapped: drawer.step(-1) }
+                TapHandler { margin: 6; gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: drawer.step(-1) }
+            }
+            Rectangle {
+                id: nextBtn
+                anchors.left: prevBtn.right; anchors.leftMargin: 8
+                width: 48; height: 36; radius: 4; color: "#1b2126"; border.color: "#39434b"
+                Text { anchors.centerIn: parent; text: "›"; color: "#e5a13c"; font.pixelSize: 17 }
+                TapHandler { margin: 6; gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: drawer.step(1) }
             }
             Text {
+                anchors.left: nextBtn.right; anchors.leftMargin: 12
+                anchors.right: closeBtn.left; anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
+                elide: Text.ElideRight
                 text: drawer.chanName() + " · EFFETS PISTE" + (drawer.status ? "   " + drawer.status : "")
                 color: "#e5a13c"; font.pixelSize: 14; font.bold: true; font.letterSpacing: 2
             }
             Rectangle {
-                width: 40; height: 30; radius: 4; color: "#1b2126"; border.color: "#39434b"
-                Text { anchors.centerIn: parent; text: "›"; color: "#e5a13c"; font.pixelSize: 17 }
-                TapHandler { onTapped: drawer.step(1) }
-            }
-            Item { width: drawer.width - 560; height: 1 }
-            Rectangle {
-                width: 40; height: 30; radius: 4; color: "#1b2126"; border.color: "#39434b"
-                Text { anchors.centerIn: parent; text: "✕"; color: "#e9e5da"; font.pixelSize: 14 }
-                TapHandler { onTapped: drawer.visible = false }
+                id: closeBtn
+                anchors.right: parent.right
+                width: 64; height: 36; radius: 4
+                color: "#2a2214"; border.color: "#e5a13c"
+                Text { anchors.centerIn: parent; text: "✕"; color: "#e5a13c"; font.pixelSize: 16; font.bold: true }
+                TapHandler { margin: 10; gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: drawer.visible = false }
             }
         }
 
@@ -440,7 +460,7 @@ Rectangle {
                         border.color: enabled2 ? "#ffcf7e" : "#39434b"
                         opacity: enabled2 ? 1 : 0.5
                         Text { anchors.centerIn: parent; text: "APPLIQUER AU DSP"; color: parent.enabled2 ? "#1d1204" : "#5c666e"; font.pixelSize: 11; font.bold: true }
-                        TapHandler { onTapped: if (parent.enabled2) drawer.applyBlob(ctl.numid) }
+                        TapHandler { onTapped: if (parent.enabled2) drawer.applyBlob(ctl.numid, function(ok) { if (ok) blobChanged(); }) }
                     }
                     Text {
                         visible: blob && blob.dirty === true

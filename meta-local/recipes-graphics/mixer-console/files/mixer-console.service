@@ -15,8 +15,10 @@ ExecStartPre=/bin/sh -c 'for i in $(seq 1 50); do \
 Environment=QT_QPA_PLATFORM=eglfs
 Environment=QT_QPA_EGLFS_KMS_CONFIG=/etc/mixer-console-kms.json
 ExecStart=/usr/bin/mixer-console
-# cores non-audio ; le GPU porte le rendu (mesures TESTS_V10_P4a/N-series)
-CPUAffinity=1
+# V10-N8 : cores non-audio 0 ET 1 — les 2 threads Qt (GUI + QSGRenderThread,
+# ~50% cumulés) se battaient sur le seul core 1 = jank épisodique. Les IRQ
+# audio du core 0 sont RT (irq-prio-rt 90) et préemptent la GUI nice 10.
+CPUAffinity=0 1
 Nice=10
 Restart=on-failure
 RestartSec=3

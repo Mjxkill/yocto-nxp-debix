@@ -18,6 +18,9 @@ Window {
         rotation: 270
 
         property int currentPage: 0
+        // V10-N8 : informe le client — les pollers meters/analyzer/insert
+        // ne tournent que sur les pages qui les affichent
+        onCurrentPageChanged: mixer.activePage = currentPage
         // ---- banques (layers console, identiques au web) ----
         property int currentBank: 0
         property var banks: [
@@ -263,14 +266,15 @@ Window {
                                 onNameTapped: { if (def) fxDrawer.open(def.idx, def.t === "out"); }
                                 onFaderMoved: (db) => {
                                     if (!def) return;
+                                    // V10-N7 : fader IN = gain de tranche
+                                    // (sémantique E7.2 restaurée) — la
+                                    // matrice appartient à la page routing
                                     if (def.t === "in") {
-                                        mixer.setMaster(def.idx, 0, db);
-                                        mixer.setMaster(def.idx, 1, db);
+                                        mixer.setInputGain(def.idx, db);
                                     } else {
                                         mixer.setOutputGain(def.idx, db);
                                     }
                                 }
-                                onGainMoved: (db) => { if (def && def.t === "in") mixer.setInputGain(def.idx, db); }
                                 onMuteToggled: (m) => { if (def && def.t === "in") mixer.setMute(def.idx, m); }
                                 onSendToggled: (bus, on) => {
                                     if (!def || def.t !== "in") return;

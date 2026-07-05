@@ -12,6 +12,8 @@ SRC_URI = " \
     file://mixer-gui-http.c \
     file://Makefile \
     file://mixer-gui-http.service \
+    file://ala-fx-restore.sh \
+    file://ala-fx-restore.service \
     file://www/index.html \
     file://www/beta.html \
 "
@@ -36,19 +38,28 @@ do_install() {
     # V10 : nouvelle console (/beta et /panel kiosk)
     install -m 0644 ${WORKDIR}/www/beta.html ${D}/var/www/mixer-gui/beta.html
 
+    # V10-N7b : restauration effets TAC/DSP au boot (post tac-reset)
+    install -m 0755 ${WORKDIR}/ala-fx-restore.sh ${D}${bindir}/ala-fx-restore.sh
+
     install -d ${D}${systemd_unitdir}/system
     install -m 0644 ${WORKDIR}/mixer-gui-http.service \
         ${D}${systemd_unitdir}/system/mixer-gui-http.service
+    install -m 0644 ${WORKDIR}/ala-fx-restore.service \
+        ${D}${systemd_unitdir}/system/ala-fx-restore.service
 }
 
 FILES:${PN} = " \
     ${bindir}/mixer-gui-http \
+    ${bindir}/ala-fx-restore.sh \
     /var/www/mixer-gui/index.html \
     /var/www/mixer-gui/beta.html \
     ${systemd_unitdir}/system/mixer-gui-http.service \
+    ${systemd_unitdir}/system/ala-fx-restore.service \
 "
 
-SYSTEMD_SERVICE:${PN} = "mixer-gui-http.service"
+RDEPENDS:${PN} += "curl alsa-utils-alsactl"
+
+SYSTEMD_SERVICE:${PN} = "mixer-gui-http.service ala-fx-restore.service"
 # V10-P4b : GO kiosk acté (TESTS_V10_P4a) — la GUI démarre au boot
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 

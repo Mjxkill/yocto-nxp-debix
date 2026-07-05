@@ -11,6 +11,9 @@ RestartSec=5s
 # Process séparé non-RT (TFLite NPU dans même process que mixer-pro RT99
 # = freeze kernel galcore vs ALSA SDMA). Pas de SCHED_FIFO.
 Nice=10
+# V10-N8 : core 0 uniquement — laisse le core 1 au QSGRenderThread de la
+# console (mesure : ml-inf 13% en compétition avec le rendu = jank GUI)
+CPUAffinity=0
 
 [Install]
 WantedBy=multi-user.target

@@ -6,7 +6,8 @@ import QtQuick
 
 Item {
     id: vu
-    clip: true    // le pivot de l'aiguille est SOUS le cadre : rogne le pied
+    // V10-N8 : plus de clip (casse le batching Vivante) — l'aiguille est
+    // raccourcie à la zone visible, la Rotation garde le pivot sous le cadre
     property real level: 0        // 0..1
     property string channel: "L"
     property real shown: 0
@@ -44,14 +45,19 @@ Item {
     Rectangle {   // aiguille GPU — même pivot que les graduations
         id: needle
         width: 2.4
-        height: vu.height * 0.90            // pointe au milieu des ticks (r-6)
+        // visible de 0.22h à 1.0h (le pied 1.0h→1.12h était rogné par le
+        // clip ; on ne le dessine plus du tout)
+        height: vu.height * 0.78
         radius: 1
         color: "#e9e5da"
         antialiasing: true
         x: vu.width / 2 - width / 2
-        y: vu.height * 1.12 - height        // bas du rect = pivot (w/2, 1.12h)
-        transformOrigin: Item.Bottom
-        rotation: -50.4 + vu.shown * 100.8  // ±50.4° = ±0.28π, aligné ticks
+        y: vu.height * 0.22
+        transform: Rotation {
+            origin.x: needle.width / 2
+            origin.y: vu.height * 0.90      // 0.22h + 0.90h = pivot 1.12h
+            angle: -50.4 + vu.shown * 100.8 // ±50.4° = ±0.28π, aligné ticks
+        }
     }
 
     Text {

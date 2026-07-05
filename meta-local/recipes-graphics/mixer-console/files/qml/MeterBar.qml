@@ -15,25 +15,25 @@ Rectangle {
     // ballistique faite en C++ (MixerClient) — binding direct, pas d'animation
     onLevelChanged: shown = level
 
-    Item {
-        anchors.bottom: parent.bottom
+    // V10-N8 : dégradé PLEIN + cache couleur du puits par-dessus, au lieu
+    // d'un clip par meter — chaque clip:true casse le batching Vivante
+    // (~10 clips/frame sur la page MIXER, overhead libGAL mesuré au perf)
+    Rectangle {
+        anchors.fill: parent
+        anchors.margins: 1
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: "#e05545" }
+            GradientStop { position: 0.12; color: "#e5a13c" }
+            GradientStop { position: 0.35; color: "#4cc470" }
+            GradientStop { position: 1.0; color: "#2e6e48" }
+        }
+    }
+    Rectangle {
+        anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.margins: 1
-        height: (bar.height - 2) * bar.shown
-        clip: true
-
-        Rectangle {
-            anchors.bottom: parent.bottom
-            anchors.left: parent.left
-            anchors.right: parent.right
-            height: bar.height - 2
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: "#e05545" }
-                GradientStop { position: 0.12; color: "#e5a13c" }
-                GradientStop { position: 0.35; color: "#4cc470" }
-                GradientStop { position: 1.0; color: "#2e6e48" }
-            }
-        }
+        height: (bar.height - 2) * (1 - bar.shown)
+        color: "#0b0e11"
     }
 }

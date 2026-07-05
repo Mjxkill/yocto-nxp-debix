@@ -41,7 +41,11 @@ function parseAmixer(text) {
 }
 
 function shortLbl(n) {
-    return n.replace(/^TAC\d+\s+(?:ADC|DAC|OUT|CH|MICBIAS|VAD|VREF)(?:\d[A-Z]?)?\s+/, "")
+    /* garder la lettre A/B des sorties DAC (deux drivers de sortie
+     * physiques par canal — OUTxA/OUTxB du TAC5212), sinon les deux
+     * volumes du canal deviennent indistinguables */
+    return n.replace(/^TAC\d+\s+(?:ADC|DAC|OUT|CH|MICBIAS|VAD|VREF)(?:\d([A-Z])?)?\s+/,
+                     function(m, l) { return l ? "OUT " + l + " · " : ""; })
             .replace(/^TAC\d+\s+/, "").replace(/^PGA\d\.\d \d /, "")
             .replace(/^(MULTIBAND_DRC|DRC)\d\.\d /, "");
 }

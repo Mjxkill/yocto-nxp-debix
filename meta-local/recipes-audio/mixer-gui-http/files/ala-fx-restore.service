@@ -1,0 +1,14 @@
+[Unit]
+Description=A.L.A. — restauration effets TAC/DSP au boot (post tac-reset)
+# APRES tac-reset (sinon il ecrase les registres TAC restaures) et apres
+# mixer-pro + gui-http (endpoint blob + pipelines DSP charges)
+After=tac-reset.service mixer-pro.service mixer-gui-http.service
+Wants=tac-reset.service mixer-gui-http.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ala-fx-restore.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

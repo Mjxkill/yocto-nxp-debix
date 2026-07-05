@@ -13,24 +13,23 @@ Item {
     // callbacks posés par la page (via signaux)
     signal nameTapped()
     signal faderMoved(real db)
-    signal gainMoved(real db)
     signal muteToggled(bool m)
     signal sendToggled(int bus, bool on)
 
     property alias faderValue: fader.value
     property alias faderInteracting: fader.interacting
-    property alias gainKnobItem: gainKnob
     /* synchronise la tranche depuis l'état réel mixer-pro
-     * (get_strip_routing : master[], gain, mute, sends[]) */
+     * (get_strip_routing : master[], gain, mute, sends[]).
+     * V10-N7 : le fader IN = gain de la tranche (set_input_gain), sémantique
+     * de l'ancienne interface (E7.2). La MATRICE n'est JAMAIS touchée par le
+     * mixer — c'est la page routing qui la pilote (régression V10-P2c :
+     * fader→set_master out0+1 polluait la matrice → phasing). */
     function syncFromRouting(r) {
-        if (fader.interacting || gainKnob.interacting) return;
-        if (r.master !== undefined) {
-            const g = r.master[0] || 0;
-            const db = g > 0.000316 ? Math.max(-72, 20 * Math.log10(g)) : -72;
-            fader.value = (db + 72) / 84;
+        if (fader.interacting) return;
+        if (r.gain !== undefined) {
+            const db = r.gain > 0.001 ? Math.max(-60, 20 * Math.log10(r.gain)) : -60;
+            fader.value = (db + 60) / 66;
         }
-        if (r.gain !== undefined && r.gain > 0)
-            gainKnob.value = Math.max(-12, Math.min(12, 20 * Math.log10(r.gain)));
         if (r.mute !== undefined) muted = r.mute === 1;
         if (r.sends !== undefined) {
             const so = [];
@@ -75,14 +74,9 @@ Item {
             font.letterSpacing: 2
         }
 
-        Knob {
-            id: gainKnob
-            anchors.horizontalCenter: parent.horizontalCenter
-            visible: !strip.isOut
-            from: -12; to: 12
-            onMoved: (v) => strip.gainMoved(v)
-        }
-        Item { width: 1; height: strip.isOut ? 74 : 0; visible: strip.isOut }
+        // V10-N7 : plus de knob GAIN — il écrivait la même cellule que le
+        // fader restauré (set_input_gain). Espace rendu au fader.
+        Item { width: 1; height: 74 }
 
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
@@ -91,7 +85,10 @@ Item {
             Fader {
                 id: fader
                 height: parent.height
-                onMoved: (v) => strip.faderMoved(v * 84 - 72)   // 0..1 → dB
+                // IN : -60..+6 dB (gain de tranche, comme l'ancienne
+                // interface) ; OUT : -72..+12 dB (trim de sortie, inchangé)
+                onMoved: (v) => strip.faderMoved(strip.isOut ? v * 84 - 72
+                                                             : v * 66 - 60)
             }
             MeterBar {
                 height: parent.height

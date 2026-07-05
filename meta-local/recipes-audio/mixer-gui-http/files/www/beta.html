@@ -789,9 +789,10 @@ setInterval(()=>{
     .then(r=>r.json()).then(j=>{
       if(!j||!j.ok||window.__uiDrag>0)return;
       const s=st[i],el=bank.children[i];
-      const g=(j.master&&j.master[0])||0;
-      const db=g>0.000316?Math.max(-72,20*Math.log10(g)):-72;
-      s.fader=(db+72)/84;
+      /* V10-N7 : fader IN synchronisé depuis le gain de tranche (E7.2) */
+      const g=j.gain||0;
+      const db=g>0.001?Math.max(-60,20*Math.log10(g)):-60;
+      s.fader=(db+60)/66;
       placeCap(el.querySelector(".ftrack"),s.fader);
       if(j.gain>0){
         s.gain=Math.max(-12,Math.min(12,20*Math.log10(j.gain)));
@@ -1302,18 +1303,20 @@ function connectMeters(){
 }
 
 /* ---- contrôles → vrai mixer ---- */
-/* faders de tranche → routage vers master (out 0+1) */
+/* fader de tranche IN = gain de la tranche (set_input_gain, -60..+6 dB) —
+ * sémantique E7.2 restaurée. La MATRICE n'est jamais touchée par le mixer
+ * (régression V10-P2c : fader→set_master out0+1 polluait le routage →
+ * phasing). Fader OUT = trim de sortie, inchangé. */
 document.querySelectorAll(".ftrack[data-i]").forEach(tr=>{
   const i=+tr.dataset.i;
   tr.addEventListener("pointermove",()=>{
     if(!window.LIVE)return;
     const mp=st[i].map;if(!mp)return;
-    const db=st[i].fader*84-72;
     if(mp.t==="in"){
-      const gain=db<=-71?0:Math.pow(10,db/20);
-      postT("f"+i,{op:"set_master",src:mp.idx,out:0,gain});
-      postT("g"+i,{op:"set_master",src:mp.idx,out:1,gain});
+      const db=st[i].fader*66-60;
+      postT("f"+i,{op:"set_input_gain",src:mp.idx,gain:Math.pow(10,db/20)});
     }else{
+      const db=st[i].fader*84-72;
       postT("f"+i,{op:"set_output_gain",out:mp.idx,db:db});
     }
   });
@@ -1827,8 +1830,11 @@ function parseAmixer(text){
   }
   return out;
 }
+/* V10-N7 : garder la lettre A/B des volumes DAC (OUTxA/OUTxB = deux
+ * drivers de sortie physiques par canal du TAC5212) */
 const shortLbl=n=>n
-  .replace(/^TAC\d+\s+(?:ADC|DAC|OUT|CH|MICBIAS|VAD|VREF)(?:\d[A-Z]?)?\s+/,"")
+  .replace(/^TAC\d+\s+(?:ADC|DAC|OUT|CH|MICBIAS|VAD|VREF)(?:\d([A-Z])?)?\s+/,
+           (m,l)=>l?"OUT "+l+" · ":"")
   .replace(/^TAC\d+\s+/,"").replace(/^PGA\d\.\d \d /,"")
   .replace(/^(MULTIBAND_DRC|DRC)\d\.\d /,"");
 

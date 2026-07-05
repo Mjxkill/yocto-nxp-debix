@@ -24,9 +24,20 @@ class MixerClient : public QObject {
     Q_PROPERTY(QVariantList mlEnvL READ mlEnvL NOTIFY insertChanged)
     Q_PROPERTY(QVariantList mlEnvR READ mlEnvR NOTIFY insertChanged)
     Q_PROPERTY(bool mlActive READ mlActive NOTIFY insertChanged)
+    /* V10-N8 : page active — les pollers meters/analyzer/insert ne
+     * tournent que quand une page les affiche (sinon ~45 req/s inutiles
+     * qui réveillent le control thread de mixer-pro sur les cores audio) */
+    Q_PROPERTY(int activePage READ activePage WRITE setActivePage NOTIFY activePageChanged)
 
 public:
     explicit MixerClient(QObject *parent = nullptr);
+
+    int activePage() const { return m_activePage; }
+    void setActivePage(int p) {
+        if (m_activePage == p) return;
+        m_activePage = p;
+        emit activePageChanged();
+    }
 
     bool connected() const { return m_connected; }
     QVariantList inLevels() const { return m_in; }
@@ -56,6 +67,7 @@ signals:
     void statChanged();
     void spectrumChanged();
     void insertChanged();
+    void activePageChanged();
     /* tick d'affichage coalescé 22 Hz (½ vsync 44) : le QML ne met à jour
      * la scène QU'ICI → 1 rendu par tick au lieu de 45 rendus/s irréguliers
      * (42 % des cycles = driver Vivante PAR frame, mesuré perf) */
@@ -85,6 +97,7 @@ private:
 
     bool m_connected = false;
     QVariantList m_in, m_out;
+    int m_activePage = 0;
     int m_xrun = 0;
     double m_latencyMs = 0;
     QString m_version;

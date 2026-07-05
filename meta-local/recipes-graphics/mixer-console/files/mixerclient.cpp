@@ -34,10 +34,11 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
     m_reconnect.setInterval(1500);
     connect(&m_reconnect, &QTimer::timeout, this, &MixerClient::connectSocket);
 
-    /* meters 30 Hz — skip si le socket a du retard (pas d'empilement) */
+    /* meters 30 Hz — skip si le socket a du retard (pas d'empilement).
+     * V10-N8 : page MIXER uniquement (seule à afficher des niveaux) */
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, [this] {
-        if (m_connected && m_pending.size() < 3)
+        if (m_activePage == 0 && m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_meters_lite\"}\n", TagMeters);
     });
     m_meterTimer.start();
@@ -49,18 +50,21 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
     });
     m_statTimer.start();
 
-    /* spectre : get_meters COMPLET (payload analyzer) à 10 Hz seulement */
+    /* spectre : get_meters COMPLET (payload analyzer ~5 Ko) à 10 Hz —
+     * V10-N8 : page MIXER uniquement (SpectrumView du master) */
     m_analyzerTimer.setInterval(100);
     connect(&m_analyzerTimer, &QTimer::timeout, this, [this] {
-        if (m_connected && m_pending.size() < 3)
+        if (m_activePage == 0 && m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_meters\"}\n", TagAnalyzer);
     });
     m_analyzerTimer.start();
 
-    /* enveloppe ML (insert chain slot 0) à 5 Hz */
+    /* enveloppe ML (insert chain slot 0) à 5 Hz —
+     * V10-N8 : pages MIXER (overlay spectre) et MASTERING (grande env) */
     m_insertTimer.setInterval(200);
     connect(&m_insertTimer, &QTimer::timeout, this, [this] {
-        if (m_connected && m_pending.size() < 3)
+        if ((m_activePage == 0 || m_activePage == 1)
+            && m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_insert\"}\n", TagInsert);
     });
     m_insertTimer.start();

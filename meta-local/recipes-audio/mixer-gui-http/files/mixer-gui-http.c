@@ -37,10 +37,28 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <stdatomic.h>
 #include <microhttpd.h>
 #include <alsa/asoundlib.h>
 
 #define GUI_VERSION       "v8.1b-drift-meter"
+/* V10-N7b : miroir des blobs DSP appliqués (rejoués au boot) */
+#define DSP_BLOB_DIR      "/var/lib/mixer-pro/dsp-blobs"
+
+/* V10-N7b : rémanence TAC/PGA — alsactl store débouncé (3 s) après
+ * chaque /api/alsa/set (le ExecStop d'alsa-restore ne couvre que les
+ * shutdowns propres, pas les coupures secteur) */
+static _Atomic int g_alsa_dirty = 0;
+static void *alsa_store_thread(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		sleep(3);
+		if (atomic_exchange(&g_alsa_dirty, 0))
+			(void)system("alsactl store >/dev/null 2>&1");
+	}
+	return NULL;
+}
 #define DEFAULT_PORT      8080
 #define MIXER_SOCK_PATH   "/run/mixer-pro.sock"
 #define WWW_ROOT          "/var/www/mixer-gui"
@@ -341,6 +359,15 @@ static void *state_producer(void *arg)
 	for (;;) {
 		usleep(200000);              /* 5 Hz de base */
 		tick++;
+		/* V10-N8 : AUCUN client SSE → aucun poll mixer-pro (le control
+		 * thread vit sur les cores audio isolés ; le poller tournait à
+		 * vide en usage console pure). need_full ré-amorce à la
+		 * connexion suivante. */
+		int any = 0;
+		for (int i = 0; i < SC_MAX; i++)
+			if (g_sc[i].used) { any = 1; break; }
+		if (!any)
+			continue;
 		int cold = (tick % 5) == 0;  /* 1 Hz */
 		int full = (tick % 150) == 0;/* 30 s */
 
@@ -1203,6 +1230,10 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		if (r != 0)
 			return send_json(conn, 503,
 				"{\"ok\":false,\"err\":\"amixer cset failed\"}\n");
+		/* V10-N7b : rémanence TAC/PGA robuste aux coupures secteur —
+		 * alsactl store débouncé (le ExecStop d'alsa-restore ne couvre
+		 * que les shutdowns propres) */
+		atomic_store(&g_alsa_dirty, 1);
 		char reply[320];
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"numid\":%d,\"value\":\"%s\"}\n",
@@ -1263,6 +1294,19 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		if (sof_blob_write(numid, buf, (size_t)sz) != 0)
 			return send_json(conn, 503,
 				"{\"ok\":false,\"err\":\"tlv write failed\"}\n");
+		/* V10-N7b : rémanence des blobs DSP (BYTES ignorés par alsactl) —
+		 * miroir du hex appliqué, rejoué au boot par ala-fx-restore via
+		 * ce même endpoint (chemin de code identique). Atomique. */
+		mkdir(DSP_BLOB_DIR, 0755);
+		char bp[128], bt[136];
+		snprintf(bp, sizeof(bp), DSP_BLOB_DIR "/%d.hex", numid);
+		snprintf(bt, sizeof(bt), "%s.tmp", bp);
+		FILE *bf = fopen(bt, "w");
+		if (bf) {
+			fputs(hex, bf);
+			fclose(bf);
+			rename(bt, bp);
+		}
 		char reply[128];
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"numid\":%d,\"size\":%d}\n", numid, sz);
@@ -1318,6 +1362,52 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		return send_json(conn, 200, reply);
 	}
 
+	/* === Route POST /api/factory/reset === (V10-N7)
+	 * Reset usine COMPLET : efface les états persistés de la table
+	 * (/var/lib/mixer-pro : presets, mic_map, out_gain, mixer_state)
+	 * puis reboote — la matrice, les gains, les inserts, le mode
+	 * assistant ET les blobs DSP (mémoire DSP, défauts topology au
+	 * reload firmware) reviennent aux défauts usine. Le body doit
+	 * contenir {"confirm":"usine"} (garde-fou anti-appel accidentel). */
+	if (!strcmp(method, "POST") && !strcmp(url, "/api/factory/reset")) {
+		struct post_buf *pb = *con_cls;
+		if (!pb) {
+			pb = calloc(1, sizeof(*pb));
+			if (!pb) return MHD_NO;
+			*con_cls = pb;
+			return MHD_YES;
+		}
+		if (*upload_data_size > 0) {
+			size_t avail = POST_MAX_BYTES - 1 - pb->len;
+			size_t n = *upload_data_size < avail ? *upload_data_size : avail;
+			memcpy(pb->data + pb->len, upload_data, n);
+			pb->len += n;
+			pb->data[pb->len] = '\0';
+			*upload_data_size = 0;
+			return MHD_YES;
+		}
+		char confirm[16] = "";
+		if (pb->len > 0)
+			(void)json_get_str_field(pb->data, "confirm",
+			                         confirm, sizeof(confirm));
+		if (strcmp(confirm, "usine") != 0)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"confirm=usine requis\"}\n");
+		fprintf(stderr, "gui-http: FACTORY RESET — purge état + reboot\n");
+		/* V10-N7b : STOPPER les services persistants AVANT le rm, sinon
+		 * ils re-sauvent leur état mémoire au shutdown et annulent la
+		 * purge (constaté : mixer-pro final-save + alsactl store du
+		 * ExecStop d'alsa-restore). systemctl stop est synchrone →
+		 * les rm qui suivent sont définitifs. Détaché pour laisser la
+		 * réponse HTTP partir. */
+		(void)system("( systemctl stop mixer-pro alsa-restore ; "
+		             "rm -rf /var/lib/mixer-pro ; "
+		             "rm -f /var/lib/alsa/asound.state ; "
+		             "systemctl reboot ) >/dev/null 2>&1 &");
+		return send_json(conn, 200,
+			"{\"ok\":true,\"msg\":\"reset usine — redémarrage\"}\n");
+	}
+
 	return send_json(conn, MHD_HTTP_NOT_FOUND, "{\"ok\":false,\"err\":\"not found\"}\n");
 }
 
@@ -1367,6 +1457,10 @@ int main(int argc, char **argv)
 	}
 	pthread_t state_th;
 	pthread_create(&state_th, NULL, state_producer, NULL);
+
+	/* V10-N7b : saver alsactl débouncé */
+	pthread_t store_th;
+	pthread_create(&store_th, NULL, alsa_store_thread, NULL);
 
 	struct MHD_Daemon *d = MHD_start_daemon(
 		MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_AUTO,

@@ -12,7 +12,8 @@ Item {
     property bool limByp: false
 
     onVisibleChanged: if (visible) refresh()
-    Timer { interval: 500; running: page.visible; repeat: true; onTriggered: page.refresh() }
+    // V10-N8 : 500 ms → 1 s (2 ops socket par tick, réveils mixer-pro)
+    Timer { interval: 1000; running: page.visible; repeat: true; onTriggered: page.refresh() }
 
     function refresh() {
         mixer.call({ op: "get_assistant" }, function(r) {

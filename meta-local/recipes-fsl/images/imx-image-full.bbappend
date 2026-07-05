@@ -140,3 +140,19 @@ ROOTFS_POSTPROCESS_COMMAND += "ala_disable_getty_tty1; "
 ala_disable_getty_tty1() {
     rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/getty.target.wants/getty@tty1.service
 }
+
+# V10-N8 — appliance audio : services inutiles retirés du boot (audit
+# 2026-07-05 : flutter-embedded en boucle de retry binaire absent,
+# containerd 42 Mo RAM, neard=NFC, ofono=téléphonie modem, imx8-isp=caméra
+# failed, crontabs vides, syslogd doublon journald, NFS inutilisé).
+# connman/systemd-networkd volontairement PAS touchés (les deux actifs,
+# à arbitrer avec accès console — risque de perte réseau).
+ROOTFS_POSTPROCESS_COMMAND += "ala_disable_useless_services; "
+ala_disable_useless_services() {
+    for s in flutter-embedded containerd bluetooth neard ofono nfs-statd \
+             rpcbind imx8-isp parsec atd crond syslogd; do
+        rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/multi-user.target.wants/$s.service
+        rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/sockets.target.wants/$s.socket
+    done
+    rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/sockets.target.wants/rpcbind.socket
+}

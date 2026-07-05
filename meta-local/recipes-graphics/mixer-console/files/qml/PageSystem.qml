@@ -154,6 +154,43 @@ Item {
                     Text { anchors.centerIn: parent; text: "CALIBRER LE TACTILE"; color: "#e9e5da"; font.pixelSize: 12; font.bold: true }
                     TapHandler { onTapped: calib.start() }
                 }
+                /* V10-N7 — reset usine : purge tous les états persistés
+                 * (matrice, gains, effets, mode assistant) + reboot →
+                 * défauts usine partout, y compris blobs DSP (reload
+                 * firmware). Double tap de confirmation, fenêtre 5 s. */
+                Rectangle {
+                    id: factoryBtn
+                    width: parent.width; height: 44; radius: 5
+                    property bool arm: false
+                    property bool busy: false
+                    color: busy ? "#2a2214" : (arm ? "#3a1512" : "#1b2126")
+                    border.color: arm ? "#e05545" : "#39434b"
+                    Text {
+                        anchors.centerIn: parent
+                        text: factoryBtn.busy ? "RESET… REDÉMARRAGE"
+                              : (factoryBtn.arm ? "CONFIRMER LE RESET USINE ?"
+                                                : "RESET USINE (tout effacer)")
+                        color: factoryBtn.busy ? "#e5a13c"
+                               : (factoryBtn.arm ? "#f2796a" : "#e9e5da")
+                        font.pixelSize: 12; font.bold: true
+                    }
+                    TapHandler {
+                        onTapped: {
+                            if (factoryBtn.busy) return;
+                            if (!factoryBtn.arm) {
+                                factoryBtn.arm = true;
+                                armTimer.restart();
+                                return;
+                            }
+                            factoryBtn.arm = false;
+                            factoryBtn.busy = true;
+                            const q = new XMLHttpRequest();
+                            q.open("POST", "http://127.0.0.1:8080/api/factory/reset");
+                            q.send(JSON.stringify({ confirm: "usine" }));
+                        }
+                    }
+                    Timer { id: armTimer; interval: 5000; onTriggered: factoryBtn.arm = false }
+                }
             }
         }
     }
