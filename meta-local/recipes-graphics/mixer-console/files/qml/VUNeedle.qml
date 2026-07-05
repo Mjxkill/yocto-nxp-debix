@@ -6,6 +6,7 @@ import QtQuick
 
 Item {
     id: vu
+    clip: true    // le pivot de l'aiguille est SOUS le cadre : rogne le pied
     property real level: 0        // 0..1
     property string channel: "L"
     property real shown: 0
