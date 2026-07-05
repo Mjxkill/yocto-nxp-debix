@@ -123,6 +123,8 @@ Window {
             }
         }
 
+        IntroOverlay { anchors.fill: parent }
+
         StripFxDrawer {
             id: fxDrawer
             anchors.fill: parent

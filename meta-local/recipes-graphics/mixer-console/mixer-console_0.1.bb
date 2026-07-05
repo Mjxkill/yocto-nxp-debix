@@ -26,6 +26,7 @@ SRC_URI = " \
     file://qml/PageSystem.qml \
     file://qml/CalibrationOverlay.qml \
     file://qml/StripFxDrawer.qml \
+    file://qml/IntroOverlay.qml \
     file://qml/stripfx.js \
 "
 
