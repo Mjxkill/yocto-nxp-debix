@@ -1474,6 +1474,94 @@ static void smp_scan(int locked)
 	mlog("smp: %d samples chargés (%zu Ko)", loaded, g_smp_total >> 10);
 }
 
+/* ================= V12-LOOP — looper (pédale RC) =================
+ * Source = paire de tranches post-fader ; restitution additionnée dans
+ * P1/P2 (comme le sampleur). Buffers boucle+undo alloués au démarrage
+ * (2 × 60 s stéréo float). UNDO multi-passes : snapshot incrémental à
+ * la 1re passe de la session, restauration par blocs de 96 frames
+ * (jamais de memcpy massif en RT). ARCHI_V12_LOOPER.md. */
+#define LOOP_MAX_FRAMES (60u * 48000u)
+enum { LP_IDLE, LP_REC, LP_PLAY, LP_DUB, LP_STOP };
+static const char *const LP_NAMES[] = { "idle", "rec", "play", "overdub", "stop" };
+static struct {
+	float *buf, *undo;             /* stéréo entrelacé LR */
+	_Atomic int state;
+	_Atomic uint32_t len, pos;
+	uint32_t dub_count;            /* frames snapshotées cette session */
+	uint32_t dub_start;            /* pos à l'ouverture de la session */
+	_Atomic uint32_t undo_pending; /* frames restant à restaurer */
+	uint32_t undo_pos;
+	_Atomic int layers;
+	int src_a, src_b;              /* tranches source (b=-1 : mono) */
+	float gain;
+} g_loop = { .src_a = 0, .src_b = 1, .gain = 1.0f };
+
+static void loop_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
+{
+	int lst = atomic_load_explicit(&g_loop.state, memory_order_acquire);
+	if (lst == LP_IDLE || !g_loop.buf)
+		return;
+	const int P = N_INPUT_MICS + N_INPUT_STEMS;   /* P1 = 16 */
+	uint32_t len = atomic_load_explicit(&g_loop.len, memory_order_relaxed);
+	uint32_t pos = atomic_load_explicit(&g_loop.pos, memory_order_relaxed);
+
+	/* restauration UNDO incrémentale : 96 frames/bloc pendant tout état */
+	uint32_t up = atomic_load(&g_loop.undo_pending);
+	if (up && len) {
+		uint32_t n = up < PERIOD_FRAMES ? up : PERIOD_FRAMES;
+		for (uint32_t k = 0; k < n; k++) {
+			uint32_t i = (g_loop.undo_pos + k) % len;
+			g_loop.buf[(size_t)i * 2]     = g_loop.undo[(size_t)i * 2];
+			g_loop.buf[(size_t)i * 2 + 1] = g_loop.undo[(size_t)i * 2 + 1];
+		}
+		g_loop.undo_pos = (g_loop.undo_pos + n) % len;
+		atomic_store(&g_loop.undo_pending, up - n);
+	}
+
+	const int sa = g_loop.src_a;
+	const int sb = g_loop.src_b >= 0 ? g_loop.src_b : g_loop.src_a;
+	const float ga = g_st.input_gain[sa] * g_st.automix_gain[sa];
+	const float gb = g_st.input_gain[sb] * g_st.automix_gain[sb];
+
+	if (lst == LP_REC) {
+		for (int f = 0; f < PERIOD_FRAMES && len < LOOP_MAX_FRAMES; f++, len++) {
+			g_loop.buf[(size_t)len * 2]     = in_block[sa][f] * ga;
+			g_loop.buf[(size_t)len * 2 + 1] = in_block[sb][f] * gb;
+		}
+		atomic_store_explicit(&g_loop.len, len, memory_order_relaxed);
+		if (len >= LOOP_MAX_FRAMES) {   /* plafond → boucle auto */
+			atomic_store(&g_loop.pos, 0);
+			atomic_store(&g_loop.state, LP_PLAY);
+		}
+		return;
+	}
+	if (!len || lst == LP_STOP)
+		return;
+
+	const float g = g_loop.gain;
+	for (int f = 0; f < PERIOD_FRAMES; f++) {
+		float l = g_loop.buf[(size_t)pos * 2];
+		float r = g_loop.buf[(size_t)pos * 2 + 1];
+		if (lst == LP_DUB) {
+			if (g_loop.dub_count < len) {
+				g_loop.undo[(size_t)pos * 2]     = l;
+				g_loop.undo[(size_t)pos * 2 + 1] = r;
+				g_loop.dub_count++;
+			}
+			g_loop.buf[(size_t)pos * 2]     = l + in_block[sa][f] * ga;
+			g_loop.buf[(size_t)pos * 2 + 1] = r + in_block[sb][f] * gb;
+		}
+		/* on restitue la valeur PRÉ-dub : la source live s'entend déjà
+		 * en direct par sa propre tranche */
+		in_block[P][f]     += l * g;
+		in_block[P + 1][f] += r * g;
+		pos++;
+		if (pos >= len)
+			pos = 0;
+	}
+	atomic_store_explicit(&g_loop.pos, pos, memory_order_relaxed);
+}
+
 /* Rendu (audio_thread, SOUS target_lock, après le convert S32→float) */
 static void smp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 {
@@ -1910,8 +1998,9 @@ static void *audio_thread(void *arg)
 					s32_to_f(cap_phone_buf[f * N_INPUT_PHONE + i]);
 		}
 
-		/* V12-SMP : sampleur → tranches P1/P2 (additionne, sous lock) */
+		/* V12-SMP/LOOP : sources internes → P1/P2 (addition, sous lock) */
 		smp_render(in_block);
+		loop_render(in_block);
 
 		/* MIX BLOCK — 1 appel pour 96 frames (vs 96 calls × 1 frame) */
 		automix_update(in_block, PERIOD_FRAMES);   /* V12-AMX */
@@ -2711,6 +2800,101 @@ static void handle_cmd(int fd, const char *line)
 		            "\"mode\":\"%s\",\"source\":\"%s\"}\n",
 		        mode ? "mastering" : "passthrough",
 		        src  ? "usb"       : "hw");
+
+	} else if (json_has_op(line, "looper_ctl")) {
+		/* V12-LOOP : {"op":"looper_ctl","action":"rec|play|overdub|stop|undo|clear"} */
+		char act[16] = "";
+		(void)json_get_str(line, "action", act, sizeof(act));
+		int lst = atomic_load(&g_loop.state);
+		uint32_t len = atomic_load(&g_loop.len);
+		if (!strcmp(act, "rec") && lst == LP_IDLE) {
+			atomic_store(&g_loop.pos, 0);
+			atomic_store(&g_loop.len, 0);
+			atomic_store(&g_loop.layers, 0);
+			atomic_store(&g_loop.undo_pending, 0);
+			atomic_store_explicit(&g_loop.state, LP_REC,
+					      memory_order_release);
+		} else if (!strcmp(act, "play")) {
+			if (lst == LP_REC) {
+				atomic_store(&g_loop.pos, 0);
+				atomic_store(&g_loop.layers, 1);
+				atomic_store(&g_loop.state, LP_PLAY);
+			} else if (lst == LP_DUB) {
+				atomic_fetch_add(&g_loop.layers, 1);
+				atomic_store(&g_loop.state, LP_PLAY);
+			} else if (lst == LP_STOP && len) {
+				atomic_store(&g_loop.state, LP_PLAY);
+			}
+		} else if (!strcmp(act, "overdub")) {
+			if (lst == LP_REC) {
+				g_loop.dub_start = 0;
+				g_loop.dub_count = 0;
+				atomic_store(&g_loop.pos, 0);
+				atomic_store(&g_loop.layers, 1);
+				atomic_store(&g_loop.state, LP_DUB);
+			} else if (lst == LP_PLAY) {
+				g_loop.dub_start = atomic_load(&g_loop.pos);
+				g_loop.dub_count = 0;
+				atomic_store(&g_loop.state, LP_DUB);
+			}
+		} else if (!strcmp(act, "stop") && len) {
+			if (lst == LP_DUB)
+				atomic_fetch_add(&g_loop.layers, 1);
+			atomic_store(&g_loop.state, LP_STOP);
+		} else if (!strcmp(act, "undo")) {
+			if ((lst == LP_PLAY || lst == LP_STOP) &&
+			    atomic_load(&g_loop.layers) > 1 &&
+			    !atomic_load(&g_loop.undo_pending) &&
+			    g_loop.dub_count) {
+				g_loop.undo_pos = g_loop.dub_start;
+				atomic_store(&g_loop.undo_pending, g_loop.dub_count);
+				g_loop.dub_count = 0;
+				atomic_fetch_sub(&g_loop.layers, 1);
+			}
+		} else if (!strcmp(act, "clear")) {
+			atomic_store(&g_loop.state, LP_IDLE);
+			atomic_store(&g_loop.len, 0);
+			atomic_store(&g_loop.pos, 0);
+			atomic_store(&g_loop.layers, 0);
+			atomic_store(&g_loop.undo_pending, 0);
+			g_loop.dub_count = 0;
+		} else {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad action/state\"}\n");
+			return;
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"looper_ctl\",\"state\":\"%s\"}\n",
+			LP_NAMES[atomic_load(&g_loop.state)]);
+
+	} else if (json_has_op(line, "looper_cfg")) {
+		/* {"op":"looper_cfg","src_a":N,"src_b":N|-1,"gain_db":F} —
+		 * refusé pendant REC/OVERDUB */
+		int lst = atomic_load(&g_loop.state);
+		if (lst == LP_REC || lst == LP_DUB) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"busy rec/overdub\"}\n");
+			return;
+		}
+		int a = -2, b = -2;
+		float gdb = 1000.0f;
+		(void)json_get_int(line, "src_a", &a);
+		(void)json_get_int(line, "src_b", &b);
+		(void)json_get_float(line, "gain_db", &gdb);
+		if (a >= 0 && a < N_INPUT_REAL)
+			g_loop.src_a = a;
+		if (b >= -1 && b < N_INPUT_REAL)
+			g_loop.src_b = b;
+		if (gdb > -60.0f && gdb <= 12.0f)
+			g_loop.gain = powf(10.0f, gdb / 20.0f);
+		dprintf(fd, "{\"ok\":true,\"op\":\"looper_cfg\"}\n");
+
+	} else if (json_has_op(line, "looper_status")) {
+		dprintf(fd, "{\"ok\":true,\"state\":\"%s\",\"len_s\":%.2f,"
+			"\"pos_s\":%.2f,\"layers\":%d,\"src_a\":%d,\"src_b\":%d,"
+			"\"max_s\":%u}\n",
+			LP_NAMES[atomic_load(&g_loop.state)],
+			atomic_load(&g_loop.len) / 48000.0f,
+			atomic_load(&g_loop.pos) / 48000.0f,
+			atomic_load(&g_loop.layers),
+			g_loop.src_a, g_loop.src_b, LOOP_MAX_FRAMES / 48000u);
 
 	} else if (json_has_op(line, "sampler_list")) {
 		/* V12-SMP : slots (nom, durée s, playing, position s) */
@@ -3935,6 +4119,12 @@ int main(int argc, char **argv)
 	mkdir("/var/lib/ala", 0755);
 	mkdir(SMP_DIR, 0755);
 	smp_scan(0);
+
+	/* V12-LOOP : buffers boucle + undo (2 × 23 Mo, jamais libérés) */
+	g_loop.buf  = calloc((size_t)LOOP_MAX_FRAMES * 2, sizeof(float));
+	g_loop.undo = calloc((size_t)LOOP_MAX_FRAMES * 2, sizeof(float));
+	if (!g_loop.buf || !g_loop.undo)
+		mlog("loop: allocation buffers ÉCHEC — looper indisponible");
 
 	/* E6.h : eventfd pour signaler le play_thread depuis l'audio_thread.
 	 * EFD_SEMAPHORE-like accumule les writes ; on lit en bloc.
