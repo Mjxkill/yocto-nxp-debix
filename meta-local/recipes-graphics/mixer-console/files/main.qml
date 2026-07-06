@@ -221,8 +221,9 @@ Window {
                     PageEffects   { anchors.fill: parent; visible: scene.currentPage === 1 }
                     PageMastering { anchors.fill: parent; visible: scene.currentPage === 2 }
                     PagePads      { anchors.fill: parent; visible: scene.currentPage === 3 }
-                    PageRouting   { anchors.fill: parent; visible: scene.currentPage === 4 }
-                    PageSystem    { anchors.fill: parent; visible: scene.currentPage === 5 }
+                    PageLooper    { anchors.fill: parent; visible: scene.currentPage === 4 }
+                    PageRouting   { anchors.fill: parent; visible: scene.currentPage === 5 }
+                    PageSystem    { anchors.fill: parent; visible: scene.currentPage === 6 }
                 }
 
                 // ===== barre de banques =====
@@ -409,7 +410,7 @@ Window {
                         anchors.leftMargin: 14
                         spacing: 6
                         Repeater {
-                            model: ["MIXER", "EFFETS", "MASTERING", "PADS", "ROUTING", "SYSTÈME"]
+                            model: ["MIXER", "EFFETS", "MASTERING", "PADS", "LOOPER", "ROUTING", "SYSTÈME"]
                             Rectangle {
                                 width: nvTxt.width + 34; height: 32; radius: 5
                                 color: scene.currentPage === index ? "#2a2214" : "transparent"

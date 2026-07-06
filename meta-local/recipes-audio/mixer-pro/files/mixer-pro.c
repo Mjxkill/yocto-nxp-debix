@@ -1474,92 +1474,132 @@ static void smp_scan(int locked)
 	mlog("smp: %d samples chargés (%zu Ko)", loaded, g_smp_total >> 10);
 }
 
-/* ================= V12-LOOP — looper (pédale RC) =================
- * Source = paire de tranches post-fader ; restitution additionnée dans
- * P1/P2 (comme le sampleur). Buffers boucle+undo alloués au démarrage
- * (2 × 60 s stéréo float). UNDO multi-passes : snapshot incrémental à
- * la 1re passe de la session, restauration par blocs de 96 frames
- * (jamais de memcpy massif en RT). ARCHI_V12_LOOPER.md. */
-#define LOOP_MAX_FRAMES (60u * 48000u)
-enum { LP_IDLE, LP_REC, LP_PLAY, LP_DUB, LP_STOP };
-static const char *const LP_NAMES[] = { "idle", "rec", "play", "overdub", "stop" };
-static struct {
-	float *buf, *undo;             /* stéréo entrelacé LR */
-	_Atomic int state;
-	_Atomic uint32_t len, pos;
-	uint32_t dub_count;            /* frames snapshotées cette session */
-	uint32_t dub_start;            /* pos à l'ouverture de la session */
-	_Atomic uint32_t undo_pending; /* frames restant à restaurer */
-	uint32_t undo_pos;
-	_Atomic int layers;
-	int src_a, src_b;              /* tranches source (b=-1 : mono) */
-	float gain;
-} g_loop = { .src_a = 0, .src_b = 1, .gain = 1.0f };
+/* ============ V12-LOOP-PRO — loopstation multipiste (RC-505) ============
+ * LOOP_TRACKS pistes indépendantes, chacune = 1 couche discrète : voie
+ * source sélectionnable, mute/clear individuels. Horloge maître partagée
+ * (g_master_len + g_lpos), posée par la 1re piste enregistrée ; les pistes
+ * suivantes s'enregistrent alignées (un tour complet) → phase garantie.
+ * Restitution additionnée dans P1/P2 (in_block[16/17], comme le sampleur).
+ * Buffers alloués au démarrage, jamais en RT. memset au rec-arm d'une piste
+ * VIDE (control thread, non lue par l'audio) → aucun glitch, pas de undo.
+ * ARCHI_V12_LOOPER_PRO.md. */
+#define LOOP_TRACKS      6
+#define LOOP_MAX_FRAMES  (40u * 48000u)   /* 40 s/piste — 6×40s stéréo = 88 MiB */
+enum { TR_EMPTY, TR_REC, TR_PLAY };
+static const char *const TR_NAMES[] = { "empty", "rec", "play" };
 
+struct loop_track {
+	float           *buf;        /* stéréo entrelacé LR, LOOP_MAX_FRAMES*2 */
+	_Atomic uint32_t len;        /* frames (= master_len une fois posée), 0=vide */
+	_Atomic int      state;      /* TR_EMPTY / TR_REC / TR_PLAY */
+	_Atomic int      muted;      /* 1 = couche désactivée (conservée) */
+	uint32_t         rec_head;   /* écriture piste maître (REC libre) */
+	_Atomic uint32_t rec_start;  /* g_lpos capturé par l'audio au 1er bloc REC aligné */
+	uint32_t         rec_done;   /* frames enregistrées ce tour (piste alignée) */
+	int              src_a, src_b; /* voies source (-1 : mono → dup) */
+	float            gain;
+	_Atomic uint32_t peak;       /* crête VU (maj en lecture) */
+};
+static struct loop_track g_tr[LOOP_TRACKS];
+static _Atomic uint32_t  g_master_len;  /* 0 tant qu'aucune piste posée */
+static _Atomic uint32_t  g_lpos;        /* position globale (frames) */
+static _Atomic int       g_loop_run;    /* transport global (0=stop, 1=play) */
+#define REC_START_NONE 0xFFFFFFFFu
+
+/* Rendu (audio_thread, SOUS target_lock, après le convert S32→float) */
 static void loop_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 {
-	int lst = atomic_load_explicit(&g_loop.state, memory_order_acquire);
-	if (lst == LP_IDLE || !g_loop.buf)
-		return;
 	const int P = N_INPUT_MICS + N_INPUT_STEMS;   /* P1 = 16 */
-	uint32_t len = atomic_load_explicit(&g_loop.len, memory_order_relaxed);
-	uint32_t pos = atomic_load_explicit(&g_loop.pos, memory_order_relaxed);
+	uint32_t mlen = atomic_load_explicit(&g_master_len, memory_order_acquire);
+	uint32_t lpos = atomic_load_explicit(&g_lpos, memory_order_relaxed);
+	int run = atomic_load_explicit(&g_loop_run, memory_order_relaxed);
+	int any_rec = 0;
 
-	/* restauration UNDO incrémentale : 96 frames/bloc pendant tout état */
-	uint32_t up = atomic_load(&g_loop.undo_pending);
-	if (up && len) {
-		uint32_t n = up < PERIOD_FRAMES ? up : PERIOD_FRAMES;
-		for (uint32_t k = 0; k < n; k++) {
-			uint32_t i = (g_loop.undo_pos + k) % len;
-			g_loop.buf[(size_t)i * 2]     = g_loop.undo[(size_t)i * 2];
-			g_loop.buf[(size_t)i * 2 + 1] = g_loop.undo[(size_t)i * 2 + 1];
-		}
-		g_loop.undo_pos = (g_loop.undo_pos + n) % len;
-		atomic_store(&g_loop.undo_pending, up - n);
-	}
+	for (int t = 0; t < LOOP_TRACKS; t++) {
+		struct loop_track *tr = &g_tr[t];
+		int st = atomic_load_explicit(&tr->state, memory_order_acquire);
+		if (st != TR_REC && st != TR_PLAY)
+			continue;
+		if (!tr->buf)
+			continue;
 
-	const int sa = g_loop.src_a;
-	const int sb = g_loop.src_b >= 0 ? g_loop.src_b : g_loop.src_a;
-	const float ga = g_st.input_gain[sa] * g_st.automix_gain[sa];
-	const float gb = g_st.input_gain[sb] * g_st.automix_gain[sb];
+		const int sa = tr->src_a;
+		const int sb = tr->src_b >= 0 ? tr->src_b : tr->src_a;
+		const float ga = g_st.input_gain[sa] * g_st.automix_gain[sa];
+		const float gb = g_st.input_gain[sb] * g_st.automix_gain[sb];
 
-	if (lst == LP_REC) {
-		for (int f = 0; f < PERIOD_FRAMES && len < LOOP_MAX_FRAMES; f++, len++) {
-			g_loop.buf[(size_t)len * 2]     = in_block[sa][f] * ga;
-			g_loop.buf[(size_t)len * 2 + 1] = in_block[sb][f] * gb;
-		}
-		atomic_store_explicit(&g_loop.len, len, memory_order_relaxed);
-		if (len >= LOOP_MAX_FRAMES) {   /* plafond → boucle auto */
-			atomic_store(&g_loop.pos, 0);
-			atomic_store(&g_loop.state, LP_PLAY);
-		}
-		return;
-	}
-	if (!len || lst == LP_STOP)
-		return;
-
-	const float g = g_loop.gain;
-	for (int f = 0; f < PERIOD_FRAMES; f++) {
-		float l = g_loop.buf[(size_t)pos * 2];
-		float r = g_loop.buf[(size_t)pos * 2 + 1];
-		if (lst == LP_DUB) {
-			if (g_loop.dub_count < len) {
-				g_loop.undo[(size_t)pos * 2]     = l;
-				g_loop.undo[(size_t)pos * 2 + 1] = r;
-				g_loop.dub_count++;
+		if (st == TR_REC) {
+			any_rec = 1;
+			if (mlen == 0) {
+				/* piste MAÎTRE : REC libre → définit master_len */
+				uint32_t h = tr->rec_head;
+				for (int f = 0; f < PERIOD_FRAMES && h < LOOP_MAX_FRAMES; f++, h++) {
+					tr->buf[(size_t)h * 2]     = in_block[sa][f] * ga;
+					tr->buf[(size_t)h * 2 + 1] = in_block[sb][f] * gb;
+				}
+				tr->rec_head = h;
+				if (h >= LOOP_MAX_FRAMES) {   /* plafond → fige */
+					atomic_store_explicit(&tr->len, h, memory_order_release);
+					atomic_store(&tr->state, TR_PLAY);
+					atomic_store(&g_master_len, h);
+					atomic_store(&g_lpos, 0);
+					atomic_store(&g_loop_run, 1);
+					mlen = h; lpos = 0; run = 1;
+				}
+			} else {
+				/* piste ALIGNÉE : écrit à (rec_start+rec_done)%mlen,
+				 * un tour complet puis PLAY. rec_start capturé ICI
+				 * (audio) au 1er bloc → pas de décalage socket. */
+				uint32_t rs = atomic_load_explicit(&tr->rec_start,
+								   memory_order_relaxed);
+				if (rs == REC_START_NONE) {
+					rs = lpos;
+					atomic_store_explicit(&tr->rec_start, rs,
+							      memory_order_relaxed);
+				}
+				uint32_t d = tr->rec_done;
+				for (int f = 0; f < PERIOD_FRAMES && d < mlen; f++, d++) {
+					uint32_t idx = (rs + d) % mlen;
+					tr->buf[(size_t)idx * 2]     = in_block[sa][f] * ga;
+					tr->buf[(size_t)idx * 2 + 1] = in_block[sb][f] * gb;
+				}
+				tr->rec_done = d;
+				if (d >= mlen) {   /* tour complet → couche posée */
+					atomic_store_explicit(&tr->len, mlen,
+							      memory_order_release);
+					atomic_store(&tr->state, TR_PLAY);
+				}
 			}
-			g_loop.buf[(size_t)pos * 2]     = l + in_block[sa][f] * ga;
-			g_loop.buf[(size_t)pos * 2 + 1] = r + in_block[sb][f] * gb;
+			continue;   /* une piste en REC ne se relit pas ce bloc */
 		}
-		/* on restitue la valeur PRÉ-dub : la source live s'entend déjà
-		 * en direct par sa propre tranche */
-		in_block[P][f]     += l * g;
-		in_block[P + 1][f] += r * g;
-		pos++;
-		if (pos >= len)
-			pos = 0;
+
+		/* TR_PLAY : lecture additionnée dans P1/P2 si non-mutée */
+		uint32_t len = atomic_load_explicit(&tr->len, memory_order_relaxed);
+		if (!len || !run || atomic_load_explicit(&tr->muted, memory_order_relaxed))
+			continue;
+		const float g = tr->gain;
+		uint32_t pk = 0;
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			uint32_t idx = (lpos + f) % len;
+			float l = tr->buf[(size_t)idx * 2];
+			float r = tr->buf[(size_t)idx * 2 + 1];
+			in_block[P][f]     += l * g;
+			in_block[P + 1][f] += r * g;
+			float a = l < 0 ? -l : l, b = r < 0 ? -r : r;
+			if (a > b) b = a;
+			uint32_t v = (uint32_t)(b * g * 2147483647.0f);
+			if (v > pk) pk = v;
+		}
+		atomic_store_explicit(&tr->peak, pk, memory_order_relaxed);
 	}
-	atomic_store_explicit(&g_loop.pos, pos, memory_order_relaxed);
+
+	/* Avance g_lpos UNE fois par bloc (partagée par toutes les pistes) */
+	if (run && mlen) {
+		atomic_store_explicit(&g_lpos, (lpos + PERIOD_FRAMES) % mlen,
+				      memory_order_relaxed);
+	} else if (mlen == 0 && any_rec) {
+		/* piste maître en cours d'enreg : rien à avancer (rec_head local) */
+	}
 }
 
 /* Rendu (audio_thread, SOUS target_lock, après le convert S32→float) */
@@ -2801,76 +2841,104 @@ static void handle_cmd(int fd, const char *line)
 		        mode ? "mastering" : "passthrough",
 		        src  ? "usb"       : "hw");
 
-	} else if (json_has_op(line, "looper_ctl")) {
-		/* V12-LOOP : {"op":"looper_ctl","action":"rec|play|overdub|stop|undo|clear"} */
-		char act[16] = "";
+	} else if (json_has_op(line, "looper_track_ctl")) {
+		/* V12-LOOP-PRO : {"op":"looper_track_ctl","track":N,
+		 * "action":"rec|play|mute|unmute|clear"} */
+		int t = -1; char act[16] = "";
+		(void)json_get_int(line, "track", &t);
 		(void)json_get_str(line, "action", act, sizeof(act));
-		int lst = atomic_load(&g_loop.state);
-		uint32_t len = atomic_load(&g_loop.len);
-		if (!strcmp(act, "rec") && lst == LP_IDLE) {
-			atomic_store(&g_loop.pos, 0);
-			atomic_store(&g_loop.len, 0);
-			atomic_store(&g_loop.layers, 0);
-			atomic_store(&g_loop.undo_pending, 0);
-			atomic_store_explicit(&g_loop.state, LP_REC,
-					      memory_order_release);
-		} else if (!strcmp(act, "play")) {
-			if (lst == LP_REC) {
-				atomic_store(&g_loop.pos, 0);
-				atomic_store(&g_loop.layers, 1);
-				atomic_store(&g_loop.state, LP_PLAY);
-			} else if (lst == LP_DUB) {
-				atomic_fetch_add(&g_loop.layers, 1);
-				atomic_store(&g_loop.state, LP_PLAY);
-			} else if (lst == LP_STOP && len) {
-				atomic_store(&g_loop.state, LP_PLAY);
-			}
-		} else if (!strcmp(act, "overdub")) {
-			if (lst == LP_REC) {
-				g_loop.dub_start = 0;
-				g_loop.dub_count = 0;
-				atomic_store(&g_loop.pos, 0);
-				atomic_store(&g_loop.layers, 1);
-				atomic_store(&g_loop.state, LP_DUB);
-			} else if (lst == LP_PLAY) {
-				g_loop.dub_start = atomic_load(&g_loop.pos);
-				g_loop.dub_count = 0;
-				atomic_store(&g_loop.state, LP_DUB);
-			}
-		} else if (!strcmp(act, "stop") && len) {
-			if (lst == LP_DUB)
-				atomic_fetch_add(&g_loop.layers, 1);
-			atomic_store(&g_loop.state, LP_STOP);
-		} else if (!strcmp(act, "undo")) {
-			if ((lst == LP_PLAY || lst == LP_STOP) &&
-			    atomic_load(&g_loop.layers) > 1 &&
-			    !atomic_load(&g_loop.undo_pending) &&
-			    g_loop.dub_count) {
-				g_loop.undo_pos = g_loop.dub_start;
-				atomic_store(&g_loop.undo_pending, g_loop.dub_count);
-				g_loop.dub_count = 0;
-				atomic_fetch_sub(&g_loop.layers, 1);
-			}
-		} else if (!strcmp(act, "clear")) {
-			atomic_store(&g_loop.state, LP_IDLE);
-			atomic_store(&g_loop.len, 0);
-			atomic_store(&g_loop.pos, 0);
-			atomic_store(&g_loop.layers, 0);
-			atomic_store(&g_loop.undo_pending, 0);
-			g_loop.dub_count = 0;
-		} else {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad action/state\"}\n");
+		if (t < 0 || t >= LOOP_TRACKS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad track\"}\n");
 			return;
 		}
-		dprintf(fd, "{\"ok\":true,\"op\":\"looper_ctl\",\"state\":\"%s\"}\n",
-			LP_NAMES[atomic_load(&g_loop.state)]);
+		struct loop_track *tr = &g_tr[t];
+		int st = atomic_load(&tr->state);
+		uint32_t mlen = atomic_load(&g_master_len);
 
-	} else if (json_has_op(line, "looper_cfg")) {
-		/* {"op":"looper_cfg","src_a":N,"src_b":N|-1,"gain_db":F} —
-		 * refusé pendant REC/OVERDUB */
-		int lst = atomic_load(&g_loop.state);
-		if (lst == LP_REC || lst == LP_DUB) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"busy rec/overdub\"}\n");
+		if (!strcmp(act, "rec")) {
+			/* un seul REC simultané */
+			int busy = 0;
+			for (int i = 0; i < LOOP_TRACKS; i++)
+				if (atomic_load(&g_tr[i].state) == TR_REC) busy = 1;
+			if (busy || st != TR_EMPTY) {
+				dprintf(fd, "{\"ok\":false,\"err\":\"busy or not empty\"}\n");
+				return;
+			}
+			/* memset de la piste VIDE (non lue par l'audio) → silence
+			 * des zones non ré-enregistrées, aucun glitch. */
+			memset(tr->buf, 0, (size_t)LOOP_MAX_FRAMES * 2 * sizeof(float));
+			tr->rec_head = 0;
+			tr->rec_done = 0;
+			atomic_store(&tr->rec_start, REC_START_NONE);
+			atomic_store(&tr->len, 0);
+			atomic_store(&tr->muted, 0);
+			if (mlen) atomic_store(&g_loop_run, 1);  /* lpos avance pour l'alignement */
+			atomic_store_explicit(&tr->state, TR_REC, memory_order_release);
+		} else if (!strcmp(act, "play")) {
+			if (st == TR_REC) {
+				if (mlen == 0) {
+					/* piste MAÎTRE : fige master_len = rec_head */
+					uint32_t h = tr->rec_head;
+					if (h == 0) {
+						dprintf(fd, "{\"ok\":false,\"err\":\"empty rec\"}\n");
+						return;
+					}
+					atomic_store_explicit(&tr->len, h, memory_order_release);
+					atomic_store(&tr->state, TR_PLAY);
+					atomic_store(&g_master_len, h);
+					atomic_store(&g_lpos, 0);
+					atomic_store(&g_loop_run, 1);
+				} else {
+					/* piste alignée : fige à mlen (zones non
+					 * enregistrées = silence memsetté) */
+					atomic_store_explicit(&tr->len, mlen, memory_order_release);
+					atomic_store(&tr->state, TR_PLAY);
+				}
+			}
+			/* si déjà PLAY : no-op (transport global via looper_ctl) */
+		} else if (!strcmp(act, "mute")) {
+			atomic_store(&tr->muted, 1);
+		} else if (!strcmp(act, "unmute")) {
+			atomic_store(&tr->muted, 0);
+		} else if (!strcmp(act, "clear")) {
+			atomic_store_explicit(&tr->state, TR_EMPTY, memory_order_release);
+			atomic_store(&tr->len, 0);
+			atomic_store(&tr->muted, 0);
+			atomic_store(&tr->peak, 0);
+			tr->rec_head = 0;
+			tr->rec_done = 0;
+			/* si plus aucune piste n'a de contenu ni n'enregistre →
+			 * réinitialise l'horloge maître (nouveau départ). */
+			int alive = 0;
+			for (int i = 0; i < LOOP_TRACKS; i++) {
+				int s = atomic_load(&g_tr[i].state);
+				if (s == TR_REC || (s == TR_PLAY && atomic_load(&g_tr[i].len)))
+					alive = 1;
+			}
+			if (!alive) {
+				atomic_store(&g_master_len, 0);
+				atomic_store(&g_lpos, 0);
+				atomic_store(&g_loop_run, 0);
+			}
+		} else {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad action\"}\n");
+			return;
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"looper_track_ctl\",\"track\":%d,"
+			"\"state\":\"%s\"}\n", t, TR_NAMES[atomic_load(&tr->state)]);
+
+	} else if (json_has_op(line, "looper_track_cfg")) {
+		/* {"op":"looper_track_cfg","track":N,"src_a":N,"src_b":N|-1,
+		 * "gain_db":F} — refusé pendant REC de cette piste */
+		int t = -1;
+		(void)json_get_int(line, "track", &t);
+		if (t < 0 || t >= LOOP_TRACKS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad track\"}\n");
+			return;
+		}
+		struct loop_track *tr = &g_tr[t];
+		if (atomic_load(&tr->state) == TR_REC) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"busy rec\"}\n");
 			return;
 		}
 		int a = -2, b = -2;
@@ -2878,23 +2946,59 @@ static void handle_cmd(int fd, const char *line)
 		(void)json_get_int(line, "src_a", &a);
 		(void)json_get_int(line, "src_b", &b);
 		(void)json_get_float(line, "gain_db", &gdb);
-		if (a >= 0 && a < N_INPUT_REAL)
-			g_loop.src_a = a;
-		if (b >= -1 && b < N_INPUT_REAL)
-			g_loop.src_b = b;
-		if (gdb > -60.0f && gdb <= 12.0f)
-			g_loop.gain = powf(10.0f, gdb / 20.0f);
-		dprintf(fd, "{\"ok\":true,\"op\":\"looper_cfg\"}\n");
+		if (a >= 0 && a < N_INPUT_REAL) tr->src_a = a;
+		if (b >= -1 && b < N_INPUT_REAL) tr->src_b = b;
+		if (gdb > -60.0f && gdb <= 12.0f) tr->gain = powf(10.0f, gdb / 20.0f);
+		dprintf(fd, "{\"ok\":true,\"op\":\"looper_track_cfg\",\"track\":%d}\n", t);
+
+	} else if (json_has_op(line, "looper_ctl")) {
+		/* transport global : {"op":"looper_ctl","action":"play_all|stop_all|clear_all"} */
+		char act[16] = "";
+		(void)json_get_str(line, "action", act, sizeof(act));
+		if (!strcmp(act, "play_all")) {
+			if (atomic_load(&g_master_len)) atomic_store(&g_loop_run, 1);
+		} else if (!strcmp(act, "stop_all")) {
+			atomic_store(&g_loop_run, 0);
+		} else if (!strcmp(act, "clear_all")) {
+			for (int i = 0; i < LOOP_TRACKS; i++) {
+				atomic_store_explicit(&g_tr[i].state, TR_EMPTY,
+						      memory_order_release);
+				atomic_store(&g_tr[i].len, 0);
+				atomic_store(&g_tr[i].muted, 0);
+				atomic_store(&g_tr[i].peak, 0);
+				g_tr[i].rec_head = 0;
+				g_tr[i].rec_done = 0;
+			}
+			atomic_store(&g_master_len, 0);
+			atomic_store(&g_lpos, 0);
+			atomic_store(&g_loop_run, 0);
+		} else {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad action\"}\n");
+			return;
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"looper_ctl\",\"action\":\"%s\"}\n", act);
 
 	} else if (json_has_op(line, "looper_status")) {
-		dprintf(fd, "{\"ok\":true,\"state\":\"%s\",\"len_s\":%.2f,"
-			"\"pos_s\":%.2f,\"layers\":%d,\"src_a\":%d,\"src_b\":%d,"
-			"\"max_s\":%u}\n",
-			LP_NAMES[atomic_load(&g_loop.state)],
-			atomic_load(&g_loop.len) / 48000.0f,
-			atomic_load(&g_loop.pos) / 48000.0f,
-			atomic_load(&g_loop.layers),
-			g_loop.src_a, g_loop.src_b, LOOP_MAX_FRAMES / 48000u);
+		uint32_t mlen = atomic_load(&g_master_len);
+		int n = snprintf(reply, sizeof(reply),
+			"{\"ok\":true,\"master_len_s\":%.2f,\"pos_s\":%.2f,"
+			"\"run\":%d,\"max_s\":%u,\"tracks\":[",
+			mlen / 48000.0f, atomic_load(&g_lpos) / 48000.0f,
+			atomic_load(&g_loop_run), LOOP_MAX_FRAMES / 48000u);
+		for (int t = 0; t < LOOP_TRACKS; t++) {
+			struct loop_track *tr = &g_tr[t];
+			n += snprintf(reply + n, sizeof(reply) - n,
+				"%s{\"track\":%d,\"state\":\"%s\",\"len_s\":%.2f,"
+				"\"muted\":%d,\"src_a\":%d,\"src_b\":%d,"
+				"\"gain_db\":%.1f,\"peak\":%u}",
+				t ? "," : "", t, TR_NAMES[atomic_load(&tr->state)],
+				atomic_load(&tr->len) / 48000.0f,
+				atomic_load(&tr->muted), tr->src_a, tr->src_b,
+				20.0f * log10f(tr->gain > 1e-6f ? tr->gain : 1e-6f),
+				atomic_load(&tr->peak));
+		}
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
+		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "sampler_list")) {
 		/* V12-SMP : slots (nom, durée s, playing, position s) */
@@ -4120,11 +4224,18 @@ int main(int argc, char **argv)
 	mkdir(SMP_DIR, 0755);
 	smp_scan(0);
 
-	/* V12-LOOP : buffers boucle + undo (2 × 23 Mo, jamais libérés) */
-	g_loop.buf  = calloc((size_t)LOOP_MAX_FRAMES * 2, sizeof(float));
-	g_loop.undo = calloc((size_t)LOOP_MAX_FRAMES * 2, sizeof(float));
-	if (!g_loop.buf || !g_loop.undo)
-		mlog("loop: allocation buffers ÉCHEC — looper indisponible");
+	/* V12-LOOP-PRO : buffers loopstation — LOOP_TRACKS × 40 s stéréo
+	 * (6 × 14,6 Mo = 88 Mo), alloués une fois, jamais libérés. Défaut :
+	 * piste t → voie mic t+1, gain 0 dB, mono (src_b=-1 → dup L/R). */
+	for (int t = 0; t < LOOP_TRACKS; t++) {
+		g_tr[t].buf   = calloc((size_t)LOOP_MAX_FRAMES * 2, sizeof(float));
+		g_tr[t].src_a = t < N_INPUT_MICS ? t : 0;
+		g_tr[t].src_b = -1;
+		g_tr[t].gain  = 1.0f;
+		atomic_store(&g_tr[t].rec_start, REC_START_NONE);
+		if (!g_tr[t].buf)
+			mlog("loop: alloc piste %d ÉCHEC — looper dégradé", t);
+	}
 
 	/* E6.h : eventfd pour signaler le play_thread depuis l'audio_thread.
 	 * EFD_SEMAPHORE-like accumule les writes ; on lit en bloc.
