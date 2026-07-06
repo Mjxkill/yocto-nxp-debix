@@ -51,6 +51,11 @@ Item {
     }
     property bool muted: false
     property var sendsOn: [false, false, false, false]
+    // V12-AMX : membre du groupe automix + gain auto courant (dB, posé
+    // impérativement par main.qml sur automixChanged — jamais en binding)
+    property bool amxMember: false
+    property real amxGainDb: 0
+    signal amxToggled(bool on)
 
     Column {
         anchors.fill: parent
@@ -96,6 +101,20 @@ Item {
             }
         }
 
+        // V12-AMX : barre de gain automatique (pleine = 0 dB, vide = -15)
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: 42; height: 3; radius: 1
+            visible: !strip.isOut && strip.amxMember
+            color: "#1b2126"
+            Rectangle {
+                height: parent.height; radius: 1
+                width: parent.width *
+                       Math.max(0, Math.min(1, (strip.amxGainDb + 15) / 15))
+                color: "#4cc470"
+            }
+        }
+
         Text {
             id: dbro
             anchors.horizontalCenter: parent.horizontalCenter
@@ -122,6 +141,25 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: { strip.muted = !strip.muted; strip.muteToggled(strip.muted); }
+                }
+            }
+            // V12-AMX : adhésion au groupe automix
+            Rectangle {
+                width: 34; height: 26; radius: 3
+                color: strip.amxMember ? "#2a2214" : "#1b2126"
+                border.color: strip.amxMember ? "#e5a13c" : "#39434b"
+                Text {
+                    anchors.centerIn: parent
+                    text: "A"
+                    color: strip.amxMember ? "#e5a13c" : "#8b959d"
+                    font.pixelSize: 11; font.bold: true
+                }
+                TapHandler {
+                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                    onTapped: {
+                        strip.amxMember = !strip.amxMember;
+                        strip.amxToggled(strip.amxMember);
+                    }
                 }
             }
         }

@@ -28,6 +28,10 @@ class MixerClient : public QObject {
      * tournent que quand une page les affiche (sinon ~45 req/s inutiles
      * qui réveillent le control thread de mixer-pro sur les cores audio) */
     Q_PROPERTY(int activePage READ activePage WRITE setActivePage NOTIFY activePageChanged)
+    /* V12-AMX E2 : état automix (on + membres + gains dB par tranche) */
+    Q_PROPERTY(bool amxOn READ amxOn NOTIFY automixChanged)
+    Q_PROPERTY(QVariantList amxMembers READ amxMembers NOTIFY automixChanged)
+    Q_PROPERTY(QVariantList amxGains READ amxGains NOTIFY automixChanged)
 
 public:
     explicit MixerClient(QObject *parent = nullptr);
@@ -46,6 +50,9 @@ public:
     double latencyMs() const { return m_latencyMs; }
     QString version() const { return m_version; }
     QVariantList spectrum() const { return m_spectrum; }
+    bool amxOn() const { return m_amxOn; }
+    QVariantList amxMembers() const { return m_amxMembers; }
+    QVariantList amxGains() const { return m_amxGains; }
     QVariantList mlEnvL() const { return m_mlEnvL; }
     QVariantList mlEnvR() const { return m_mlEnvR; }
     bool mlActive() const { return m_mlActive; }
@@ -67,6 +74,7 @@ signals:
     void statChanged();
     void spectrumChanged();
     void insertChanged();
+    void automixChanged();
     void activePageChanged();
     /* tick d'affichage coalescé 22 Hz (½ vsync 44) : le QML ne met à jour
      * la scène QU'ICI → 1 rendu par tick au lieu de 45 rendus/s irréguliers
@@ -74,7 +82,8 @@ signals:
     void uiTick();
 
 private:
-    enum Tag { TagMeters, TagStat, TagAnalyzer, TagInsert, TagGeneric, TagIgnore };
+    enum Tag { TagMeters, TagStat, TagAnalyzer, TagInsert, TagAutomix,
+               TagGeneric, TagIgnore };
 
     void connectSocket();
     void request(const QByteArray &json, Tag tag);
@@ -92,6 +101,7 @@ private:
     QTimer m_statTimer;
     QTimer m_analyzerTimer;
     QTimer m_insertTimer;
+    QTimer m_amxTimer;
     QTimer m_uiTick;
     QTimer m_reconnect;
 
@@ -102,6 +112,9 @@ private:
     double m_latencyMs = 0;
     QString m_version;
     QVariantList m_spectrum;      /* 64 bins 0..1 */
+    bool m_amxOn = false;
+    QVariantList m_amxMembers;    /* 18 × 0/1 */
+    QVariantList m_amxGains;      /* 18 × dB */
     bool m_dirty = false;
     QVariantList m_mlEnvL, m_mlEnvR;   /* 64 gains dB */
     bool m_mlActive = false;

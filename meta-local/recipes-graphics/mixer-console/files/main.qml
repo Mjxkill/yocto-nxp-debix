@@ -75,6 +75,25 @@ Window {
         Timer { interval: 2000; running: scene.currentPage === 0; repeat: true
                 triggeredOnStart: true; onTriggered: scene.syncBank() }
 
+        /* V12-AMX : distribution IMPÉRATIVE de l'état automix aux tranches
+         * (jamais de QVariantList en binding — leçon N-series) */
+        Connections {
+            target: mixer
+            function onAutomixChanged() {
+                if (scene.currentPage !== 0) return;
+                const mb = mixer.amxMembers, gn = mixer.amxGains;
+                const strips = scene.banks[scene.currentBank].strips;
+                for (let i = 0; i < 8; i++) {
+                    const item = stripRep.itemAt(i);
+                    const d = i < strips.length ? strips[i] : null;
+                    if (!item || !d || d.t !== "in" || d.idx >= mb.length)
+                        continue;
+                    item.amxMember = mb[d.idx] === 1;
+                    item.amxGainDb = gn[d.idx];
+                }
+            }
+        }
+
         /* diag réactivité tactile : si le GUI thread se fige > 300 ms,
          * trace la durée au journal (retour utilisateur : « le changement
          * de page bloque le tactile ») */
@@ -281,6 +300,13 @@ Window {
                                     mixer.setSend(def.idx, bus * 2, on ? 0 : -72);
                                     mixer.setSend(def.idx, bus * 2 + 1, on ? 0 : -72);
                                 }
+                                // V12-AMX : adhésion au groupe automix
+                                onAmxToggled: (on) => {
+                                    if (def && def.t === "in")
+                                        mixer.call({ op: "set_automix",
+                                                     src: def.idx, on: on ? 1 : 0,
+                                                     weight_db: 0 }, function(){});
+                                }
                             }
                         }
                     }
@@ -348,6 +374,24 @@ Window {
                                     Text { id: peakLTxt; text: "PEAK L  -∞"; color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
                                     Text { id: peakRTxt; text: "PEAK R  -∞"; color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
                                     Text { text: "FW " + mixer.version; color: "#5c666e"; font.pixelSize: 9; font.family: "monospace" }
+                                    // V12-AMX : interrupteur global du groupe
+                                    Rectangle {
+                                        width: 110; height: 30; radius: 5
+                                        color: mixer.amxOn ? "#2a2214" : "#1b2126"
+                                        border.color: mixer.amxOn ? "#e5a13c" : "#39434b"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "AUTOMIX"
+                                            color: mixer.amxOn ? "#e5a13c" : "#8b959d"
+                                            font.pixelSize: 10; font.bold: true
+                                            font.letterSpacing: 2
+                                        }
+                                        TapHandler {
+                                            gesturePolicy: TapHandler.ReleaseWithinBounds
+                                            onTapped: mixer.call({ op: "set_automix_cfg",
+                                                on: mixer.amxOn ? 0 : 1 }, function(){})
+                                        }
+                                    }
                                 }
                             }
                         }

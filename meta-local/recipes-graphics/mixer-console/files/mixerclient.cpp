@@ -71,6 +71,14 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
     });
     m_insertTimer.start();
 
+    /* V12-AMX : état automix à 5 Hz — page MIXER seulement */
+    m_amxTimer.setInterval(200);
+    connect(&m_amxTimer, &QTimer::timeout, this, [this] {
+        if (m_activePage == 0 && m_connected && m_pending.size() < 3)
+            request("{\"op\":\"get_automix\"}\n", TagAutomix);
+    });
+    m_amxTimer.start();
+
     /* tick d'affichage : coalesce meters/spectre/ML en UN rendu à 22 Hz */
     m_uiTick.setInterval(45);
     connect(&m_uiTick, &QTimer::timeout, this, [this] {
@@ -193,6 +201,16 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
         m_mlEnvL = l;
         m_mlEnvR = r;
         emit insertChanged();
+    } else if (tag == TagAutomix) {
+        m_amxOn = o.value(QLatin1String("on")).toInt() == 1;
+        QVariantList mb, gn;
+        for (const auto &v : o.value(QLatin1String("members")).toArray())
+            mb.append(v.toInt());
+        for (const auto &v : o.value(QLatin1String("gains_db")).toArray())
+            gn.append(v.toDouble());
+        m_amxMembers = mb;
+        m_amxGains = gn;
+        emit automixChanged();
     } else if (tag == TagGeneric) {
         QJSValue cb = m_cbs.isEmpty() ? QJSValue() : m_cbs.dequeue();
         if (m_engine && cb.isCallable())

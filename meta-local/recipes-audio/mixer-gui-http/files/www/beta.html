@@ -91,7 +91,8 @@ body{
 .send4 button{width:28px;height:18px;font-size:8.5px;border-radius:2px;border:1px solid var(--line-hi);
   background:var(--panel2);color:var(--mut);cursor:pointer;padding:0;}
 .send4 button.on{background:rgba(229,161,60,.75);color:#1d1204;border-color:#ffcf7e;}
-.strip.isout .send4, .strip.isout .sq.solo, .strip.isout .sq.mute, .strip.isout .knob, .strip.isout .kval{visibility:hidden;}
+.strip.isout .send4, .strip.isout .sq.solo, .strip.isout .sq.mute, .strip.isout .knob, .strip.isout .kval, .strip.isout .sq.amx, .strip.isout .amxbar{visibility:hidden;}
+.sq.amx.on{background:rgba(229,161,60,.75);color:#1d1204;border-color:#ffcf7e;}
 .strip.hidden{visibility:hidden;}
 
 /* --- banque de tranches --- */
@@ -374,6 +375,7 @@ body{
       <div class="mlrow">
         <div class="mlstate"><i></i><div class="l"><span class="a">MASTERING ML</span><span class="b">v5.20 · NPU 0.81ms ×2</span></div></div>
         <div class="gr"><span class="k">LIM GR</span><div class="grbar"><i id="grb" style="width:12%"></i></div></div>
+        <button class="sq" id="amx-global" style="width:auto;padding:0 10px;height:24px" title="Automix Dugan">AUTOMIX</button>
       </div>
 
       <div id="mfrow">
@@ -617,9 +619,13 @@ st.forEach((s,i)=>{
       <div class="mtr"><canvas></canvas></div>
     </div>
     <span class="dbro">-∞</span>
+    <div class="amxbar" style="width:42px;height:3px;border-radius:1px;background:#1b2126;margin:1px auto;display:none">
+      <div style="height:100%;border-radius:1px;background:#4cc470;width:100%"></div>
+    </div>
     <div class="btnrow">
       <button class="sq mute" data-i="${i}">M</button>
       <button class="sq solo" data-i="${i}">S</button>
+      <button class="sq amx" data-i="${i}" title="Automix">A</button>
     </div>
     <div class="send4" data-i="${i}">
       <button data-b="0">F1</button><button data-b="1">F2</button>
@@ -1339,6 +1345,44 @@ document.querySelectorAll(".sq.mute").forEach(b=>{
     if(window.LIVE&&mp&&mp.t==="in")post({op:"set_mute",src:mp.idx,mute:st[i].mute?1:0});
   });
 });
+/* V12-AMX : adhésion au groupe automix + sync état 1 s + bouton global */
+document.querySelectorAll(".sq.amx").forEach(b=>{
+  const i=+b.dataset.i;
+  b.addEventListener("click",()=>{
+    const mp=st[i].map;
+    if(!window.LIVE||!mp||mp.t!=="in")return;
+    const on=!b.classList.contains("on");
+    b.classList.toggle("on",on);
+    post({op:"set_automix",src:mp.idx,on:on?1:0,weight_db:0});
+  });
+});
+window.__amxOn=false;
+const amxG=document.getElementById("amx-global");
+if(amxG)amxG.addEventListener("click",()=>{
+  if(!window.LIVE)return;
+  post({op:"set_automix_cfg",on:window.__amxOn?0:1});
+});
+setInterval(()=>{
+  if(!window.LIVE||document.hidden)return;
+  fetch("/api/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({op:"get_automix"})})
+  .then(r=>r.json()).then(j=>{
+    if(!j||!j.ok)return;
+    window.__amxOn=j.on===1;
+    const gb=document.getElementById("amx-global");
+    if(gb)gb.classList.toggle("on",window.__amxOn);
+    BANKS[curBank].strips.forEach((sd,i)=>{
+      if(sd.t!=="in"||sd.idx>=j.members.length)return;
+      const el=bank.children[i];if(!el)return;
+      const on=j.members[sd.idx]===1;
+      el.querySelector(".sq.amx").classList.toggle("on",on);
+      const bar=el.querySelector(".amxbar");
+      bar.style.display=(on&&j.on===1)?"":"none";
+      bar.firstElementChild.style.width=
+        Math.max(0,Math.min(100,(j.gains_db[sd.idx]+15)/15*100))+"%";
+    });
+  }).catch(()=>{});
+},1000);
 /* master fader → gains de sortie 0+1 (dB) */
 const mtr=document.querySelector(".ftrack[data-m]");
 if(mtr)mtr.addEventListener("pointermove",()=>{
