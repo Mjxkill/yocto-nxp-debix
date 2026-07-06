@@ -22,6 +22,7 @@ SRC_URI = " \
     file://qml/SpectrumView.qml \
     file://qml/PageEffects.qml \
     file://qml/PageMastering.qml \
+    file://qml/PagePads.qml \
     file://qml/PageRouting.qml \
     file://qml/PageSystem.qml \
     file://qml/CalibrationOverlay.qml \
