@@ -1676,6 +1676,112 @@ static void smooth_gains(void)
 	}
 }
 
+/* ========= V12-EXP — expandeur/gate par tranche (16 voies réelles) =========
+ * Downward expander in-place sur in_block[0..15], AVANT smp/loop/automix/
+ * mix : le gate s'applique à tout l'aval (sends, master, looper, automix,
+ * tap NPU) — une seule vérité du signal de tranche. P1/P2 exclues.
+ * Enveloppe crête par bloc (2 ms), coefs attack/release PRÉCALCULÉS à la
+ * config (jamais d'expf en RT), hold anti-chatter (granularité 1 bloc),
+ * rampe de gain linéaire intra-bloc (zipper-free), GR publié en atomic
+ * pour la GUI. off = zéro coût. ARCHI_V12_EXPANDER.md. */
+#define N_EXP_CH (N_INPUT_MICS + N_INPUT_STEMS)   /* 16 */
+
+struct exp_ch {
+	int   on;
+	float thr_db, ratio, range_db;    /* config user (dB, pente) */
+	float atk_ms, rel_ms, hold_ms;    /* config user (pour get/save) */
+	float thr_lin, ka, kr;            /* précalc (control thread) */
+	int   hold_blocks;                /* précalc : hold_ms / 2 ms */
+	float env, gain;                  /* état audio (crête lissée, gain lin) */
+	int   hold_cnt;
+	_Atomic uint32_t gr_mdb;          /* réduction courante en milli-dB (GUI) */
+};
+static struct exp_ch g_exp[N_EXP_CH];
+
+/* Précalculs — control thread (handler socket / load state), SOUS
+ * target_lock quand le daemon tourne. Valide et clampe les plages. */
+static void exp_configure(int src, int on, float thr_db, float ratio,
+			  float atk_ms, float rel_ms, float range_db,
+			  float hold_ms)
+{
+	if (src < 0 || src >= N_EXP_CH)
+		return;
+	struct exp_ch *e = &g_exp[src];
+	if (thr_db < -80.0f) thr_db = -80.0f;
+	if (thr_db > 0.0f)   thr_db = 0.0f;
+	if (ratio < 1.0f)    ratio = 1.0f;
+	if (ratio > 20.0f)   ratio = 20.0f;
+	if (atk_ms < 0.5f)   atk_ms = 0.5f;
+	if (atk_ms > 100.0f) atk_ms = 100.0f;
+	if (rel_ms < 5.0f)   rel_ms = 5.0f;
+	if (rel_ms > 1000.0f) rel_ms = 1000.0f;
+	if (range_db < 0.0f)  range_db = 0.0f;
+	if (range_db > 80.0f) range_db = 80.0f;
+	if (hold_ms < 0.0f)   hold_ms = 0.0f;
+	if (hold_ms > 500.0f) hold_ms = 500.0f;
+	e->thr_db = thr_db;  e->ratio = ratio;  e->range_db = range_db;
+	e->atk_ms = atk_ms;  e->rel_ms = rel_ms; e->hold_ms = hold_ms;
+	e->thr_lin = powf(10.0f, thr_db / 20.0f);
+	e->ka = 1.0f - expf(-2.0f / atk_ms);
+	e->kr = 1.0f - expf(-2.0f / rel_ms);
+	e->hold_blocks = (int)(hold_ms / 2.0f);
+	e->on = on ? 1 : 0;
+	if (!e->on) {   /* off : état neutre, aucun résidu à la réactivation */
+		e->env = 0.0f; e->gain = 1.0f; e->hold_cnt = 0;
+		atomic_store_explicit(&e->gr_mdb, 0, memory_order_relaxed);
+	}
+}
+
+/* Rendu (audio_thread, SOUS target_lock, juste après le convert S32→float) */
+static void exp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
+{
+	for (int i = 0; i < N_EXP_CH; i++) {
+		struct exp_ch *e = &g_exp[i];
+		if (!e->on)
+			continue;
+
+		/* 1. crête du bloc */
+		float p = 0.0f;
+		const float *x = in_block[i];
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			float v = x[f] < 0 ? -x[f] : x[f];
+			if (v > p) p = v;
+		}
+		/* 2. enveloppe asymétrique (coefs précalculés) */
+		e->env += (p > e->env ? e->ka : e->kr) * (p - e->env);
+
+		/* 3. hold anti-chatter */
+		if (e->env >= e->thr_lin)
+			e->hold_cnt = e->hold_blocks;
+		else if (e->hold_cnt > 0)
+			e->hold_cnt--;
+
+		/* 4. gain cible */
+		float g_db = 0.0f;
+		if (e->env < e->thr_lin && e->hold_cnt == 0) {
+			float env_db = 20.0f * log10f(e->env + 1e-10f);
+			g_db = (env_db - e->thr_db) * (e->ratio - 1.0f);
+			if (g_db < -e->range_db)
+				g_db = -e->range_db;
+		}
+		float gt = (g_db >= 0.0f) ? 1.0f : powf(10.0f, g_db / 20.0f);
+		atomic_store_explicit(&e->gr_mdb,
+				      (uint32_t)(-g_db * 1000.0f),
+				      memory_order_relaxed);
+
+		/* 5. rampe linéaire gain_prev → gain (zipper-free) */
+		float g0 = e->gain;
+		float step = (gt - g0) / (float)PERIOD_FRAMES;
+		float *y = in_block[i];
+		float g = g0;
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			g += step;
+			y[f] *= g;
+		}
+		e->gain = gt;
+	}
+}
+
 /* V12-AMX — calcul Dugan par bloc (appelé par audio_thread AVANT mix_block).
  * Énergie post-fader : e_i = mean(x²) × ig². Enveloppe asymétrique
  * (attack 10 ms, release 200 ms — parole). Cible : part d'énergie
@@ -2037,6 +2143,10 @@ static void *audio_thread(void *arg)
 				in_block[N_INPUT_MICS + N_INPUT_STEMS + i][f] =
 					s32_to_f(cap_phone_buf[f * N_INPUT_PHONE + i]);
 		}
+
+		/* V12-EXP : gate/expandeur par tranche, in-place AVANT tout
+		 * consommateur (sends/master/looper/automix/tap) */
+		exp_render(in_block);
 
 		/* V12-SMP/LOOP : sources internes → P1/P2 (addition, sous lock) */
 		smp_render(in_block);
@@ -3110,6 +3220,54 @@ static void handle_cmd(int fd, const char *line)
 		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
 		write(fd, reply, n);
 
+	} else if (json_has_op(line, "set_expander")) {
+		/* V12-EXP : {"op":"set_expander","src":N, on?, threshold_db?,
+		 * ratio?, attack_ms?, release_ms?, range_db?, hold_ms?} —
+		 * updates partiels : les champs absents gardent leur valeur. */
+		int src = -1;
+		if (json_get_int(line, "src", &src) < 0 ||
+		    src < 0 || src >= N_EXP_CH) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad src\"}\n");
+			return;
+		}
+		struct exp_ch *e = &g_exp[src];
+		int on = e->on;
+		float thr = e->thr_db, ratio = e->ratio, atk = e->atk_ms,
+		      rel = e->rel_ms, rng = e->range_db, hold = e->hold_ms;
+		(void)json_get_int(line, "on", &on);
+		(void)json_get_float(line, "threshold_db", &thr);
+		(void)json_get_float(line, "ratio", &ratio);
+		(void)json_get_float(line, "attack_ms", &atk);
+		(void)json_get_float(line, "release_ms", &rel);
+		(void)json_get_float(line, "range_db", &rng);
+		(void)json_get_float(line, "hold_ms", &hold);
+		pthread_mutex_lock(&g_st.target_lock);
+		exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
+		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_expander\",\"src\":%d,"
+			"\"on\":%d}\n", src, g_exp[src].on);
+
+	} else if (json_has_op(line, "get_expander")) {
+		/* état complet + GR courant (milli-dB → dB) pour la GUI */
+		int n = snprintf(reply, sizeof(reply),
+				 "{\"ok\":true,\"channels\":[");
+		for (int i = 0; i < N_EXP_CH; i++) {
+			struct exp_ch *e = &g_exp[i];
+			n += snprintf(reply + n, sizeof(reply) - n,
+				"%s{\"src\":%d,\"on\":%d,\"threshold_db\":%.1f,"
+				"\"ratio\":%.1f,\"attack_ms\":%.1f,"
+				"\"release_ms\":%.0f,\"range_db\":%.0f,"
+				"\"hold_ms\":%.0f,\"gr_db\":%.1f}",
+				i ? "," : "", i, e->on, e->thr_db, e->ratio,
+				e->atk_ms, e->rel_ms, e->range_db, e->hold_ms,
+				atomic_load_explicit(&e->gr_mdb,
+						     memory_order_relaxed)
+					/ -1000.0f);
+		}
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
+		write(fd, reply, n);
+
 	} else if (json_has_op(line, "get_assistant")) {
 		/* Renvoie état Mixer Assistant. Le daemon mixer-ml-inference
 		 * poll cet endpoint pour savoir source/mode actuels. */
@@ -3998,6 +4156,12 @@ static void save_mixer_state(void)
 			fprintf(f, "%.4f%s", g_st.master_target[s][o],
 			        o < N_OUTPUT_TOTAL - 1 ? " " : "\n");
 	}
+	/* V12-EXP (fin de fichier — absent des états antérieurs) */
+	for (int i = 0; i < N_EXP_CH; i++)
+		fprintf(f, "expander %d %d %.1f %.1f %.1f %.0f %.0f %.0f\n",
+			i, g_exp[i].on, g_exp[i].thr_db, g_exp[i].ratio,
+			g_exp[i].atk_ms, g_exp[i].rel_ms, g_exp[i].range_db,
+			g_exp[i].hold_ms);
 	pthread_mutex_unlock(&g_st.target_lock);
 
 	fclose(f);
@@ -4072,7 +4236,12 @@ static void load_mixer_state(void)
 		}
 	}
 	unsigned mm = 0;
-	if (fscanf(f, "mute_mask %u\n", &mm) == 1)
+	/* Espace de tête OBLIGATOIRE : la boucle automix_weights ci-dessus lit
+	 * exactement N_INPUT_REAL floats et laisse le '\n' non consommé — un
+	 * littéral sans skip d'espace échoue alors sans rien consommer et
+	 * désynchronise TOUT le reste du parse (faders/mute/routing/expander
+	 * perdus au boot — régression V12-AMX corrigée ici). */
+	if (fscanf(f, " mute_mask %u\n", &mm) == 1)
 		g_st.mute_mask = mm;
 	if (fscanf(f, " input_gains") == 0) {
 		for (int i = 0; i < N_INPUT_TOTAL; i++) {
@@ -4095,6 +4264,15 @@ static void load_mixer_state(void)
 				if (fscanf(f, "%f", &v) != 1) goto done;
 				if (v >= 0.0f && v <= 8.0f) g_st.master_target[s][o] = v;
 			}
+	}
+	/* V12-EXP (optionnel) — exp_configure re-précalcule et clampe */
+	{
+		int src, on;
+		float thr, ratio, atk, rel, rng, hold;
+		while (fscanf(f, " expander %d %d %f %f %f %f %f %f\n",
+			      &src, &on, &thr, &ratio, &atk, &rel,
+			      &rng, &hold) == 8)
+			exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
 	}
 done:
 	fclose(f);
@@ -4212,6 +4390,9 @@ int main(int argc, char **argv)
 		g_st.automix_gain[i] = 1.0f;
 		g_st.automix_gtarget[i] = 1.0f;
 	}
+	/* V12-EXP : défauts gates (off) — avant load_mixer_state qui écrase */
+	for (int i = 0; i < N_EXP_CH; i++)
+		exp_configure(i, 0, -50.0f, 3.0f, 5.0f, 150.0f, 40.0f, 50.0f);
 	pthread_mutex_init(&g_st.target_lock, NULL);
 	atomic_store(&g_st.running, 1);
 
