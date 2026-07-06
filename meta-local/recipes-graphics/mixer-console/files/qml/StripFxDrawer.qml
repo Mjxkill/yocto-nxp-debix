@@ -39,7 +39,12 @@ Rectangle {
     }
 
     function rebuild() {
-        groups = FX.groupsFor(chanIdx, isOut, controls);
+        var g = FX.groupsFor(chanIdx, isOut, controls);
+        /* V12-EXP : onglet GATE natif (mixer-pro) sur les voies IN 0..15 —
+         * groupe synthétique sans contrôles ALSA, corps dédié (gatePanel) */
+        if (!isOut && chanIdx < 16)
+            g.unshift({ title: "GATE", controls: [] });
+        groups = g;
         if (groups.length === 0) status = "Aucun effet TAC/DSP sur cette voie";
         tabChanged();  // force le rafraîchissement du corps
     }
@@ -186,6 +191,161 @@ Rectangle {
                 id: bodyCol
                 width: parent.width
                 spacing: 10
+
+                // ============ V12-EXP : panneau GATE (onglet synthétique) ============
+                Column {
+                    id: gatePanel
+                    width: bodyCol.width
+                    spacing: 10
+                    visible: {
+                        const g = drawer.activeGroup();
+                        drawer.tab;   // dépendance
+                        return g !== null && g.title === "GATE";
+                    }
+                    // config courante de la voie (poll get_expander)
+                    property var exp: null
+                    property bool dragging: false
+
+                    onVisibleChanged: if (visible) poll()
+                    Timer {
+                        interval: 250; repeat: true
+                        running: gatePanel.visible && drawer.visible
+                        onTriggered: gatePanel.poll()
+                    }
+                    function poll() {
+                        mixer.call({ op: "get_expander" }, function(r) {
+                            if (r.ok && drawer.chanIdx < 16 && !gatePanel.dragging)
+                                gatePanel.exp = r.channels[drawer.chanIdx];
+                        });
+                    }
+                    function send(field, val) {
+                        var m = { op: "set_expander", src: drawer.chanIdx };
+                        m[field] = val;
+                        mixer.call(m, function() {});
+                    }
+
+                    // --- interrupteur ON + GR meter ---
+                    Row {
+                        spacing: 16
+                        Rectangle {
+                            width: 120; height: 44; radius: 6
+                            property bool on: gatePanel.exp !== null && gatePanel.exp.on === 1
+                            color: on ? "#2a2214" : "#1b2126"
+                            border.color: on ? "#e5a13c" : "#39434b"
+                            border.width: on ? 2 : 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: parent.on ? "GATE ON" : "GATE OFF"
+                                color: parent.on ? "#e5a13c" : "#8b959d"
+                                font.pixelSize: 12; font.bold: true
+                            }
+                            TapHandler {
+                                gesturePolicy: TapHandler.ReleaseWithinBounds
+                                onTapped: gatePanel.send("on", parent.on ? 0 : 1)
+                            }
+                        }
+                        Column {
+                            spacing: 4
+                            anchors.verticalCenter: parent.verticalCenter
+                            Text {
+                                text: "RÉDUCTION " + (gatePanel.exp !== null
+                                      ? gatePanel.exp.gr_db.toFixed(1) + " dB" : "—")
+                                color: "#8b959d"; font.pixelSize: 10; font.letterSpacing: 1
+                            }
+                            Rectangle {
+                                width: 320; height: 12; radius: 6; color: "#0b0e11"
+                                Rectangle {
+                                    height: parent.height; radius: 6
+                                    anchors.right: parent.right
+                                    width: {
+                                        if (gatePanel.exp === null) return 0;
+                                        var rng = Math.max(1, gatePanel.exp.range_db);
+                                        var f = Math.min(1, -gatePanel.exp.gr_db / rng);
+                                        return parent.width * Math.max(0, f);
+                                    }
+                                    color: "#e05545"
+                                }
+                            }
+                        }
+                    }
+
+                    // --- sliders paramètres ---
+                    Repeater {
+                        model: [
+                            { key: "threshold_db", label: "SEUIL",   min: -80,  max: 0,    unit: "dB", dec: 1 },
+                            { key: "ratio",        label: "RATIO",   min: 1,    max: 20,   unit: ":1", dec: 1 },
+                            { key: "attack_ms",    label: "ATTACK",  min: 0.5,  max: 100,  unit: "ms", dec: 1 },
+                            { key: "release_ms",   label: "RELEASE", min: 5,    max: 1000, unit: "ms", dec: 0 },
+                            { key: "range_db",     label: "RANGE",   min: 0,    max: 80,   unit: "dB", dec: 0 },
+                            { key: "hold_ms",      label: "HOLD",    min: 0,    max: 500,  unit: "ms", dec: 0 }
+                        ]
+                        Row {
+                            spacing: 14
+                            height: 52
+                            property real cur: gatePanel.exp !== null
+                                               ? gatePanel.exp[modelData.key] : modelData.min
+                            Text {
+                                width: 90
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.label
+                                color: "#8b959d"; font.pixelSize: 11; font.bold: true
+                                font.letterSpacing: 1
+                            }
+                            Rectangle {
+                                id: track
+                                width: bodyCol.width - 90 - 110 - 2*14
+                                height: 26; radius: 13
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: "#0b0e11"
+                                Rectangle {
+                                    height: parent.height; radius: 13
+                                    width: parent.width *
+                                           Math.max(0, Math.min(1,
+                                               (parent.parent.cur - modelData.min)
+                                               / (modelData.max - modelData.min)))
+                                    color: "#39434b"
+                                    Rectangle { width: 4; height: parent.height
+                                                anchors.right: parent.right
+                                                color: "#e5a13c" }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    preventStealing: true
+                                    onPressed: gatePanel.dragging = true
+                                    onReleased: gatePanel.dragging = false
+                                    onCanceled: gatePanel.dragging = false
+                                    onPositionChanged: (m) => {
+                                        if (!pressed || gatePanel.exp === null) return;
+                                        var f = Math.max(0, Math.min(1, m.x / width));
+                                        var v = modelData.min + f * (modelData.max - modelData.min);
+                                        v = Number(v.toFixed(modelData.dec));
+                                        var e = gatePanel.exp; e[modelData.key] = v;
+                                        gatePanel.exp = e; gatePanel.expChanged();
+                                        gatePanel.send(modelData.key, v);
+                                    }
+                                    onClicked: (m) => {
+                                        if (gatePanel.exp === null) return;
+                                        var f = Math.max(0, Math.min(1, m.x / width));
+                                        var v = modelData.min + f * (modelData.max - modelData.min);
+                                        v = Number(v.toFixed(modelData.dec));
+                                        gatePanel.send(modelData.key, v);
+                                    }
+                                }
+                            }
+                            Text {
+                                width: 110
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: parent.cur.toFixed(modelData.dec) + " " + modelData.unit
+                                color: "#e9e5da"; font.pixelSize: 13
+                                font.family: "monospace"; font.bold: true
+                            }
+                        }
+                    }
+                    Text {
+                        text: "Gate pré-fader : agit sur les départs FX, le master, le looper et l'automix"
+                        color: "#5c666e"; font.pixelSize: 10
+                    }
+                }
 
                 Repeater {
                     model: {

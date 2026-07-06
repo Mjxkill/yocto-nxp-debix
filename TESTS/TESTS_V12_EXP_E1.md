@@ -43,9 +43,17 @@ le board (16 lignes OK) vs daemon (goto done à master s=0 o=0) + ftell.
 | Persistance (config distinctive src 3 + restart) | on/thr/ratio/atk/rel/range/hold restaurés à l'identique ✓ |
 | Persistance faders/mute (post-fix) | gain 0.4242 + mute_mask 128 restaurés après restart ✓ |
 
+## GUI E1b (fait)
+
+Onglet **GATE** dans le drawer d'effets par tranche (StripFxDrawer),
+voies IN 0..15, premier onglet : interrupteur GATE ON/OFF, barre de
+**réduction temps réel** (rouge, ancrée à droite, échelle = range), 6
+sliders tactiles (SEUIL/RATIO/ATTACK/RELEASE/RANGE/HOLD) avec
+anti-saut pendant le drag (poll 4 Hz suspendu), updates partiels via
+set_expander. Déployé, 0 erreur QML.
+
 ## Reste
 
-E1b : GUI onglet GATE dans le drawer d'effets par tranche (natif) avec
-barre GR temps réel. E2 : web. V2 : sidechain HPF.
+E2 : web (beta.html). V2 : sidechain HPF.
 
 ## Test utilisateur : EN ATTENTE (écoute gate sur micro réel)
