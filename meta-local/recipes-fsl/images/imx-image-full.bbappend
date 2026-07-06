@@ -37,6 +37,9 @@ IMAGE_INSTALL:append = " alsa-route-bridge"
 # V7.0-E6.d — mixer-pro daemon console DAW SW (26 in / 4 bus FX / 18 out)
 IMAGE_INSTALL:append = " mixer-pro"
 
+# V12-MIDIX — expandeur MIDI : daemon fluidsynth + SoundFont GM → P1/P2
+IMAGE_INSTALL:append = " midi-expander"
+
 # V7.0-E7 — mixer-gui-http : GUI HTTP (libmicrohttpd + Alpine.js/Tailwind CDN)
 IMAGE_INSTALL:append = " mixer-gui-http"
 

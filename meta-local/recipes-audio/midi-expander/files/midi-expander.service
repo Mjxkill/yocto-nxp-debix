@@ -1,0 +1,16 @@
+[Unit]
+Description=A.L.A. MIDI expander (SoundFont sound module)
+After=usb-uac2-gadget.service mixer-pro.service
+Wants=usb-uac2-gadget.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/midi-expander
+Restart=on-failure
+RestartSec=3
+# Jamais sur les cores RT (2-3) du mixer
+CPUAffinity=0 1
+Nice=0
+
+[Install]
+WantedBy=multi-user.target

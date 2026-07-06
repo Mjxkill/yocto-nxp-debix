@@ -1782,6 +1782,109 @@ static void exp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 	}
 }
 
+/* ========= V12-MIDIX — expandeur MIDI (consumer du ring SHM) =========
+ * Le daemon midi-expander (fluidsynth, cores 0-1) rend le son du module
+ * MIDI dans /dev/shm/ala-midix ; l'audio_thread le pop (non-bloquant,
+ * zéros si retard/absent) et l'ADDITIONNE dans P1/P2 comme le sampleur
+ * et le looper. mmap fait par persistence_thread (1 Hz, jamais en RT).
+ * ARCHI_V12_MIDI_EXPANDER.md. */
+#define MIDIX_SHM   "/ala-midix"
+#define MIDIX_MAGIC 0x4D494458u
+
+struct midix_hdr {
+	uint32_t magic;
+	uint32_t ring_frames;
+	_Atomic uint32_t widx;
+	uint32_t _pad;
+};
+static struct {
+	struct midix_hdr *_Atomic hdr;   /* NULL tant que non mappé */
+	float   *data;
+	size_t   map_sz;
+	uint32_t ridx;                    /* cursor consumer privé */
+	float    gain;
+	_Atomic uint32_t underruns;
+	_Atomic uint32_t peak;
+} g_midix = { .gain = 1.0f };
+
+/* persistence_thread (1 Hz) — tente le mmap tant que le daemon n'est pas
+ * là ; invalide si le magic disparaît (arrêt propre du daemon). */
+static void midix_try_map(void)
+{
+	struct midix_hdr *h = atomic_load(&g_midix.hdr);
+	if (h) {
+		if (h->magic != MIDIX_MAGIC) {   /* daemon parti */
+			atomic_store(&g_midix.hdr, NULL);
+			munmap(h, g_midix.map_sz);
+			g_midix.data = NULL;
+			mlog("midix: ring invalidé (daemon arrêté)");
+		}
+		return;
+	}
+	int fd = shm_open(MIDIX_SHM, O_RDONLY, 0);
+	if (fd < 0)
+		return;
+	struct stat st;
+	if (fstat(fd, &st) < 0 || st.st_size < (off_t)sizeof(*h)) {
+		close(fd);
+		return;
+	}
+	void *m = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+	close(fd);
+	if (m == MAP_FAILED)
+		return;
+	h = m;
+	if (h->magic != MIDIX_MAGIC || !h->ring_frames ||
+	    (off_t)(sizeof(*h) + (size_t)h->ring_frames * 2 * sizeof(float))
+	    > st.st_size) {
+		munmap(m, (size_t)st.st_size);
+		return;
+	}
+	g_midix.map_sz = (size_t)st.st_size;
+	g_midix.data = (float *)((char *)m + sizeof(*h));
+	g_midix.ridx = atomic_load(&h->widx);   /* démarre au présent */
+	atomic_store_explicit(&g_midix.hdr, h, memory_order_release);
+	mlog("midix: ring mappé (%u frames)", h->ring_frames);
+}
+
+/* Rendu (audio_thread, SOUS target_lock, après loop_render) */
+static void midix_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
+{
+	struct midix_hdr *h = atomic_load_explicit(&g_midix.hdr,
+						   memory_order_acquire);
+	if (!h)
+		return;
+	uint32_t w = atomic_load_explicit(&h->widx, memory_order_acquire);
+	int32_t avail = (int32_t)(w - g_midix.ridx);
+	if (avail < PERIOD_FRAMES) {   /* producer en retard → silence */
+		atomic_fetch_add_explicit(&g_midix.underruns, 1,
+					  memory_order_relaxed);
+		return;
+	}
+	/* dérive/burst : si on traîne trop, on saute au présent */
+	if (avail > (int32_t)(h->ring_frames / 2))
+		g_midix.ridx = w - PERIOD_FRAMES;
+
+	const int P = N_INPUT_MICS + N_INPUT_STEMS;   /* P1 = 16 */
+	const uint32_t ring = h->ring_frames;
+	const float g = g_midix.gain;
+	float pk = 0.0f;
+	for (int f = 0; f < PERIOD_FRAMES; f++) {
+		uint32_t idx = (g_midix.ridx + f) % ring;
+		float l = g_midix.data[(size_t)idx * 2];
+		float r = g_midix.data[(size_t)idx * 2 + 1];
+		in_block[P][f]     += l * g;
+		in_block[P + 1][f] += r * g;
+		float a = l < 0 ? -l : l, b = r < 0 ? -r : r;
+		if (a > b) b = a;
+		if (b > pk) pk = b;
+	}
+	g_midix.ridx += PERIOD_FRAMES;
+	atomic_store_explicit(&g_midix.peak,
+			      (uint32_t)(pk * g * 2147483647.0f),
+			      memory_order_relaxed);
+}
+
 /* V12-AMX — calcul Dugan par bloc (appelé par audio_thread AVANT mix_block).
  * Énergie post-fader : e_i = mean(x²) × ig². Enveloppe asymétrique
  * (attack 10 ms, release 200 ms — parole). Cible : part d'énergie
@@ -2148,9 +2251,10 @@ static void *audio_thread(void *arg)
 		 * consommateur (sends/master/looper/automix/tap) */
 		exp_render(in_block);
 
-		/* V12-SMP/LOOP : sources internes → P1/P2 (addition, sous lock) */
+		/* V12-SMP/LOOP/MIDIX : sources internes → P1/P2 (addition) */
 		smp_render(in_block);
 		loop_render(in_block);
+		midix_render(in_block);
 
 		/* MIX BLOCK — 1 appel pour 96 frames (vs 96 calls × 1 frame) */
 		automix_update(in_block, PERIOD_FRAMES);   /* V12-AMX */
@@ -3268,6 +3372,24 @@ static void handle_cmd(int fd, const char *line)
 		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
 		write(fd, reply, n);
 
+	} else if (json_has_op(line, "get_midix")) {
+		/* V12-MIDIX : présence du module + santé pour la GUI */
+		struct midix_hdr *h = atomic_load(&g_midix.hdr);
+		dprintf(fd, "{\"ok\":true,\"present\":%d,\"underruns\":%u,"
+			"\"peak\":%u,\"gain\":%.2f}\n",
+			h ? 1 : 0,
+			atomic_load(&g_midix.underruns),
+			atomic_load(&g_midix.peak), g_midix.gain);
+
+	} else if (json_has_op(line, "set_midix")) {
+		/* {"op":"set_midix","gain":F} — trim du module dans P1/P2 */
+		float g = -1.0f;
+		(void)json_get_float(line, "gain", &g);
+		if (g >= 0.0f && g <= 4.0f)
+			g_midix.gain = g;
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_midix\",\"gain\":%.2f}\n",
+			g_midix.gain);
+
 	} else if (json_has_op(line, "get_assistant")) {
 		/* Renvoie état Mixer Assistant. Le daemon mixer-ml-inference
 		 * poll cet endpoint pour savoir source/mode actuels. */
@@ -4284,6 +4406,7 @@ static void *persistence_thread(void *arg)
 	(void)arg;
 	while (atomic_load(&g_st.running)) {
 		sleep(1);
+		midix_try_map();   /* V12-MIDIX : mmap hors RT, retry 1 Hz */
 		if (atomic_exchange(&g_presets_dirty, 0)) {
 			save_presets();
 			save_mic_map();      /* V9.5.21 */

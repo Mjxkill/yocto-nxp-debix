@@ -62,11 +62,19 @@ echo 0xff   > "$GADGET/functions/uac2.0/c_chmask"  # 8 ch capture (board → hos
 echo 48000  > "$GADGET/functions/uac2.0/c_srate"
 echo 4      > "$GADGET/functions/uac2.0/c_ssize"
 
-# 8) Link function → config
-ln -sf "$GADGET/functions/uac2.0" "$GADGET/configs/c.1/"
+# 8) V12-MIDIX — MIDI function (expandeur : le PC voit un port MIDI in/out
+#    sur le même câble). CONFIG_USB_F_MIDI=y (built-in). 1 in + 1 out.
+mkdir -p "$GADGET/functions/midi.0"
+echo "A.L.A. MIDI" > "$GADGET/functions/midi.0/id"
+echo 1             > "$GADGET/functions/midi.0/in_ports"
+echo 1             > "$GADGET/functions/midi.0/out_ports"
 
-# 9) Bind to UDC (active le gadget côté USB host)
+# 9) Link functions → config
+ln -sf "$GADGET/functions/uac2.0" "$GADGET/configs/c.1/"
+ln -sf "$GADGET/functions/midi.0" "$GADGET/configs/c.1/"
+
+# 10) Bind to UDC (active le gadget côté USB host)
 echo "$UDC_NAME" > "$GADGET/UDC"
 
-echo "usb-uac2-setup: UAC2 8x8 gadget bound to $UDC_NAME"
+echo "usb-uac2-setup: UAC2 8x8 + MIDI gadget bound to $UDC_NAME"
 exit 0
