@@ -21,6 +21,36 @@ Item {
     property bool vfActive: false
     property real vfTotal: 0        // somme des cuts (dB)
     property var scenes: []
+    property var bmxRoles: []       // rôles bandmix (VU voix devant)
+
+    // V13-E2b : VU SIGNAL réels (meters pollés sur cette page aussi) —
+    // « quand tu es sur SCÈNE c'est difficile de voir tes valeurs »
+    function lvl(peak) {            // peak s32 → 0..1 (échelle -48..0 dB)
+        var f = peak / 2147483647.0;
+        if (f <= 0) return 0;
+        var db = 20 * Math.log(f) / Math.LN10;
+        return Math.max(0, Math.min(1, (db + 48) / 48));
+    }
+    property real vuMics: {         // ANTI-LARSEN : micros M1..M8
+        var a = mixer.inLevels, m = 0;
+        for (var i = 0; i < 8 && i < a.length; i++) if (a[i] > m) m = a[i];
+        return lvl(m);
+    }
+    property real vuAll: {          // AUTOMIX : toutes les entrées réelles
+        var a = mixer.inLevels, m = 0;
+        for (var i = 0; i < 16 && i < a.length; i++) if (a[i] > m) m = a[i];
+        return lvl(m);
+    }
+    property real vuOutL: mixer.outLevels.length > 0 ? lvl(mixer.outLevels[0]) : 0
+    property real vuOutR: mixer.outLevels.length > 1 ? lvl(mixer.outLevels[1]) : 0
+    property real vuVoice: {        // VOIX DEVANT : tranches rôle voix
+        var a = mixer.inLevels, m = 0;
+        for (var i = 0; i < page.bmxRoles.length && i < a.length; i++)
+            if ((page.bmxRoles[i] === "lead" || page.bmxRoles[i] === "choir")
+                && a[i] > m) m = a[i];
+        return lvl(m);
+    }
+
     // V13-E2 : confirmation RAPPEL (anti-fausse-manip live) + nommage
     property int armedRecall: -1
     property int nameSlot: -1
@@ -47,11 +77,15 @@ Item {
         mixer.call({ op: "bandmix_status" }, function(r) {
             if (r.ok) {
                 page.liveOn = r.live === 1;
+                var roles = [];
+                for (var i = 0; i < r.chans.length; i++)
+                    roles.push(r.chans[i].role);
+                page.bmxRoles = roles;
                 if (page.liveOn) {
                     var m = 0;
-                    for (var i = 0; i < r.chans.length; i++)
-                        if (Math.abs(r.chans[i].keeper_db) > Math.abs(m))
-                            m = r.chans[i].keeper_db;
+                    for (var j = 0; j < r.chans.length; j++)
+                        if (Math.abs(r.chans[j].keeper_db) > Math.abs(m))
+                            m = r.chans[j].keeper_db;
                     page.amxCorr = m;
                 }
             }
@@ -108,7 +142,7 @@ Item {
         }
     }
 
-    // gros bouton actif réutilisable
+    // gros bouton actif réutilisable — VU SIGNAL réel + barre d'activité
     component BigBtn: Rectangle {
         id: bb
         property string title: ""
@@ -116,33 +150,58 @@ Item {
         property string info: ""
         property bool on: false
         property color accent: "#e5a13c"
-        property real vu: 0          // 0..1 (barre du bas)
+        property real vu: 0          // activité de l'automatisme (0..1)
+        property real sig: 0         // NIVEAU AUDIO réel (0..1, -48..0 dB)
+        property string sigLabel: ""
         signal tapped()
-        width: 100; height: 116; radius: 10
+        width: 100; height: 128; radius: 10
         color: on ? Qt.darker(accent, 5.5) : "#14181c"
         border.color: on ? accent : "#39434b"
         border.width: on ? 2 : 1
         Column {
-            anchors.centerIn: parent
-            spacing: 5
+            anchors.top: parent.top; anchors.topMargin: 10
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: 4
             Text { anchors.horizontalCenter: parent.horizontalCenter
                    text: bb.title; color: bb.on ? bb.accent : "#8b959d"
                    font.pixelSize: 12; font.bold: true; font.letterSpacing: 2 }
             Text { anchors.horizontalCenter: parent.horizontalCenter
                    text: bb.state_; color: bb.on ? "#e9e5da" : "#5c666e"
-                   font.pixelSize: 17; font.bold: true }
+                   font.pixelSize: 16; font.bold: true }
             Text { anchors.horizontalCenter: parent.horizontalCenter
-                   text: bb.info; color: "#8b959d"; font.pixelSize: 10
+                   text: bb.info; color: "#8b959d"; font.pixelSize: 9
                    font.family: "monospace" }
         }
-        Rectangle {   // mini-VU d'activité
-            anchors.bottom: parent.bottom; anchors.bottomMargin: 6
+        Column {
+            anchors.bottom: parent.bottom; anchors.bottomMargin: 7
             anchors.horizontalCenter: parent.horizontalCenter
-            width: parent.width - 24; height: 6; radius: 3
-            color: "#0b0e11"
-            Rectangle { height: parent.height; radius: 3
-                        width: parent.width * Math.max(0, Math.min(1, bb.vu))
-                        color: bb.accent }
+            spacing: 3
+            // VU SIGNAL (vert → rouge près de 0 dBFS)
+            Row {
+                spacing: 4
+                Text { text: bb.sigLabel; color: "#5c666e"; font.pixelSize: 7
+                       font.letterSpacing: 1; width: 28
+                       anchors.verticalCenter: parent.verticalCenter }
+                Rectangle {
+                    width: bb.width - 24 - 32; height: 8; radius: 4
+                    color: "#0b0e11"
+                    Rectangle {
+                        height: parent.height; radius: 4
+                        width: parent.width * bb.sig
+                        color: bb.sig > 0.94 ? "#e05545"
+                               : bb.sig > 0.8 ? "#e8b84b" : "#4cc470"
+                    }
+                }
+            }
+            // activité de l'automatisme (couleur du bouton)
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: bb.width - 24; height: 4; radius: 2
+                color: "#0b0e11"
+                Rectangle { height: parent.height; radius: 2
+                            width: parent.width * Math.max(0, Math.min(1, bb.vu))
+                            color: bb.accent }
+            }
         }
         TapHandler {
             gesturePolicy: TapHandler.ReleaseWithinBounds
@@ -155,8 +214,43 @@ Item {
         anchors.margins: 14
         spacing: 12
 
-        Text { text: "SCÈNE · AUTOMATISMES"; color: "#e5a13c"
-               font.pixelSize: 13; font.bold: true; font.letterSpacing: 3 }
+        // ===== V13-E2b : MASTER L/R toujours visible sur cette page =====
+        Row {
+            width: parent.width
+            spacing: 14
+            Text { text: "SCÈNE · AUTOMATISMES"; color: "#e5a13c"
+                   font.pixelSize: 13; font.bold: true; font.letterSpacing: 3
+                   anchors.verticalCenter: parent.verticalCenter }
+            Item { width: 20; height: 1 }
+            Column {
+                spacing: 3
+                anchors.verticalCenter: parent.verticalCenter
+                Row {
+                    spacing: 5
+                    Text { text: "MASTER L"; color: "#5c666e"; font.pixelSize: 8
+                           font.letterSpacing: 1; width: 58 }
+                    Rectangle {
+                        width: 300; height: 9; radius: 4; color: "#0b0e11"
+                        Rectangle { height: parent.height; radius: 4
+                            width: parent.width * page.vuOutL
+                            color: page.vuOutL > 0.94 ? "#e05545"
+                                   : page.vuOutL > 0.8 ? "#e8b84b" : "#4cc470" }
+                    }
+                }
+                Row {
+                    spacing: 5
+                    Text { text: "MASTER R"; color: "#5c666e"; font.pixelSize: 8
+                           font.letterSpacing: 1; width: 58 }
+                    Rectangle {
+                        width: 300; height: 9; radius: 4; color: "#0b0e11"
+                        Rectangle { height: parent.height; radius: 4
+                            width: parent.width * page.vuOutR
+                            color: page.vuOutR > 0.94 ? "#e05545"
+                                   : page.vuOutR > 0.8 ? "#e8b84b" : "#4cc470" }
+                    }
+                }
+            }
+        }
 
         // ================= 4 GROS BOUTONS =================
         Row {
@@ -165,6 +259,7 @@ Item {
             BigBtn {
                 width: (parent.width - 3*12) / 4
                 title: "ANTI-LARSEN"
+                sig: page.vuMics; sigLabel: "MICS"
                 on: page.alOn
                 accent: "#e05545"
                 state_: page.alOn ? "ON" : "OFF"
@@ -179,6 +274,7 @@ Item {
             BigBtn {
                 width: (parent.width - 3*12) / 4
                 title: "AUTOMIX"
+                sig: page.vuAll; sigLabel: "IN"
                 on: page.liveOn || page.duganOn
                 accent: page.duganOn ? "#e5a13c" : "#4cc470"
                 state_: page.liveOn ? "MUSIQUE" : (page.duganOn ? "VOIX" : "OFF")
@@ -192,6 +288,7 @@ Item {
             BigBtn {
                 width: (parent.width - 3*12) / 4
                 title: "MASTERING"
+                sig: Math.max(page.vuOutL, page.vuOutR); sigLabel: "OUT"
                 on: page.mastOn
                 accent: "#5aa9e6"
                 state_: page.mastOn ? "ON" : "OFF"
@@ -208,6 +305,7 @@ Item {
             BigBtn {
                 width: (parent.width - 3*12) / 4
                 title: "VOIX DEVANT"
+                sig: page.vuVoice; sigLabel: "VOIX"
                 on: page.vfOn
                 accent: "#b3a5f0"
                 state_: page.vfOn ? (page.vfActive ? "♪ ACTIF" : "ON") : "OFF"
