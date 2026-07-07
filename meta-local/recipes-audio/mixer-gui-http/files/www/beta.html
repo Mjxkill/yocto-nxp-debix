@@ -213,6 +213,13 @@ body{
 }
 .tab:focus-visible{outline:2px solid var(--accent);}
 .tab.on{color:var(--accent);background:rgba(229,161,60,.08);border-color:rgba(229,161,60,.25);}
+/* V12 web : boutons des pages PADS/LOOPER/EXPANDEUR */
+.wbtn{background:#1b2126;border:1px solid #39434b;border-radius:5px;color:#c9c4b8;
+  font-size:11px;font-weight:700;padding:8px 12px;cursor:pointer;font-family:inherit;}
+.wbtn:hover{border-color:var(--accent);}
+.wbtn:disabled{opacity:.3;cursor:default;}
+.wbtn.ok{color:#4cc470;border-color:#2c5c3c;}
+.wbtn.warn{color:#f2796a;border-color:#7a3b32;}
 .scene{margin-left:auto;display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--mut);}
 .scene b{color:var(--text);font-weight:500;}
 
@@ -525,6 +532,75 @@ body{
       </div>
       <div id="sys-tac-out" style="font-size:9px;color:var(--mut);margin-top:6px;"></div></div>
   </div>
+
+  <!-- ============ V12 web : PADS (sampleur) ============ -->
+  <div id="padspage" class="page hid" data-page="PADS"
+       style="display:flex;flex-direction:column;padding:12px 16px;gap:10px;overflow-y:auto;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <span style="color:var(--accent);font-size:11px;font-weight:700;letter-spacing:3px;">PADS · /var/lib/ala/samples</span>
+      <span style="flex:1"></span>
+      <button class="wbtn" id="padreload">RECHARGER</button>
+      <button class="wbtn warn" id="padstopall">STOP ALL</button>
+    </div>
+    <div id="padgrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;"></div>
+    <div style="font-size:9px;color:var(--mut);">TAP = lecture (re-tap = relance) · niveau/routage sur les tranches P1/P2 du MIXER</div>
+  </div>
+
+  <!-- ============ V12 web : LOOPER (loopstation) ============ -->
+  <div id="looppage" class="page hid" data-page="LOOPER"
+       style="display:flex;flex-direction:column;padding:12px 16px;gap:8px;overflow-y:auto;">
+    <div style="display:flex;align-items:center;gap:14px;background:#171c21;border-radius:8px;padding:10px 12px;">
+      <div>
+        <div style="color:var(--accent);font-size:11px;font-weight:700;letter-spacing:3px;">LOOPER</div>
+        <div id="loopinfo" style="font-size:10px;color:var(--mut);font-family:monospace;">aucune boucle</div>
+      </div>
+      <div style="width:180px;height:10px;border-radius:5px;background:#0b0e11;overflow:hidden;">
+        <div id="looppos" style="height:100%;width:0;background:#4cc470;"></div></div>
+      <div>
+        <div style="font-size:8px;color:var(--mut);letter-spacing:2px;">MASTER</div>
+        <div style="width:110px;height:12px;border-radius:6px;background:#0b0e11;overflow:hidden;">
+          <div id="loopmvu" style="height:100%;width:0;background:#4cc470;"></div></div>
+      </div>
+      <span style="flex:1"></span>
+      <button class="wbtn ok"   id="loopplayall">&#9654; PLAY ALL</button>
+      <button class="wbtn"      id="loopstopall">&#9632; STOP ALL</button>
+      <button class="wbtn warn" id="loopclearall">&#10005; CLEAR ALL</button>
+    </div>
+    <div id="looptracks" style="display:flex;flex-direction:column;gap:6px;"></div>
+    <div style="font-size:9px;color:var(--mut);">REC (piste vide) &#8594; PLAY fige &#183; 1re piste = longueur ma&#238;tre &#183; ON/MUTE active/d&#233;sactive &#183; sortie P1/P2</div>
+  </div>
+
+  <!-- ============ V12 web : EXPANDEUR (GM + synthé M1) ============ -->
+  <div id="xpdpage" class="page hid" data-page="EXPANDEUR"
+       style="display:flex;flex-direction:column;padding:12px 16px;gap:8px;overflow-y:auto;">
+    <div style="display:flex;align-items:center;gap:14px;background:#171c21;border-radius:8px;padding:10px 12px;">
+      <div>
+        <div style="color:var(--accent);font-size:11px;font-weight:700;letter-spacing:3px;">EXPANDEUR</div>
+        <div id="xpdstat" style="font-size:10px;color:var(--mut);">—</div>
+        <div style="width:180px;height:8px;border-radius:4px;background:#0b0e11;overflow:hidden;margin-top:3px;">
+          <div id="xpdvu" style="height:100%;width:0;background:#4cc470;"></div></div>
+      </div>
+      <div>
+        <div style="font-size:8px;color:var(--mut);letter-spacing:2px;">VOLUME <span id="xpdgv">—</span></div>
+        <input type="range" id="xpdgain" min="0" max="200" value="50" style="width:180px;">
+      </div>
+      <span style="flex:1"></span>
+      <button class="wbtn warn" id="xpdpanic">PANIC</button>
+    </div>
+    <div id="xpdchans" style="display:flex;flex-direction:column;gap:5px;"></div>
+    <div style="font-size:9px;color:var(--mut);">GM = banque GeneralUser · M1 = synthé A.L.A. (2 OSC + VDF + VDA) · CH 10 = batterie · port MIDI USB « Debix UAC2 8x8 MIDI 1 »</div>
+  </div>
+
+  <!-- éditeur de patch M1 (overlay) -->
+  <div id="xpdedit" style="display:none;position:absolute;inset:0;background:#0e1114;z-index:60;padding:14px 18px;flex-direction:column;gap:8px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span id="xpename" style="color:#b3a5f0;font-size:14px;font-weight:700;letter-spacing:2px;">PATCH</span>
+      <span style="flex:1"></span>
+      <button class="wbtn ok" id="xpesave">SAUVER</button>
+      <button class="wbtn" id="xpeclose">&#10005;</button>
+    </div>
+    <div id="xpebody" style="overflow-y:auto;display:flex;flex-direction:column;gap:5px;flex:1;"></div>
+  </div>
   </div><!-- /pages -->
 
   <!-- ===== V10-P2d : effets par piste (TAC + DSP) — tap sur le nom d'une tranche ===== -->
@@ -545,6 +621,9 @@ body{
     <div class="tab on" tabindex="0">MIXER</div>
     <div class="tab" tabindex="0">MASTERING</div>
     <div class="tab" tabindex="0">EFFETS</div>
+    <div class="tab" tabindex="0">PADS</div>
+    <div class="tab" tabindex="0">LOOPER</div>
+    <div class="tab" tabindex="0">EXPANDEUR</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
     <div class="scene">GUI <b id="guiver">P4f</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
@@ -821,8 +900,10 @@ document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));t.classList.add("on");
   const name=t.textContent.trim();
   const map={"MIXER":"MIXER","EFFETS":"EFFETS","MASTERING":"MASTERING",
+             "PADS":"PADS","LOOPER":"LOOPER","EXPANDEUR":"EXPANDEUR",
              "ROUTING":"ROUTING","SYSTÈME":"SYSTEME"};
   const target=map[name]||"MIXER";
+  window.CURPAGE=target;   /* V12 web : gate les pollers PADS/LOOPER/EXPANDEUR */
   document.querySelectorAll("#pages>.page").forEach(p=>
     p.classList.toggle("hid",p.dataset.page!==target));
 }));
@@ -2552,6 +2633,228 @@ if(tb)tb.addEventListener("click",()=>{
   fetch("/api/tac/reset",{method:"POST"}).catch(()=>{}).finally(()=>{
     setTimeout(()=>{tb.classList.remove("busy");tb.textContent="RESET TAC";},900);});
 });
+})();
+
+/* ================= V12 web : PADS / LOOPER / EXPANDEUR =================
+ * Miroir des pages natives. Tout passe par /api/cmd (passthrough JSON
+ * vers /run/mixer-pro.sock). Pollers gatés sur window.CURPAGE. */
+(function(){
+"use strict";
+const cmd=(o)=>fetch("/api/cmd",{method:"POST",
+  headers:{"Content-Type":"application/json"},body:JSON.stringify(o)})
+  .then(r=>r.json()).catch(()=>({ok:false}));
+const dbw=(peak,ref)=>{             /* peak s32 → largeur % (-48..0 dB) */
+  const f=peak/2147483647; if(f<=0)return 0;
+  const db=20*Math.log10(f); return Math.max(0,Math.min(100,(db+48)/48*100));};
+const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ---------------- PADS ---------------- */
+function padRender(slots){
+  const g=document.getElementById("padgrid");
+  g.innerHTML=slots.map((s,i)=>{
+    const has=s.name!=="", on=s.playing===1;
+    return `<div data-slot="${i}" style="height:86px;border-radius:8px;cursor:pointer;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+      background:${on?"#3a2c10":has?"#1b2126":"#14181c"};
+      border:${on?"2px solid #e5a13c":"1px solid #39434b"};">
+      <div style="font-size:13px;font-weight:700;color:${on?"#e5a13c":has?"#e9e5da":"#3a434b"};
+        max-width:90%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${has?esc(s.name):"—"}</div>
+      <div style="font-size:9px;color:var(--mut);font-family:monospace;">
+        ${has?(on?s.pos_s.toFixed(1)+" / ":"")+s.len_s.toFixed(1)+" s":""}</div></div>`;}).join("");
+  g.querySelectorAll("[data-slot]").forEach(el=>el.addEventListener("click",()=>{
+    const s=slots[+el.dataset.slot];
+    if(s&&s.name!=="")cmd({op:"sampler_trigger",slot:+el.dataset.slot,gain_db:0}).then(padPoll);
+  }));
+}
+function padPoll(){
+  if(window.CURPAGE!=="PADS")return;
+  cmd({op:"sampler_list"}).then(r=>{if(r.ok)padRender(r.slots);});
+}
+setInterval(padPoll,500);
+document.getElementById("padreload").addEventListener("click",()=>cmd({op:"sampler_reload"}).then(padPoll));
+document.getElementById("padstopall").addEventListener("click",()=>cmd({op:"sampler_stop",slot:-1}).then(padPoll));
+
+/* ---------------- LOOPER ---------------- */
+const TRCOL=["#e5a13c","#4cc470","#5aa9e6","#c77dff","#e0678a","#e8b84b"];
+const srcName=(i)=>i<0?"—":(i<8?"M"+(i+1):"USB"+(i-7));
+let loopSt=null;
+function loopRender(st){
+  const c=document.getElementById("looptracks");
+  document.getElementById("loopinfo").textContent=
+    st.master_len_s>0?("boucle "+st.master_len_s.toFixed(2)+" s   "+st.pos_s.toFixed(1)+" s")
+                     :"aucune boucle — enregistrez une 1re piste";
+  document.getElementById("looppos").style.width=
+    st.master_len_s>0?(st.pos_s/st.master_len_s*100)+"%":"0";
+  document.getElementById("looppos").style.background=st.run?"#4cc470":"#5c666e";
+  const mv=document.getElementById("loopmvu");
+  mv.style.width=dbw(st.master_peak||0)+"%";
+  mv.style.background=(st.master_peak||0)>1932735283?"#e05545":"#4cc470";
+  c.innerHTML=st.tracks.map((t,i)=>{
+    const rec=t.state==="rec", play=t.state==="play", empty=t.state==="empty";
+    const mut=t.muted===1, ac=TRCOL[i];
+    return `<div style="display:flex;align-items:center;gap:10px;border-radius:8px;padding:8px 10px;
+      background:${rec?"#2a1512":play?"#141b16":"#14181c"};
+      border:${rec?"2px solid #e05545":(play&&!mut)?"2px solid "+ac:"1px solid #22282e"};">
+      <div style="width:34px;height:34px;border-radius:17px;display:flex;align-items:center;justify-content:center;
+        background:${empty?"#1b2126":ac};color:${empty?"#5c666e":"#0b0e11"};font-weight:700;">${i+1}</div>
+      <button class="wbtn" data-t="${i}" data-a="srcdn" ${rec?"disabled":""}>&#8249;</button>
+      <span style="width:52px;text-align:center;font-weight:700;color:#e9e5da;">${srcName(t.src_a)}</span>
+      <button class="wbtn" data-t="${i}" data-a="srcup" ${rec?"disabled":""}>&#8250;</button>
+      <div style="width:110px;height:12px;border-radius:6px;background:#0b0e11;overflow:hidden;">
+        <div style="height:100%;width:${(rec||(play&&!mut))?dbw(t.peak):0}%;background:${rec?"#e05545":ac};"></div></div>
+      <span style="width:64px;font-family:monospace;font-size:10px;color:${rec?"#e05545":"var(--mut)"};">
+        ${t.len_s>0?t.len_s.toFixed(2)+" s":(rec?"● rec…":"—")}</span>
+      <span style="flex:1"></span>
+      <button class="wbtn warn" data-t="${i}" data-a="rec"  ${empty?"":"disabled"}>&#9679; REC</button>
+      <button class="wbtn ok"   data-t="${i}" data-a="play" ${rec?"":"disabled"}>&#9654; PLAY</button>
+      <button class="wbtn"      data-t="${i}" data-a="${mut?"unmute":"mute"}" ${play?"":"disabled"}
+        style="${mut?"color:#e8b84b;border-color:#e8b84b;":""}">${mut?"MUTED":"ON"}</button>
+      <button class="wbtn warn" data-t="${i}" data-a="clear" ${(!empty&&!rec)?"":"disabled"}>&#10005;</button>
+    </div>`;}).join("");
+  c.querySelectorAll("[data-a]").forEach(b=>b.addEventListener("click",()=>{
+    const t=+b.dataset.t, a=b.dataset.a, tr=loopSt.tracks[t];
+    if(a==="srcdn"||a==="srcup"){
+      let s=tr.src_a+(a==="srcup"?1:-1); s=Math.max(0,Math.min(15,s));
+      cmd({op:"looper_track_cfg",track:t,src_a:s,src_b:-1}).then(loopPoll);
+    }else cmd({op:"looper_track_ctl",track:t,action:a}).then(loopPoll);
+  }));
+}
+function loopPoll(){
+  if(window.CURPAGE!=="LOOPER")return;
+  cmd({op:"looper_status"}).then(r=>{if(r.ok){loopSt=r;loopRender(r);}});
+}
+setInterval(loopPoll,300);
+document.getElementById("loopplayall").addEventListener("click",()=>cmd({op:"looper_ctl",action:"play_all"}).then(loopPoll));
+document.getElementById("loopstopall").addEventListener("click",()=>cmd({op:"looper_ctl",action:"stop_all"}).then(loopPoll));
+document.getElementById("loopclearall").addEventListener("click",()=>cmd({op:"looper_ctl",action:"clear_all"}).then(loopPoll));
+
+/* ---------------- EXPANDEUR ---------------- */
+const GM=["Grand Piano","Bright Piano","Electric Grand","Honky-tonk",
+"E.Piano 1","E.Piano 2","Harpsichord","Clavinet","Celesta","Glockenspiel",
+"Music Box","Vibraphone","Marimba","Xylophone","Tubular Bells","Dulcimer",
+"Drawbar Organ","Percussive Organ","Rock Organ","Church Organ","Reed Organ",
+"Accordion","Harmonica","Tango Accordion","Nylon Guitar","Steel Guitar",
+"Jazz Guitar","Clean Guitar","Muted Guitar","Overdrive Guitar",
+"Distortion Guitar","Harmonics","Acoustic Bass","Finger Bass","Pick Bass",
+"Fretless Bass","Slap Bass 1","Slap Bass 2","Synth Bass 1","Synth Bass 2",
+"Violin","Viola","Cello","Contrabass","Tremolo Strings","Pizzicato","Harp",
+"Timpani","String Ens. 1","String Ens. 2","Synth Strings 1","Synth Strings 2",
+"Choir Aahs","Voice Oohs","Synth Voice","Orchestra Hit","Trumpet","Trombone",
+"Tuba","Muted Trumpet","French Horn","Brass Section","Synth Brass 1",
+"Synth Brass 2","Soprano Sax","Alto Sax","Tenor Sax","Baritone Sax","Oboe",
+"English Horn","Bassoon","Clarinet","Piccolo","Flute","Recorder","Pan Flute",
+"Blown Bottle","Shakuhachi","Whistle","Ocarina","Square Lead","Saw Lead",
+"Calliope","Chiff Lead","Charang","Voice Lead","Fifths Lead","Bass+Lead",
+"New Age Pad","Warm Pad","Polysynth Pad","Choir Pad","Bowed Pad",
+"Metallic Pad","Halo Pad","Sweep Pad","Rain FX","Soundtrack","Crystal",
+"Atmosphere","Brightness","Goblins","Echoes","Sci-Fi","Sitar","Banjo",
+"Shamisen","Koto","Kalimba","Bagpipe","Fiddle","Shanai","Tinkle Bell",
+"Agogo","Steel Drums","Woodblock","Taiko Drum","Melodic Tom","Synth Drum",
+"Reverse Cymbal","Fret Noise","Breath Noise","Seashore","Bird Tweet",
+"Telephone","Helicopter","Applause","Gunshot"];
+let xpdSt=null, patchNames=[], instNames=[], editIdx=-1, pd=null;
+function xpdRender(){
+  const st=xpdSt; if(!st)return;
+  document.getElementById("xpdstat").textContent=(st.sf2||"?")+" + M1";
+  document.getElementById("xpdgv").textContent=(+st.gain).toFixed(2);
+  if(document.activeElement!==document.getElementById("xpdgain"))
+    document.getElementById("xpdgain").value=Math.round(st.gain*100);
+  const c=document.getElementById("xpdchans");
+  c.innerHTML=st.chans.map((prog,i)=>{
+    const m1=(st.engines||[])[i]===1, pi=(st.patch||[])[i]||0;
+    const drums=i===9, act=(st.act||[])[i]||0;
+    const nm=m1?(patchNames[pi]||("Patch "+pi)):(drums?"Drum Kit "+prog:GM[prog]);
+    return `<div style="display:flex;align-items:center;gap:8px;border-radius:6px;padding:6px 8px;
+      background:${m1?"#181420":"#14181c"};border:1px solid ${m1?"#5a4a7a":drums?"#5a4a2a":"#22282e"};">
+      <span style="width:44px;font-weight:700;color:var(--accent);font-size:11px;">CH ${i+1}</span>
+      <button class="wbtn" data-c="${i}" data-a="eng"
+        style="${m1?"color:#b3a5f0;border-color:#8a7ad0;":""}">${m1?"M1":"GM"}</button>
+      <button class="wbtn" data-c="${i}" data-a="dn">&#8249;</button>
+      <span style="width:170px;font-weight:700;font-size:12px;color:${m1?"#b3a5f0":"#e9e5da"};
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nm)}</span>
+      <button class="wbtn" data-c="${i}" data-a="up">&#8250;</button>
+      ${m1?`<button class="wbtn" data-c="${i}" data-a="edit" style="color:var(--accent);">ÉDIT</button>`:""}
+      <div style="flex:1;height:10px;border-radius:5px;background:#0b0e11;overflow:hidden;">
+        <div style="height:100%;width:${Math.min(100,act/10)}%;
+          background:${m1?"#b3a5f0":drums?"#e8b84b":"#4cc470"};"></div></div>
+    </div>`;}).join("");
+  c.querySelectorAll("[data-a]").forEach(b=>b.addEventListener("click",()=>{
+    const i=+b.dataset.c, a=b.dataset.a;
+    const m1=(xpdSt.engines||[])[i]===1, pi=(xpdSt.patch||[])[i]||0;
+    if(a==="eng")cmd({op:"midix_ctl",line:"engine "+i+" "+(m1?0:1)+" "+pi}).then(xpdPoll);
+    else if(a==="edit")xpdEdit(pi);
+    else if(m1){const p=(pi+(a==="up"?1:15))%16;
+      cmd({op:"midix_ctl",line:"engine "+i+" 1 "+p}).then(xpdPoll);}
+    else{let n=xpdSt.chans[i]+(a==="up"?1:-1);n=(n+128)%128;
+      cmd({op:"midix_ctl",cmd:"prog",chan:i,num:n}).then(xpdPoll);}
+  }));
+}
+function xpdPoll(){
+  if(window.CURPAGE!=="EXPANDEUR")return;
+  cmd({op:"midix_ctl",cmd:"status"}).then(r=>{if(r.ok){xpdSt=r;xpdRender();}});
+  cmd({op:"get_midix"}).then(r=>{
+    if(r.ok)document.getElementById("xpdvu").style.width=dbw(r.peak)+"%";});
+  if(patchNames.length===0)
+    cmd({op:"midix_ctl",line:"patch_list"}).then(r=>{if(r.ok)patchNames=r.patches;});
+}
+setInterval(xpdPoll,300);
+document.getElementById("xpdgain").addEventListener("change",e=>
+  cmd({op:"midix_ctl",cmd:"gain",value:e.target.value/100}));
+document.getElementById("xpdpanic").addEventListener("click",()=>cmd({op:"midix_ctl",cmd:"panic"}));
+
+/* --- éditeur de patch M1 (web) --- */
+const XPAR=[["OSC — DETUNE (cts)","detune",-50,50],["OSC — BALANCE 1↔2","balance",0,99],
+["VDF CUTOFF","cutoff",0,99],["VDF EG INT","eg_int",0,99],
+["VDF ATTACK","vdf0",0,99],["VDF DECAY","vdf1",0,99],["VDF BREAK","vdf2",0,99],
+["VDF SUSTAIN","vdf3",0,99],["VDF SLOPE","vdf4",0,99],["VDF RELEASE","vdf5",0,99],
+["VDA ATTACK","vda0",0,99],["VDA DECAY","vda1",0,99],["VDA BREAK","vda2",0,99],
+["VDA SUSTAIN","vda3",0,99],["VDA SLOPE","vda4",0,99],["VDA RELEASE","vda5",0,99],
+["LFO RATE","lfo_rate",0,99],["LFO DEPTH","lfo_depth",0,99],["LFO DELAY","lfo_delay",0,99],
+["VEL SENS","vel_sens",0,99],["LEVEL","level",0,99]];
+const pval=(k)=>k.startsWith("vdf")&&k.length===4?pd.vdf[+k[3]]
+             :k.startsWith("vda")&&k.length===4?pd.vda[+k[3]]:pd[k];
+function xpdEdit(pi){
+  const go=()=>cmd({op:"midix_ctl",line:"patch_get "+pi}).then(r=>{
+    if(!r.ok)return; pd=r; editIdx=pi;
+    document.getElementById("xpename").textContent="PATCH M1 · "+pd.name+" (n° "+pi+")";
+    const b=document.getElementById("xpebody");
+    const oscRow=(k,lbl)=>{
+      const v=pd[k], nm=v<0?"OFF":(instNames[v]||("#"+v));
+      return `<div style="display:flex;align-items:center;gap:8px;">
+        <span style="width:150px;font-size:10px;font-weight:700;color:var(--mut);">${lbl}</span>
+        <button class="wbtn" data-o="${k}" data-d="-1">&#8249;</button>
+        <span style="width:250px;text-align:center;font-weight:700;color:#e9e5da;
+          border:1px solid #5a4a7a;border-radius:5px;padding:6px 0;font-size:12px;
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(nm)}</span>
+        <button class="wbtn" data-o="${k}" data-d="1">&#8250;</button></div>`;};
+    b.innerHTML=oscRow("osc1","OSC 1")+oscRow("osc2","OSC 2 (−1 = off)")
+      +XPAR.map(([lbl,k,mn,mx])=>`<div style="display:flex;align-items:center;gap:8px;">
+        <span style="width:150px;font-size:10px;font-weight:700;color:var(--mut);">${lbl}</span>
+        <input type="range" data-k="${k}" min="${mn}" max="${mx}" value="${pval(k)}" style="flex:1;">
+        <span style="width:40px;font-family:monospace;font-weight:700;" id="xv_${k}">${pval(k)}</span>
+      </div>`).join("");
+    b.querySelectorAll("[data-k]").forEach(sl=>sl.addEventListener("input",()=>{
+      const k=sl.dataset.k, v=+sl.value;
+      document.getElementById("xv_"+k).textContent=v;
+      cmd({op:"midix_ctl",line:"patch_set "+editIdx+" "+k+" "+v});
+    }));
+    b.querySelectorAll("[data-o]").forEach(bt=>bt.addEventListener("click",()=>{
+      const k=bt.dataset.o; let v=pd[k]+(+bt.dataset.d);
+      const lo=k==="osc2"?-1:0;
+      if(v<lo)v=instNames.length-1; if(v>=instNames.length)v=lo;
+      cmd({op:"midix_ctl",line:"patch_set "+editIdx+" "+k+" "+v}).then(()=>xpdEdit(editIdx));
+    }));
+    document.getElementById("xpdedit").style.display="flex";
+  });
+  if(instNames.length===0)
+    cmd({op:"midix_ctl",line:"inst_list"}).then(r=>{if(r.ok)instNames=r.inst;go();});
+  else go();
+}
+document.getElementById("xpeclose").addEventListener("click",()=>{
+  document.getElementById("xpdedit").style.display="none";editIdx=-1;});
+document.getElementById("xpesave").addEventListener("click",()=>{
+  if(editIdx>=0)cmd({op:"midix_ctl",line:"patch_save "+editIdx})
+    .then(()=>{patchNames=[];xpdPoll();});});
 })();
 
 </script>
