@@ -81,7 +81,8 @@ Item {
 
         // V10-N7 : plus de knob GAIN — il écrivait la même cellule que le
         // fader restauré (set_input_gain). Espace rendu au fader.
-        Item { width: 1; height: 74 }
+        // V12-UI : 74 → 40 pour financer la grille F 2×2 (boutons tactiles)
+        Item { width: 1; height: 40 }
 
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
@@ -164,25 +165,31 @@ Item {
             }
         }
 
-        Row {
+        // V12-UI : sends FX en grille 2×2 — l'ancienne rangée 1×4 (128 px)
+        // débordait sur les tranches voisines (~115 px) et les boutons
+        // 29×19 étaient trop petits au doigt.
+        Grid {
             anchors.horizontalCenter: parent.horizontalCenter
-            spacing: 4
+            columns: 2
+            columnSpacing: 4
+            rowSpacing: 4
             visible: !strip.isOut
             Repeater {
                 model: 4
                 Rectangle {
-                    width: 29; height: 19; radius: 2
+                    width: Math.min(52, (strip.width - 12 - 4) / 2)
+                    height: 24; radius: 3
                     color: strip.sendsOn[index] ? "#e5a13c" : "#1b2126"
                     border.color: strip.sendsOn[index] ? "#ffcf7e" : "#39434b"
                     Text {
                         anchors.centerIn: parent
                         text: "F" + (index + 1)
                         color: strip.sendsOn[index] ? "#1d1204" : "#8b959d"
-                        font.pixelSize: 9; font.bold: true
+                        font.pixelSize: 11; font.bold: true
                     }
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: {
                             const s = strip.sendsOn.slice();
                             s[index] = !s[index];
                             strip.sendsOn = s;
