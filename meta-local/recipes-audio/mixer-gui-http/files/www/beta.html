@@ -2515,11 +2515,76 @@ function renderOutTab(body){
     unit:"dB",step:0.5,onchange:v=>postRt("og",{op:"set_output_gain",out:A.idx,db:v})}));
   body.appendChild(co.c);
 }
+/* V12-EXP web : onglet GATE — expandeur/gate natif mixer-pro par tranche */
+function renderGateTab(body){
+  const src=A.idx;
+  const post=(o)=>fetch("/api/cmd",{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(o)})
+    .then(r=>r.json()).catch(()=>({ok:false}));
+  const cg=card("GATE / EXPANDEUR","pré-fader : agit sur sends, master, looper, automix");
+  cg.g.style.display="block";
+  cg.g.innerHTML=`
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;">
+      <button class="wbtn" id="gt_on" style="min-width:110px;">GATE —</button>
+      <div>
+        <div style="font-size:8px;color:var(--mut);letter-spacing:2px;">RÉDUCTION <span id="gt_grv">—</span></div>
+        <div style="width:230px;height:12px;border-radius:6px;background:#0b0e11;overflow:hidden;">
+          <div id="gt_gr" style="height:100%;width:0;background:#e05545;float:right;"></div></div>
+      </div>
+    </div>
+    <div id="gt_rows"></div>`;
+  body.appendChild(cg.c);
+  const PAR=[["SEUIL","threshold_db",-80,0,"dB"],["RATIO","ratio",1,20,":1"],
+    ["ATTACK","attack_ms",0.5,100,"ms"],["RELEASE","release_ms",5,1000,"ms"],
+    ["RANGE","range_db",0,80,"dB"],["HOLD","hold_ms",0,500,"ms"]];
+  let cur=null;
+  function draw(){
+    const rows=document.getElementById("gt_rows");
+    if(!rows||!cur)return;
+    const on=document.getElementById("gt_on");
+    on.textContent=cur.on?"GATE ON":"GATE OFF";
+    on.style.color=cur.on?"var(--accent)":"";
+    on.style.borderColor=cur.on?"var(--accent)":"";
+    if(!rows.dataset.built){
+      rows.dataset.built="1";
+      rows.innerHTML=PAR.map(([lbl,k,mn,mx,un])=>`
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+          <span style="width:90px;font-size:10px;font-weight:700;color:var(--mut);">${lbl}</span>
+          <input type="range" data-gk="${k}" min="${mn}" max="${mx}" step="${k==="attack_ms"?0.5:1}"
+                 value="${cur[k]}" style="flex:1;">
+          <span style="width:70px;font-family:monospace;font-weight:700;" id="gtv_${k}">${cur[k]} ${un}</span>
+        </div>`).join("");
+      rows.querySelectorAll("[data-gk]").forEach(sl=>sl.addEventListener("input",()=>{
+        const k=sl.dataset.gk,v=+sl.value;
+        cur[k]=v;
+        document.getElementById("gtv_"+k).textContent=v+" "+PAR.find(p=>p[1]===k)[4];
+        const o={op:"set_expander",src};o[k]=v;post(o);
+      }));
+      on.addEventListener("click",()=>{post({op:"set_expander",src,on:cur.on?0:1});});
+    }
+  }
+  function poll(){
+    post({op:"get_expander"}).then(r=>{
+      if(!r.ok||!document.getElementById("gt_rows"))return;
+      const c=r.channels[src];
+      if(!cur){cur=c;draw();}
+      else{cur.on=c.on;draw();}
+      const grv=document.getElementById("gt_grv"),gr=document.getElementById("gt_gr");
+      if(grv){grv.textContent=c.gr_db.toFixed(1)+" dB";
+        gr.style.width=Math.min(100,-c.gr_db/Math.max(1,c.range_db)*100)+"%";}
+    });
+  }
+  poll();
+  window._gateTimer=setInterval(poll,250);
+}
 function render(){
   const groups=groupsFor();
   /* onglets synthetiques : le panneau n'est JAMAIS vide */
   if(A.isOut)groups.unshift({title:"SORTIE",custom:"out"});
   else groups.unshift({title:"ROUTAGE + SENDS",custom:"routing"});
+  /* V12-EXP web : gate par tranche (voies IN 0..15, natif mixer-pro) */
+  if(!A.isOut&&A.idx<16)groups.splice(1,0,{title:"GATE",custom:"gate"});
+  if(window._gateTimer){clearInterval(window._gateTimer);window._gateTimer=null;}
   const tabs=$("#sftabs"),body=$("#sfbody");
   tabs.innerHTML="";body.innerHTML="";
   const act=groups.find(g=>g.title===A.tab)||groups[0];A.tab=act.title;
@@ -2530,6 +2595,7 @@ function render(){
   });
   if(act.custom==="routing"){renderRouting(body);return;}
   if(act.custom==="out"){renderOutTab(body);return;}
+  if(act.custom==="gate"){renderGateTab(body);return;}
   const blobs=act.controls.filter(c=>c.type==="BYTES"&&isDrcBlob(c.fullName));
   const bqs=act.controls.filter(c=>c.type==="BYTES"&&c.fullName&&parseBqName(c.fullName));
   const plain=act.controls.filter(c=>blobs.indexOf(c)<0&&bqs.indexOf(c)<0);
