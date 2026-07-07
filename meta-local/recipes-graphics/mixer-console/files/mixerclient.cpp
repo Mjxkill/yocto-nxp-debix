@@ -203,13 +203,19 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
         emit insertChanged();
     } else if (tag == TagAutomix) {
         m_amxOn = o.value(QLatin1String("on")).toInt() == 1;
-        QVariantList mb, gn;
+        /* V12-AMX-UI : réglages exposés au panneau (response/floor/poids) */
+        m_amxRespMs  = o.value(QLatin1String("resp_ms")).toDouble();
+        m_amxFloorDb = o.value(QLatin1String("floor_db")).toDouble();
+        QVariantList mb, gn, wt;
         for (const auto &v : o.value(QLatin1String("members")).toArray())
             mb.append(v.toInt());
         for (const auto &v : o.value(QLatin1String("gains_db")).toArray())
             gn.append(v.toDouble());
+        for (const auto &v : o.value(QLatin1String("weights_db")).toArray())
+            wt.append(v.toDouble());
         m_amxMembers = mb;
         m_amxGains = gn;
+        m_amxWeights = wt;
         emit automixChanged();
     } else if (tag == TagGeneric) {
         QJSValue cb = m_cbs.isEmpty() ? QJSValue() : m_cbs.dequeue();

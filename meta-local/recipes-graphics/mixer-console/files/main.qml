@@ -155,6 +155,161 @@ Window {
             anchors.bottomMargin: 54
         }
 
+        // ========= V12-AMX-UI : panneau réglages Dugan (⚙ du master) =========
+        Rectangle {
+            id: amxPanel
+            visible: false
+            anchors.fill: parent
+            anchors.margins: 10
+            anchors.topMargin: 66
+            anchors.bottomMargin: 54
+            color: "#12161a"; border.color: "#39434b"; radius: 8
+            z: 510
+
+            function stripName(i) {
+                return i < 8 ? "M" + (i + 1)
+                     : i < 16 ? "U" + (i - 7) : "P" + (i - 15);
+            }
+
+            component AmxSlider: Row {
+                id: asld
+                property string label: ""
+                property real value: 0
+                property real minv: 0
+                property real maxv: 1
+                property string unit: ""
+                property int dec: 0
+                signal moved(real v)
+                spacing: 10; height: 42
+                Text {
+                    width: 120
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: asld.label
+                    color: "#8b959d"; font.pixelSize: 10; font.bold: true
+                    font.letterSpacing: 1
+                }
+                Rectangle {
+                    width: parent.width - 120 - 90 - 2*10
+                    height: 24; radius: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: "#0b0e11"
+                    Rectangle {
+                        height: parent.height; radius: 12
+                        width: parent.width * Math.max(0, Math.min(1,
+                               (asld.value - asld.minv) / (asld.maxv - asld.minv)))
+                        color: "#39434b"
+                        Rectangle { width: 4; height: parent.height
+                                    anchors.right: parent.right; color: "#e5a13c" }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        preventStealing: true
+                        function apply(mx) {
+                            var f = Math.max(0, Math.min(1, mx / width));
+                            asld.moved(asld.minv + f * (asld.maxv - asld.minv));
+                        }
+                        onPressed: (m) => apply(m.x)
+                        onPositionChanged: (m) => { if (pressed) apply(m.x); }
+                    }
+                }
+                Text {
+                    width: 90
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: asld.value.toFixed(asld.dec) + " " + asld.unit
+                    color: "#e9e5da"; font.pixelSize: 12; font.bold: true
+                    font.family: "monospace"
+                }
+            }
+
+            Column {
+                anchors.fill: parent
+                anchors.margins: 14
+                spacing: 8
+
+                Item {
+                    width: parent.width; height: 36
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "AUTOMIX DUGAN · RÉGLAGES"
+                        color: "#e5a13c"; font.pixelSize: 14; font.bold: true
+                        font.letterSpacing: 2
+                    }
+                    Rectangle {
+                        anchors.right: parent.right
+                        width: 64; height: 34; radius: 5
+                        color: "#2a2214"; border.color: "#e5a13c"
+                        Text { anchors.centerIn: parent; text: "✕"
+                               color: "#e5a13c"; font.pixelSize: 15; font.bold: true }
+                        TapHandler {
+                            margin: 10
+                            gesturePolicy: TapHandler.ReleaseWithinBounds
+                            onTapped: amxPanel.visible = false
+                        }
+                    }
+                }
+
+                AmxSlider {
+                    width: parent.width
+                    label: "RESPONSE"
+                    minv: 10; maxv: 2000; unit: "ms"; dec: 0
+                    value: mixer.amxRespMs
+                    onMoved: (v) => mixer.call({ op: "set_automix_cfg",
+                                                 resp_ms: Math.round(v) }, function(){})
+                }
+                AmxSlider {
+                    width: parent.width
+                    label: "FLOOR"
+                    minv: -40; maxv: 0; unit: "dB"; dec: 1
+                    value: mixer.amxFloorDb
+                    onMoved: (v) => mixer.call({ op: "set_automix_cfg",
+                                                 floor_db: Number(v.toFixed(1)) }, function(){})
+                }
+
+                Text {
+                    text: "POIDS PAR TRANCHE  (membres du groupe — priorité dans le partage)"
+                    color: "#e5a13c"; font.pixelSize: 10; font.bold: true
+                    font.letterSpacing: 2
+                }
+
+                Flickable {
+                    width: parent.width
+                    height: parent.height - 36 - 2*42 - 20 - 5*8
+                    contentHeight: amxWCol.height
+                    clip: true
+                    Column {
+                        id: amxWCol
+                        width: parent.width
+                        spacing: 2
+                        Repeater {
+                            model: 18
+                            AmxSlider {
+                                width: amxWCol.width
+                                visible: index < mixer.amxMembers.length
+                                         && mixer.amxMembers[index] === 1
+                                label: "POIDS " + amxPanel.stripName(index)
+                                minv: -20; maxv: 20; unit: "dB"; dec: 1
+                                value: index < mixer.amxWeights.length
+                                       ? mixer.amxWeights[index] : 0
+                                onMoved: (v) => mixer.call({ op: "set_automix",
+                                             src: index,
+                                             weight_db: Number(v.toFixed(1)) }, function(){})
+                            }
+                        }
+                        Text {
+                            visible: {
+                                var any = false;
+                                for (var i = 0; i < mixer.amxMembers.length; i++)
+                                    if (mixer.amxMembers[i] === 1) any = true;
+                                return !any;
+                            }
+                            text: "Aucune tranche membre — active le bouton « A » sur les tranches à grouper."
+                            color: "#5c666e"; font.pixelSize: 11
+                        }
+                    }
+                }
+            }
+        }
+
         Rectangle {   // châssis
             anchors.fill: parent
             radius: 10
@@ -378,21 +533,35 @@ Window {
                                     Text { id: peakRTxt; text: "PEAK R  -∞"; color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
                                     Text { text: "FW " + mixer.version; color: "#5c666e"; font.pixelSize: 9; font.family: "monospace" }
                                     // V12-AMX : interrupteur global du groupe
-                                    Rectangle {
-                                        width: 110; height: 30; radius: 5
-                                        color: mixer.amxOn ? "#2a2214" : "#1b2126"
-                                        border.color: mixer.amxOn ? "#e5a13c" : "#39434b"
-                                        Text {
-                                            anchors.centerIn: parent
-                                            text: "AUTOMIX"
-                                            color: mixer.amxOn ? "#e5a13c" : "#8b959d"
-                                            font.pixelSize: 10; font.bold: true
-                                            font.letterSpacing: 2
+                                    Row {
+                                        spacing: 4
+                                        Rectangle {
+                                            width: 110; height: 30; radius: 5
+                                            color: mixer.amxOn ? "#2a2214" : "#1b2126"
+                                            border.color: mixer.amxOn ? "#e5a13c" : "#39434b"
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: "AUTOMIX"
+                                                color: mixer.amxOn ? "#e5a13c" : "#8b959d"
+                                                font.pixelSize: 10; font.bold: true
+                                                font.letterSpacing: 2
+                                            }
+                                            TapHandler {
+                                                gesturePolicy: TapHandler.ReleaseWithinBounds
+                                                onTapped: mixer.call({ op: "set_automix_cfg",
+                                                    on: mixer.amxOn ? 0 : 1 }, function(){})
+                                            }
                                         }
-                                        TapHandler {
-                                            gesturePolicy: TapHandler.ReleaseWithinBounds
-                                            onTapped: mixer.call({ op: "set_automix_cfg",
-                                                on: mixer.amxOn ? 0 : 1 }, function(){})
+                                        // V12-AMX-UI : réglages Dugan (response/floor/poids)
+                                        Rectangle {
+                                            width: 30; height: 30; radius: 5
+                                            color: "#1b2126"; border.color: "#39434b"
+                                            Text { anchors.centerIn: parent; text: "⚙"
+                                                   color: "#8b959d"; font.pixelSize: 14 }
+                                            TapHandler {
+                                                gesturePolicy: TapHandler.ReleaseWithinBounds
+                                                onTapped: amxPanel.visible = true
+                                            }
                                         }
                                     }
                                 }

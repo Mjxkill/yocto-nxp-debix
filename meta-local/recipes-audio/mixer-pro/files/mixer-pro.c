@@ -3316,17 +3316,22 @@ static void handle_cmd(int fd, const char *line)
 			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_automix src\"}\n");
 			return;
 		}
-		(void)json_get_int(line, "on", &on);
-		(void)json_get_float(line, "weight_db", &wdb);
+		/* updates PARTIELS : toggler « A » sans weight_db ne doit pas
+		 * écraser le poids, et régler le poids ne touche pas l'adhésion */
+		int has_on = json_get_int(line, "on", &on) == 0;
+		int has_w  = json_get_float(line, "weight_db", &wdb) == 0;
 		pthread_mutex_lock(&g_st.target_lock);
-		g_st.automix_member[src] = on ? 1 : 0;
-		g_st.automix_weight[src] = powf(10.0f, wdb / 20.0f);
-		if (!on)
-			g_st.automix_gtarget[src] = 1.0f;
+		if (has_on) {
+			g_st.automix_member[src] = on ? 1 : 0;
+			if (!on)
+				g_st.automix_gtarget[src] = 1.0f;
+		}
+		if (has_w && wdb >= -20.0f && wdb <= 20.0f)
+			g_st.automix_weight[src] = powf(10.0f, wdb / 20.0f);
 		pthread_mutex_unlock(&g_st.target_lock);
 		atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_automix\",\"src\":%d,"
-			    "\"on\":%d}\n", src, on ? 1 : 0);
+			    "\"on\":%d}\n", src, g_st.automix_member[src]);
 
 	} else if (json_has_op(line, "set_automix_cfg")) {
 		/* {"op":"set_automix_cfg","on":0|1,"resp_ms":F,"floor_db":F} */
@@ -3362,6 +3367,12 @@ static void handle_cmd(int fd, const char *line)
 			n += snprintf(reply + n, sizeof(reply) - n, "%s%.1f",
 				      i ? "," : "",
 				      20.0f * log10f(g_st.automix_gain[i] + 1e-9f));
+		/* V12-AMX-UI : poids par tranche (dB) pour le panneau réglages */
+		n += snprintf(reply + n, sizeof(reply) - n, "],\"weights_db\":[");
+		for (int i = 0; i < N_INPUT_REAL; i++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%.1f",
+				      i ? "," : "",
+				      20.0f * log10f(g_st.automix_weight[i] + 1e-9f));
 		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
 		write(fd, reply, n);
 

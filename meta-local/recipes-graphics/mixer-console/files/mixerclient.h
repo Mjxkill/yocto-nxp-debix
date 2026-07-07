@@ -32,6 +32,10 @@ class MixerClient : public QObject {
     Q_PROPERTY(bool amxOn READ amxOn NOTIFY automixChanged)
     Q_PROPERTY(QVariantList amxMembers READ amxMembers NOTIFY automixChanged)
     Q_PROPERTY(QVariantList amxGains READ amxGains NOTIFY automixChanged)
+    /* V12-AMX-UI : réglages Dugan pour le panneau ⚙ */
+    Q_PROPERTY(double amxRespMs READ amxRespMs NOTIFY automixChanged)
+    Q_PROPERTY(double amxFloorDb READ amxFloorDb NOTIFY automixChanged)
+    Q_PROPERTY(QVariantList amxWeights READ amxWeights NOTIFY automixChanged)
 
 public:
     explicit MixerClient(QObject *parent = nullptr);
@@ -53,6 +57,9 @@ public:
     bool amxOn() const { return m_amxOn; }
     QVariantList amxMembers() const { return m_amxMembers; }
     QVariantList amxGains() const { return m_amxGains; }
+    double amxRespMs() const { return m_amxRespMs; }
+    double amxFloorDb() const { return m_amxFloorDb; }
+    QVariantList amxWeights() const { return m_amxWeights; }
     QVariantList mlEnvL() const { return m_mlEnvL; }
     QVariantList mlEnvR() const { return m_mlEnvR; }
     bool mlActive() const { return m_mlActive; }
@@ -115,6 +122,9 @@ private:
     bool m_amxOn = false;
     QVariantList m_amxMembers;    /* 18 × 0/1 */
     QVariantList m_amxGains;      /* 18 × dB */
+    QVariantList m_amxWeights;    /* 18 × dB (poids Dugan) */
+    double m_amxRespMs = 100.0;
+    double m_amxFloorDb = -15.0;
     bool m_dirty = false;
     QVariantList m_mlEnvL, m_mlEnvR;   /* 64 gains dB */
     bool m_mlActive = false;

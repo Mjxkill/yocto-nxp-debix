@@ -383,6 +383,7 @@ body{
         <div class="mlstate"><i></i><div class="l"><span class="a">MASTERING ML</span><span class="b">v5.20 · NPU 0.81ms ×2</span></div></div>
         <div class="gr"><span class="k">LIM GR</span><div class="grbar"><i id="grb" style="width:12%"></i></div></div>
         <button class="sq" id="amx-global" style="width:auto;padding:0 10px;height:24px" title="Automix Dugan">AUTOMIX</button>
+        <button class="sq" id="amx-cfg" style="width:26px;height:24px" title="Réglages Dugan">&#9881;</button>
       </div>
 
       <div id="mfrow">
@@ -1441,7 +1442,9 @@ document.querySelectorAll(".sq.amx").forEach(b=>{
     if(!window.LIVE||!mp||mp.t!=="in")return;
     const on=!b.classList.contains("on");
     b.classList.toggle("on",on);
-    post({op:"set_automix",src:mp.idx,on:on?1:0,weight_db:0});
+    /* V12-AMX-UI : ne PAS envoyer weight_db (updates partiels moteur) —
+     * l'ancien weight_db:0 écrasait le poids à chaque toggle */
+    post({op:"set_automix",src:mp.idx,on:on?1:0});
   });
 });
 window.__amxOn=false;
@@ -1449,6 +1452,57 @@ const amxG=document.getElementById("amx-global");
 if(amxG)amxG.addEventListener("click",()=>{
   if(!window.LIVE)return;
   post({op:"set_automix_cfg",on:window.__amxOn?0:1});
+});
+/* V12-AMX-UI : panneau réglages Dugan (response / floor / poids) */
+const amxCfgBtn=document.getElementById("amx-cfg");
+if(amxCfgBtn)amxCfgBtn.addEventListener("click",()=>{
+  let p=document.getElementById("amxcfgpanel");
+  if(p){p.remove();return;}
+  fetch("/api/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({op:"get_automix"})}).then(r=>r.json()).then(j=>{
+    if(!j.ok)return;
+    const nm=i=>i<8?"M"+(i+1):i<16?"U"+(i-7):"P"+(i-15);
+    p=document.createElement("div");
+    p.id="amxcfgpanel";
+    p.style.cssText="position:absolute;top:60px;right:20px;z-index:80;width:420px;"
+      +"background:#12161a;border:1px solid #39434b;border-radius:8px;padding:12px;"
+      +"display:flex;flex-direction:column;gap:6px;max-height:70%;overflow-y:auto;";
+    const row=(lbl,min,max,step,val,unit,cb)=>{
+      const d=document.createElement("div");
+      d.style.cssText="display:flex;align-items:center;gap:8px;";
+      d.innerHTML=`<span style="width:96px;font-size:10px;font-weight:700;color:var(--mut);">${lbl}</span>
+        <input type="range" min="${min}" max="${max}" step="${step}" value="${val}" style="flex:1;">
+        <span style="width:64px;font-family:monospace;font-weight:700;font-size:11px;">${val} ${unit}</span>`;
+      const sl=d.querySelector("input"),tv=d.querySelector("span:last-child");
+      sl.addEventListener("input",()=>{tv.textContent=sl.value+" "+unit;cb(+sl.value);});
+      return d;};
+    const head=document.createElement("div");
+    head.style.cssText="display:flex;align-items:center;";
+    head.innerHTML=`<span style="color:var(--accent);font-size:11px;font-weight:700;letter-spacing:2px;">AUTOMIX DUGAN · RÉGLAGES</span>
+      <span style="flex:1"></span><button class="wbtn" id="amxcfgx">&#10005;</button>`;
+    p.appendChild(head);
+    p.appendChild(row("RESPONSE",10,2000,10,Math.round(j.resp_ms),"ms",
+      v=>post({op:"set_automix_cfg",resp_ms:v})));
+    p.appendChild(row("FLOOR",-40,0,0.5,j.floor_db.toFixed(1),"dB",
+      v=>post({op:"set_automix_cfg",floor_db:v})));
+    const wt=document.createElement("div");
+    wt.style.cssText="font-size:10px;font-weight:700;color:var(--accent);letter-spacing:2px;margin-top:4px;";
+    wt.textContent="POIDS PAR TRANCHE (membres)";
+    p.appendChild(wt);
+    let any=false;
+    (j.members||[]).forEach((m,i)=>{
+      if(m!==1)return; any=true;
+      const w=(j.weights_db||[])[i]||0;
+      p.appendChild(row("POIDS "+nm(i),-20,20,0.5,w.toFixed(1),"dB",
+        v=>post({op:"set_automix",src:i,weight_db:v})));
+    });
+    if(!any){const e=document.createElement("div");
+      e.style.cssText="font-size:10px;color:var(--mut);";
+      e.textContent="Aucune tranche membre — active « A » sur les tranches à grouper.";
+      p.appendChild(e);}
+    document.body.appendChild(p);
+    document.getElementById("amxcfgx").addEventListener("click",()=>p.remove());
+  });
 });
 setInterval(()=>{
   if(!window.LIVE||document.hidden)return;
