@@ -161,8 +161,12 @@ Item {
                                 color: "#0f1216"
                                 border.color: active ? "#e5a13c" : "#22282e"
                                 Text { anchors.centerIn: parent
-                                       text: ch ? page.roleNames[
-                                               page.roleKeys.indexOf(ch.role)] : "—"
+                                       text: {
+                                           if (!ch || !ch.role) return "—";
+                                           var k = page.roleKeys.indexOf(ch.role);
+                                           return k >= 0 ? page.roleNames[k]
+                                                         : String(ch.role);
+                                       }
                                        color: active ? "#e9e5da" : "#3a434b"
                                        font.pixelSize: 11; font.bold: true }
                             }
@@ -197,7 +201,7 @@ Item {
                                            : (ch && ch.done ? "#4cc470" : "#e5a13c")
                                     font.pixelSize: 11; font.bold: true
                                     font.family: measuring || (ch && ch.done)
-                                                 ? "monospace" : undefined
+                                                 ? "monospace" : ""
                                 }
                                 TapHandler {
                                     enabled: !measuring
