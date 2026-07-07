@@ -3437,15 +3437,19 @@ static void handle_cmd(int fd, const char *line)
 		 * "status"|"prog"|"gain"|"panic", chan?, num?, value?}.
 		 * Control thread uniquement (jamais l'audio) ; si le daemon
 		 * est absent, connect échoue immédiatement (pas de blocage). */
-		char cmd[16] = "";
+		char cmd[16] = "", raw[192] = "";
 		int chan = -1, num = -1;
 		float val = -1.0f;
 		(void)json_get_str(line, "cmd", cmd, sizeof(cmd));
+		(void)json_get_str(line, "line", raw, sizeof(raw));
 		(void)json_get_int(line, "chan", &chan);
 		(void)json_get_int(line, "num", &num);
 		(void)json_get_float(line, "value", &val);
-		char req[64];
-		if (!strcmp(cmd, "status"))
+		char req[224];
+		if (raw[0])   /* V12-SYNTH : passthrough générique (engine,
+			       * inst_list, patch_get/set/save…) */
+			snprintf(req, sizeof(req), "%s\n", raw);
+		else if (!strcmp(cmd, "status"))
 			snprintf(req, sizeof(req), "status\n");
 		else if (!strcmp(cmd, "prog") && chan >= 0 && chan < 16 &&
 			 num >= 0 && num < 128)
@@ -3465,11 +3469,22 @@ static void handle_cmd(int fd, const char *line)
 		struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };
 		setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 		setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-		char resp[512];
-		ssize_t rn = -1;
+		/* réponses longues (inst_list ~8 Ko) : lecture en boucle
+		 * jusqu'au '\n' final. Thread ctl unique → static ok. */
+		static char resp[16384];
+		ssize_t rn = 0;
 		if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == 0 &&
-		    write(s, req, strlen(req)) > 0)
-			rn = read(s, resp, sizeof(resp) - 1);
+		    write(s, req, strlen(req)) > 0) {
+			while (rn < (ssize_t)sizeof(resp) - 1) {
+				ssize_t k = read(s, resp + rn,
+						 sizeof(resp) - 1 - (size_t)rn);
+				if (k <= 0)
+					break;
+				rn += k;
+				if (resp[rn - 1] == '\n')
+					break;
+			}
+		}
 		close(s);
 		if (rn > 0)
 			write(fd, resp, (size_t)rn);

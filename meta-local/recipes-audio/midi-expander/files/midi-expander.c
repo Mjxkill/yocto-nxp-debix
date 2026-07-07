@@ -29,6 +29,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <fluidsynth.h>
+#include "ala-synth.h"
 
 #define SAMPLE_RATE   48000
 #define PERIOD_FRAMES 96
@@ -78,9 +79,9 @@ static _Atomic uint32_t g_act[16];
 static int midi_ev_cb(void *data, fluid_midi_event_t *ev)
 {
 	int type = fluid_midi_event_get_type(ev);
+	int chan = fluid_midi_event_get_channel(ev);
 	if (type == 0x90) {   /* note-on */
-		int chan = fluid_midi_event_get_channel(ev);
-		int vel  = fluid_midi_event_get_velocity(ev);
+		int vel = fluid_midi_event_get_velocity(ev);
 		if (chan >= 0 && chan < 16 && vel > 0) {
 			uint32_t v = (uint32_t)(vel * 1000 / 127);
 			if (v > atomic_load_explicit(&g_act[chan],
@@ -88,6 +89,19 @@ static int midi_ev_cb(void *data, fluid_midi_event_t *ev)
 				atomic_store_explicit(&g_act[chan], v,
 						      memory_order_relaxed);
 		}
+	}
+	/* V12-SYNTH : les canaux M1 consomment leurs notes/CC (file SPSC
+	 * vers le rendu) — surtout NE PAS les relayer à fluid (double son) */
+	if (sy_chan_is_m1(chan) &&
+	    (type == 0x90 || type == 0x80 || type == 0xB0)) {
+		int d1 = fluid_midi_event_get_key(ev);
+		int d2 = fluid_midi_event_get_velocity(ev);
+		if (type == 0xB0) {
+			d1 = fluid_midi_event_get_control(ev);
+			d2 = fluid_midi_event_get_value(ev);
+		}
+		sy_midi(type, chan, d1, d2);
+		return FLUID_OK;
 	}
 	return fluid_synth_handle_midi_event(data, ev);
 }
@@ -105,6 +119,7 @@ static void chans_save(void)
 					    &prog) == FLUID_OK)
 			fprintf(f, "chan %d %d\n", c, prog);
 	}
+	sy_save_chans(f);   /* V12-SYNTH : assignations moteur/patch */
 	fclose(f);
 	rename(tmp, CHANS_CONF);
 }
@@ -122,6 +137,8 @@ static void chans_load(void)
 		else if (sscanf(line, "chan %d %d", &c, &p) == 2 &&
 			 c >= 0 && c < 16 && p >= 0 && p < 128)
 			fluid_synth_program_change(g_synth, c, p);
+		else
+			sy_load_chan_line(line);   /* V12-SYNTH : engine c e p */
 	}
 	fclose(f);
 	mlog("midix: programmes par canal restaurés");
@@ -129,9 +146,18 @@ static void chans_load(void)
 
 static void ctl_handle(int fd, const char *req)
 {
-	char out[512];
+	static char out[16384];   /* inst_list : ~250 noms — thread ctl unique */
 	int chan, num;
 	float val;
+
+	/* V12-SYNTH : engine / inst_list / patch_* traités par le moteur */
+	if (sy_ctl(req, out, sizeof(out))) {
+		if (!strncmp(req, "engine ", 7))
+			atomic_store(&g_chans_dirty, 1);   /* persiste (débounce) */
+		(void)!write(fd, out, strlen(out));
+		return;
+	}
+
 	if (!strncmp(req, "status", 6)) {
 		int n = snprintf(out, sizeof(out),
 				 "{\"ok\":true,\"sf2\":\"%s\",\"gain\":%.3f,"
@@ -149,7 +175,9 @@ static void ctl_handle(int fd, const char *req)
 				      c ? "," : "",
 				      atomic_load_explicit(&g_act[c],
 							   memory_order_relaxed));
-		snprintf(out + n, sizeof(out) - n, "]}\n");
+		n += snprintf(out + n, sizeof(out) - n, "]");
+		n += sy_status_json(out + n, sizeof(out) - n);   /* V12-SYNTH */
+		snprintf(out + n, sizeof(out) - n, "}\n");
 	} else if (sscanf(req, "prog %d %d", &chan, &num) == 2 &&
 		   chan >= 0 && chan < 16 && num >= 0 && num < 128) {
 		fluid_synth_program_change(g_synth, chan, num);
@@ -307,6 +335,13 @@ int main(void)
 	const char *bn = strrchr(sf2, '/');
 	snprintf(g_sf2_name, sizeof(g_sf2_name), "%s", bn ? bn + 1 : sf2);
 	mkdir("/var/lib/ala", 0755);
+
+	/* V12-SYNTH : moteur M1 (multisamples de la même SF2). Échec =
+	 * dégradation propre, GM seul. AVANT chans_load (engine lines). */
+	if (sy_init(sf2) == 0)
+		mlog("midix: moteur M1 prêt (multisamples SF2)");
+	else
+		mlog("midix: moteur M1 indisponible (parse SF2) — GM seul");
 	chans_load();
 	pthread_t th_ctl;
 	pthread_create(&th_ctl, NULL, ctl_thread, NULL);
@@ -345,6 +380,9 @@ int main(void)
 		if (fluid_synth_write_float(synth, PERIOD_FRAMES,
 		                            buf, 0, 2, buf, 1, 2) != FLUID_OK)
 			memset(buf, 0, sizeof(buf));
+
+		/* V12-SYNTH : moteur M1 additionné (canaux assignés M1) */
+		sy_render_add(buf, PERIOD_FRAMES);
 
 		/* V12-VU : retombée des vumètres d'activité (~500 ms) */
 		for (int c = 0; c < 16; c++) {

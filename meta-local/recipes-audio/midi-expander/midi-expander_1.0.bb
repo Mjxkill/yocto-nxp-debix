@@ -9,6 +9,8 @@ DEPENDS = "fluidsynth"
 
 SRC_URI = " \
     file://midi-expander.c \
+    file://ala-synth.c \
+    file://ala-synth.h \
     file://Makefile \
     file://midi-expander.service \
     file://midi-expander.conf \
