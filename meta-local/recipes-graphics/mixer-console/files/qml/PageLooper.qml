@@ -94,7 +94,29 @@ Item {
                     }
                 }
 
-                Item { width: parent.width - 620; height: 1 }
+                // V12-VU : vumètre MASTER looper (somme des pistes)
+                Column {
+                    spacing: 3
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text { text: "MASTER"; color: "#5c666e"; font.pixelSize: 8
+                           font.letterSpacing: 2 }
+                    Rectangle {
+                        width: 110; height: 12; radius: 6; color: "#0b0e11"
+                        Rectangle {
+                            height: parent.height; radius: 6
+                            width: {
+                                var f = (page.status.master_peak || 0) / 2147483647.0;
+                                if (f <= 0) return 0;
+                                var db = 20 * Math.log(f) / Math.LN10;
+                                return parent.width * Math.max(0, Math.min(1, (db + 48) / 48));
+                            }
+                            color: (page.status.master_peak || 0) > 1932735283
+                                   ? "#e05545" : "#4cc470"   /* rouge > -0,9 dBFS */
+                        }
+                    }
+                }
+
+                Item { width: parent.width - 744; height: 1 }
 
                 Repeater {
                     model: [
@@ -238,16 +260,17 @@ Item {
                                 color: "#0b0e11"
                                 Rectangle {
                                     height: parent.height; radius: 6
-                                    // dB : -48..0 → 0..1
+                                    // dB : -48..0 → 0..1 — vivant en PLAY
+                                    // (restitution) ET en REC (entrée)
                                     width: {
-                                        if (!tr || muted || !isPlay) return 0;
+                                        if (!tr || (!isPlay && !isRec) || (isPlay && muted)) return 0;
                                         var frac = tr.peak / 2147483647.0;
                                         if (frac <= 0) return 0;
                                         var db = 20 * Math.log(frac) / Math.LN10;
                                         var n = (db + 48) / 48;
                                         return parent.width * Math.max(0, Math.min(1, n));
                                     }
-                                    color: trackRow.accent
+                                    color: isRec ? "#e05545" : trackRow.accent
                                 }
                             }
                             Text {

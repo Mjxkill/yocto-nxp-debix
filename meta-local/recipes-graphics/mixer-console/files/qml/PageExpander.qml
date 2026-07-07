@@ -48,11 +48,12 @@ Item {
     property real synthGain: 0.5
     property string sf2: ""
     property var chans: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    property var acts:  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     property bool draggingGain: false
 
     onVisibleChanged: if (visible) { pollStatus(); }
-    // statut (programmes) 1 Hz — via proxy daemon
-    Timer { interval: 1000; running: page.visible; repeat: true; onTriggered: page.pollStatus() }
+    // statut (programmes + activité par canal) 4 Hz — via proxy daemon
+    Timer { interval: 250; running: page.visible; repeat: true; onTriggered: page.pollStatus() }
     // VU 4 Hz — lecture directe mixer-pro (pas de proxy)
     Timer {
         interval: 250; running: page.visible; repeat: true
@@ -66,6 +67,7 @@ Item {
             if (!r.ok) { page.present = false; return; }
             page.sf2 = r.sf2 || "";
             page.chans = r.chans;
+            if (r.act) page.acts = r.act;
             if (!page.draggingGain) page.synthGain = r.gain;
         });
     }
@@ -248,6 +250,21 @@ Item {
                                 TapHandler {
                                     gesturePolicy: TapHandler.ReleaseWithinBounds
                                     onTapped: page.setProg(index, prog + 1)
+                                }
+                            }
+
+                            // V12-VU : vumètre d'activité MIDI du canal
+                            // (note-on/vélocité, retombée ~500 ms côté daemon)
+                            Rectangle {
+                                width: 170; height: 12; radius: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: "#0b0e11"
+                                Rectangle {
+                                    height: parent.height; radius: 6
+                                    width: parent.width * Math.min(1,
+                                           (index < page.acts.length
+                                            ? page.acts[index] : 0) / 1000.0)
+                                    color: isDrums ? "#e8b84b" : "#4cc470"
                                 }
                             }
                         }

@@ -70,6 +70,28 @@ static fluid_synth_t *g_synth;
 static char g_sf2_name[512];
 static _Atomic int g_chans_dirty;
 
+/* V12-VU — activité MIDI par canal (milli-unités 0-1000). Alimentée par
+ * le callback MIDI (note-on → vélocité), retombée exponentielle dans la
+ * boucle de rendu (~500 ms). Affichage GUI (races bénignes). */
+static _Atomic uint32_t g_act[16];
+
+static int midi_ev_cb(void *data, fluid_midi_event_t *ev)
+{
+	int type = fluid_midi_event_get_type(ev);
+	if (type == 0x90) {   /* note-on */
+		int chan = fluid_midi_event_get_channel(ev);
+		int vel  = fluid_midi_event_get_velocity(ev);
+		if (chan >= 0 && chan < 16 && vel > 0) {
+			uint32_t v = (uint32_t)(vel * 1000 / 127);
+			if (v > atomic_load_explicit(&g_act[chan],
+						     memory_order_relaxed))
+				atomic_store_explicit(&g_act[chan], v,
+						      memory_order_relaxed);
+		}
+	}
+	return fluid_synth_handle_midi_event(data, ev);
+}
+
 static void chans_save(void)
 {
 	char tmp[sizeof(CHANS_CONF) + 4];
@@ -121,6 +143,12 @@ static void ctl_handle(int fd, const char *req)
 			n += snprintf(out + n, sizeof(out) - n, "%s%d",
 				      c ? "," : "", prog);
 		}
+		n += snprintf(out + n, sizeof(out) - n, "],\"act\":[");
+		for (int c = 0; c < 16; c++)
+			n += snprintf(out + n, sizeof(out) - n, "%s%u",
+				      c ? "," : "",
+				      atomic_load_explicit(&g_act[c],
+							   memory_order_relaxed));
 		snprintf(out + n, sizeof(out) - n, "]}\n");
 	} else if (sscanf(req, "prog %d %d", &chan, &num) == 2 &&
 		   chan >= 0 && chan < 16 && num >= 0 && num < 128) {
@@ -294,8 +322,8 @@ int main(void)
 	if (dev[0]) {
 		fluid_settings_setstr(st, "midi.alsa.device", dev);
 		fluid_settings_setstr(st, "midi.driver", "alsa_raw");
-		mdrv = new_fluid_midi_driver(st, fluid_synth_handle_midi_event,
-		                             synth);
+		/* V12-VU : callback wrapper — alimente g_act[] puis relaie */
+		mdrv = new_fluid_midi_driver(st, midi_ev_cb, synth);
 		mlog("midix: MIDI in sur %s%s", dev,
 		     mdrv ? "" : " (driver FAILED)");
 	} else {
@@ -317,6 +345,16 @@ int main(void)
 		if (fluid_synth_write_float(synth, PERIOD_FRAMES,
 		                            buf, 0, 2, buf, 1, 2) != FLUID_OK)
 			memset(buf, 0, sizeof(buf));
+
+		/* V12-VU : retombée des vumètres d'activité (~500 ms) */
+		for (int c = 0; c < 16; c++) {
+			uint32_t a = atomic_load_explicit(&g_act[c],
+							  memory_order_relaxed);
+			if (a)
+				atomic_store_explicit(&g_act[c],
+						      (a * 995) / 1000,
+						      memory_order_relaxed);
+		}
 
 		uint32_t w = atomic_load_explicit(&hdr->widx,
 						  memory_order_relaxed);

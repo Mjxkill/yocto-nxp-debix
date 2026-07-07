@@ -1504,6 +1504,7 @@ static struct loop_track g_tr[LOOP_TRACKS];
 static _Atomic uint32_t  g_master_len;  /* 0 tant qu'aucune piste posée */
 static _Atomic uint32_t  g_lpos;        /* position globale (frames) */
 static _Atomic int       g_loop_run;    /* transport global (0=stop, 1=play) */
+static _Atomic uint32_t  g_loop_mpeak;  /* crête master (somme des pistes) */
 #define REC_START_NONE 0xFFFFFFFFu
 
 /* Rendu (audio_thread, SOUS target_lock, après le convert S32→float) */
@@ -1513,7 +1514,14 @@ static void loop_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 	uint32_t mlen = atomic_load_explicit(&g_master_len, memory_order_acquire);
 	uint32_t lpos = atomic_load_explicit(&g_lpos, memory_order_relaxed);
 	int run = atomic_load_explicit(&g_loop_run, memory_order_relaxed);
-	int any_rec = 0;
+	int any_rec = 0, any_play = 0;
+
+	/* V12-VU : les pistes s'additionnent dans sl/sr (BSS), ajoutés en un
+	 * passage dans P1/P2 après la boucle → crête MASTER looper mesurable
+	 * (somme des pistes seules, pas polluée par sampleur/expandeur). */
+	static float sl[PERIOD_FRAMES], sr[PERIOD_FRAMES];
+	memset(sl, 0, sizeof(sl));
+	memset(sr, 0, sizeof(sr));
 
 	for (int t = 0; t < LOOP_TRACKS; t++) {
 		struct loop_track *tr = &g_tr[t];
@@ -1530,6 +1538,17 @@ static void loop_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 
 		if (st == TR_REC) {
 			any_rec = 1;
+			/* V12-VU : crête de l'ENTRÉE enregistrée (visible en REC) */
+			float rpk = 0.0f;
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float a = in_block[sa][f] * ga, b = in_block[sb][f] * gb;
+				a = a < 0 ? -a : a; b = b < 0 ? -b : b;
+				if (b > a) a = b;
+				if (a > rpk) rpk = a;
+			}
+			atomic_store_explicit(&tr->peak,
+					      (uint32_t)(rpk * 2147483647.0f),
+					      memory_order_relaxed);
 			if (mlen == 0) {
 				/* piste MAÎTRE : REC libre → définit master_len */
 				uint32_t h = tr->rec_head;
@@ -1573,24 +1592,45 @@ static void loop_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 			continue;   /* une piste en REC ne se relit pas ce bloc */
 		}
 
-		/* TR_PLAY : lecture additionnée dans P1/P2 si non-mutée */
+		/* TR_PLAY : lecture additionnée dans sl/sr si non-mutée */
 		uint32_t len = atomic_load_explicit(&tr->len, memory_order_relaxed);
-		if (!len || !run || atomic_load_explicit(&tr->muted, memory_order_relaxed))
+		if (!len || !run || atomic_load_explicit(&tr->muted, memory_order_relaxed)) {
+			atomic_store_explicit(&tr->peak, 0, memory_order_relaxed);
 			continue;
+		}
+		any_play = 1;
 		const float g = tr->gain;
 		uint32_t pk = 0;
 		for (int f = 0; f < PERIOD_FRAMES; f++) {
 			uint32_t idx = (lpos + f) % len;
 			float l = tr->buf[(size_t)idx * 2];
 			float r = tr->buf[(size_t)idx * 2 + 1];
-			in_block[P][f]     += l * g;
-			in_block[P + 1][f] += r * g;
+			sl[f] += l * g;
+			sr[f] += r * g;
 			float a = l < 0 ? -l : l, b = r < 0 ? -r : r;
 			if (a > b) b = a;
 			uint32_t v = (uint32_t)(b * g * 2147483647.0f);
 			if (v > pk) pk = v;
 		}
 		atomic_store_explicit(&tr->peak, pk, memory_order_relaxed);
+	}
+
+	/* V12-VU : ajout de la somme dans P1/P2 + crête MASTER looper */
+	if (any_play) {
+		float mpk = 0.0f;
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			in_block[P][f]     += sl[f];
+			in_block[P + 1][f] += sr[f];
+			float a = sl[f] < 0 ? -sl[f] : sl[f];
+			float b = sr[f] < 0 ? -sr[f] : sr[f];
+			if (b > a) a = b;
+			if (a > mpk) mpk = a;
+		}
+		atomic_store_explicit(&g_loop_mpeak,
+				      (uint32_t)(mpk * 2147483647.0f),
+				      memory_order_relaxed);
+	} else {
+		atomic_store_explicit(&g_loop_mpeak, 0, memory_order_relaxed);
 	}
 
 	/* Avance g_lpos UNE fois par bloc (partagée par toutes les pistes) */
@@ -3196,9 +3236,10 @@ static void handle_cmd(int fd, const char *line)
 		uint32_t mlen = atomic_load(&g_master_len);
 		int n = snprintf(reply, sizeof(reply),
 			"{\"ok\":true,\"master_len_s\":%.2f,\"pos_s\":%.2f,"
-			"\"run\":%d,\"max_s\":%u,\"tracks\":[",
+			"\"run\":%d,\"max_s\":%u,\"master_peak\":%u,\"tracks\":[",
 			mlen / 48000.0f, atomic_load(&g_lpos) / 48000.0f,
-			atomic_load(&g_loop_run), LOOP_MAX_FRAMES / 48000u);
+			atomic_load(&g_loop_run), LOOP_MAX_FRAMES / 48000u,
+			atomic_load(&g_loop_mpeak));
 		for (int t = 0; t < LOOP_TRACKS; t++) {
 			struct loop_track *tr = &g_tr[t];
 			n += snprintf(reply + n, sizeof(reply) - n,
