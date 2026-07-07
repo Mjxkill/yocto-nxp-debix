@@ -928,6 +928,30 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 			return send_json(conn, n > 0 ? 200 : 503, reply);
 		}
 
+		if (!strcmp(url, "/api/larsen")) {
+			/* V11-AL E3 : notches live du daemon anti-larsen — son
+			 * socket écrit le status dès l'accept (pas de requête). */
+			char reply[2048];
+			int n = -1;
+			int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+			if (fd >= 0) {
+				struct sockaddr_un sa = { .sun_family = AF_UNIX };
+				strncpy(sa.sun_path, "/run/anti-larsen.sock",
+					sizeof(sa.sun_path) - 1);
+				struct timeval tv = { .tv_sec = 0, .tv_usec = 400000 };
+				setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+				if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) == 0) {
+					ssize_t r = read(fd, reply, sizeof(reply) - 1);
+					if (r > 0) { reply[r] = '\0'; n = (int)r; }
+				}
+				close(fd);
+			}
+			if (n <= 0)
+				snprintf(reply, sizeof(reply),
+					 "{\"ok\":false,\"err\":\"anti-larsen absent\"}\n");
+			return send_json(conn, n > 0 ? 200 : 503, reply);
+		}
+
 		if (!strcmp(url, "/api/sysload")) {
 			/* V10-P1 : source UNIQUE = le producteur state (1 Hz) —
 			 * plus de double fenêtre de mesure (finding critic it.2). */

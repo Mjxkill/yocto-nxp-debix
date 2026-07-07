@@ -531,6 +531,13 @@ body{
         <a href="/" style="color:var(--accent);font-size:10px;align-self:center;">→ interface classique</a>
       </div>
       <div id="sys-tac-out" style="font-size:9px;color:var(--mut);margin-top:6px;"></div></div>
+
+    <!-- V11-AL E3 : notches anti-larsen live -->
+    <div style="background:#171c21;border-radius:8px;padding:10px 12px;">
+      <div style="color:var(--accent);font-size:11px;font-weight:700;letter-spacing:2px;">
+        ANTI-LARSEN <span id="al-en" style="font-size:10px;color:var(--mut);font-weight:400;">—</span></div>
+      <div id="al-notches" style="font-size:10px;font-family:monospace;color:var(--mut);margin-top:6px;">…</div>
+    </div>
   </div>
 
   <!-- ============ V12 web : PADS (sampleur) ============ -->
@@ -2867,6 +2874,20 @@ setInterval(xpdPoll,300);
 document.getElementById("xpdgain").addEventListener("change",e=>
   cmd({op:"midix_ctl",cmd:"gain",value:e.target.value/100}));
 document.getElementById("xpdpanic").addEventListener("click",()=>cmd({op:"midix_ctl",cmd:"panic"}));
+
+/* ---------------- ANTI-LARSEN (page SYSTÈME) ---------------- */
+function alPoll(){
+  if(window.CURPAGE&&window.CURPAGE!=="SYSTEME")return;
+  fetch("/api/larsen").then(r=>r.json()).then(r=>{
+    const en=document.getElementById("al-en"),nl=document.getElementById("al-notches");
+    if(!en||!nl)return;
+    if(!r.ok){en.textContent="(daemon absent)";nl.textContent="—";return;}
+    en.textContent=r.enable?"actif":"désactivé (enable=0)";
+    nl.innerHTML=r.notches.length===0?"aucun notch posé — pas de larsen détecté"
+      :r.notches.map(n=>`CH${n.ch+1} · BQ${n.bq} · <b style="color:#e05545">${n.freq} Hz</b> · ${n.depth} dB · depuis ${n.age<120?n.age+" s":Math.round(n.age/60)+" min"}`).join("<br>");
+  }).catch(()=>{});
+}
+setInterval(alPoll,1000);alPoll();
 
 /* --- éditeur de patch M1 (web) --- */
 const XPAR=[["OSC — DETUNE (cts)","detune",-50,50],["OSC — BALANCE 1↔2","balance",0,99],
