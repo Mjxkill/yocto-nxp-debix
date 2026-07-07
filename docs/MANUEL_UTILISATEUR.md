@@ -72,6 +72,7 @@ La table elle-même, par **banques** : `IN DSP` (micros M1–M8), `IN USB`
 (U1–U8, ce que le PC envoie), `TÉLÉPHONE`, `OUT DSP`, `OUT USB`.
 
 Sur chaque tranche :
+
 - **Fader** = le niveau de la tranche dans le mix (−60…+6 dB) ;
 - **Vumètre** à côté du fader ;
 - **M** = mute · **S** = solo · **A** = adhésion à l'**automix Dugan**
@@ -99,6 +100,7 @@ L'envoi se fait depuis les tranches (boutons F1–F4).
 ![Page MASTERING](img/page_mastering.png)
 
 La chaîne de sortie du master (S1/S2) :
+
 - **Source** : `HW` (direct), `PASSTHROUGH`, ou `MASTERING` (chaîne de
   traitement) ;
 - **Chaîne d'insert** : jusqu'à 8 plugins en série (EQ, compresseur,
