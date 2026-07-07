@@ -3390,6 +3390,51 @@ static void handle_cmd(int fd, const char *line)
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_midix\",\"gain\":%.2f}\n",
 			g_midix.gain);
 
+	} else if (json_has_op(line, "midix_ctl")) {
+		/* V12-MIDIX-GUI — proxy vers le daemon midi-expander (la GUI
+		 * n'a qu'un canal : ce socket). {"op":"midix_ctl","cmd":
+		 * "status"|"prog"|"gain"|"panic", chan?, num?, value?}.
+		 * Control thread uniquement (jamais l'audio) ; si le daemon
+		 * est absent, connect échoue immédiatement (pas de blocage). */
+		char cmd[16] = "";
+		int chan = -1, num = -1;
+		float val = -1.0f;
+		(void)json_get_str(line, "cmd", cmd, sizeof(cmd));
+		(void)json_get_int(line, "chan", &chan);
+		(void)json_get_int(line, "num", &num);
+		(void)json_get_float(line, "value", &val);
+		char req[64];
+		if (!strcmp(cmd, "status"))
+			snprintf(req, sizeof(req), "status\n");
+		else if (!strcmp(cmd, "prog") && chan >= 0 && chan < 16 &&
+			 num >= 0 && num < 128)
+			snprintf(req, sizeof(req), "prog %d %d\n", chan, num);
+		else if (!strcmp(cmd, "gain") && val >= 0.0f && val <= 10.0f)
+			snprintf(req, sizeof(req), "gain %.3f\n", val);
+		else if (!strcmp(cmd, "panic"))
+			snprintf(req, sizeof(req), "panic\n");
+		else {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad midix cmd\"}\n");
+			return;
+		}
+		int s = socket(AF_UNIX, SOCK_STREAM, 0);
+		struct sockaddr_un sa = { .sun_family = AF_UNIX };
+		snprintf(sa.sun_path, sizeof(sa.sun_path),
+			 "/run/midi-expander.sock");
+		struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };
+		setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+		setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+		char resp[512];
+		ssize_t rn = -1;
+		if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == 0 &&
+		    write(s, req, strlen(req)) > 0)
+			rn = read(s, resp, sizeof(resp) - 1);
+		close(s);
+		if (rn > 0)
+			write(fd, resp, (size_t)rn);
+		else
+			dprintf(fd, "{\"ok\":false,\"err\":\"expander absent\"}\n");
+
 	} else if (json_has_op(line, "get_assistant")) {
 		/* Renvoie état Mixer Assistant. Le daemon mixer-ml-inference
 		 * poll cet endpoint pour savoir source/mode actuels. */

@@ -23,8 +23,11 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
+#include <pthread.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <fluidsynth.h>
 
 #define SAMPLE_RATE   48000
@@ -35,6 +38,8 @@
 #define MIDIX_MAGIC   0x4D494458u              /* 'MIDX' */
 #define CONF_PATH     "/etc/ala/midi-expander.conf"
 #define SF2_DEFAULT   "/usr/share/sounds/sf2/GeneralUserGS.sf2"
+#define CTL_SOCK      "/run/midi-expander.sock"
+#define CHANS_CONF    "/var/lib/ala/midix-chans.conf"
 
 struct midix_hdr {
 	uint32_t magic;
@@ -53,6 +58,141 @@ static void mlog(const char *fmt, ...)
 	vfprintf(stderr, fmt, ap);
 	fputc('\n', stderr);
 	va_end(ap);
+}
+
+/* ========== V12-MIDIX-GUI — contrôle GUI + persistance par canal ==========
+ * Socket texte /run/midi-expander.sock (une requête = une ligne, une
+ * réponse JSON = une ligne). Servi par un thread dédié — la boucle de
+ * rendu 2 ms n'est jamais touchée (l'API fluid_synth_* est thread-safe).
+ * Protocole :  status | prog <chan> <num> | gain <val> | panic
+ * Persistance /var/lib/ala/midix-chans.conf (débounce 2 s). */
+static fluid_synth_t *g_synth;
+static char g_sf2_name[512];
+static _Atomic int g_chans_dirty;
+
+static void chans_save(void)
+{
+	char tmp[sizeof(CHANS_CONF) + 4];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", CHANS_CONF);
+	FILE *f = fopen(tmp, "w");
+	if (!f) return;
+	fprintf(f, "gain %.3f\n", fluid_synth_get_gain(g_synth));
+	for (int c = 0; c < 16; c++) {
+		int sf, bank, prog;
+		if (fluid_synth_get_program(g_synth, c, &sf, &bank,
+					    &prog) == FLUID_OK)
+			fprintf(f, "chan %d %d\n", c, prog);
+	}
+	fclose(f);
+	rename(tmp, CHANS_CONF);
+}
+
+static void chans_load(void)
+{
+	FILE *f = fopen(CHANS_CONF, "r");
+	if (!f) return;
+	char line[128];
+	while (fgets(line, sizeof(line), f)) {
+		int c, p;
+		float g;
+		if (sscanf(line, "gain %f", &g) == 1 && g >= 0.0f && g <= 10.0f)
+			fluid_synth_set_gain(g_synth, g);
+		else if (sscanf(line, "chan %d %d", &c, &p) == 2 &&
+			 c >= 0 && c < 16 && p >= 0 && p < 128)
+			fluid_synth_program_change(g_synth, c, p);
+	}
+	fclose(f);
+	mlog("midix: programmes par canal restaurés");
+}
+
+static void ctl_handle(int fd, const char *req)
+{
+	char out[512];
+	int chan, num;
+	float val;
+	if (!strncmp(req, "status", 6)) {
+		int n = snprintf(out, sizeof(out),
+				 "{\"ok\":true,\"sf2\":\"%s\",\"gain\":%.3f,"
+				 "\"chans\":[", g_sf2_name,
+				 fluid_synth_get_gain(g_synth));
+		for (int c = 0; c < 16; c++) {
+			int sf, bank, prog = 0;
+			fluid_synth_get_program(g_synth, c, &sf, &bank, &prog);
+			n += snprintf(out + n, sizeof(out) - n, "%s%d",
+				      c ? "," : "", prog);
+		}
+		snprintf(out + n, sizeof(out) - n, "]}\n");
+	} else if (sscanf(req, "prog %d %d", &chan, &num) == 2 &&
+		   chan >= 0 && chan < 16 && num >= 0 && num < 128) {
+		fluid_synth_program_change(g_synth, chan, num);
+		atomic_store(&g_chans_dirty, 1);
+		snprintf(out, sizeof(out),
+			 "{\"ok\":true,\"chan\":%d,\"prog\":%d}\n", chan, num);
+	} else if (sscanf(req, "gain %f", &val) == 1 &&
+		   val >= 0.0f && val <= 10.0f) {
+		fluid_synth_set_gain(g_synth, val);
+		atomic_store(&g_chans_dirty, 1);
+		snprintf(out, sizeof(out), "{\"ok\":true,\"gain\":%.3f}\n", val);
+	} else if (!strncmp(req, "panic", 5)) {
+		for (int c = 0; c < 16; c++) {
+			fluid_synth_all_notes_off(g_synth, c);
+			fluid_synth_all_sounds_off(g_synth, c);
+		}
+		snprintf(out, sizeof(out), "{\"ok\":true,\"op\":\"panic\"}\n");
+	} else {
+		snprintf(out, sizeof(out), "{\"ok\":false,\"err\":\"bad cmd\"}\n");
+	}
+	(void)!write(fd, out, strlen(out));
+}
+
+static void *ctl_thread(void *arg)
+{
+	(void)arg;
+	unlink(CTL_SOCK);
+	int ls = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (ls < 0) return NULL;
+	struct sockaddr_un sa = { .sun_family = AF_UNIX };
+	snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", CTL_SOCK);
+	if (bind(ls, (struct sockaddr *)&sa, sizeof(sa)) < 0 ||
+	    listen(ls, 4) < 0) {
+		mlog("midix: ctl socket: %m");
+		close(ls);
+		return NULL;
+	}
+	time_t last_save = 0;
+	while (g_run) {
+		struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+		fd_set rf;
+		FD_ZERO(&rf);
+		FD_SET(ls, &rf);
+		int r = select(ls + 1, &rf, NULL, NULL, &tv);
+		/* persistance débouncée 2 s, hors requête */
+		if (atomic_load(&g_chans_dirty) &&
+		    time(NULL) - last_save >= 2) {
+			atomic_store(&g_chans_dirty, 0);
+			chans_save();
+			last_save = time(NULL);
+		}
+		if (r <= 0)
+			continue;
+		int fd = accept(ls, NULL, NULL);
+		if (fd < 0)
+			continue;
+		struct timeval rt = { .tv_sec = 0, .tv_usec = 300000 };
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rt, sizeof(rt));
+		char req[128];
+		ssize_t n = read(fd, req, sizeof(req) - 1);
+		if (n > 0) {
+			req[n] = '\0';
+			ctl_handle(fd, req);
+		}
+		close(fd);
+	}
+	close(ls);
+	unlink(CTL_SOCK);
+	if (atomic_load(&g_chans_dirty))
+		chans_save();
+	return NULL;
 }
 
 /* Trouve la carte ALSA du gadget f_midi → "hw:N" (id "fmidi"/"f_midi") */
@@ -134,6 +274,15 @@ int main(void)
 	mlog("midix: SoundFont '%s' chargé (gain %.2f, poly %d)",
 	     sf2, gain, polyphony);
 
+	/* V12-MIDIX-GUI : contrôle GUI (programmes par canal) + persistance */
+	g_synth = synth;
+	const char *bn = strrchr(sf2, '/');
+	snprintf(g_sf2_name, sizeof(g_sf2_name), "%s", bn ? bn + 1 : sf2);
+	mkdir("/var/lib/ala", 0755);
+	chans_load();
+	pthread_t th_ctl;
+	pthread_create(&th_ctl, NULL, ctl_thread, NULL);
+
 	/* --- MIDI in : driver alsa_raw sur la carte f_midi (retry si absent,
 	 * le gadget peut arriver après nous malgré After=) --- */
 	fluid_midi_driver_t *mdrv = NULL;
@@ -178,6 +327,7 @@ int main(void)
 				      memory_order_release);
 	}
 
+	pthread_join(th_ctl, NULL);   /* le thread ctl sauve l'état avant exit */
 	if (mdrv) delete_fluid_midi_driver(mdrv);
 	delete_fluid_synth(synth);
 	delete_fluid_settings(st);

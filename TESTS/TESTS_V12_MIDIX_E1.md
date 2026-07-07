@@ -38,11 +38,36 @@ le gate V12-EXP est conservé).
 | systemctl stop midi-expander | present:0 (unmap propre via magic), **0 xrun**, silence ✓ |
 | restart | present:1 auto (retry 1 Hz), son revient ✓ |
 
+## E2-GUI (fait 2026-07-07) — page EXPANDEUR + multi-timbral
+
+- **midi-expander** : socket de contrôle /run/midi-expander.sock (thread
+  dédié, protocole texte status/prog/gain/panic → réponse JSON),
+  persistance des programmes par canal /var/lib/ala/midix-chans.conf
+  (débounce 2 s), restaurée au boot du daemon.
+- **mixer-pro** : op proxy `midix_ctl` (control thread, timeout 500 ms,
+  échec immédiat si daemon absent).
+- **Console** : nouvelle page **EXPANDEUR** (nav 8 pages) — en-tête
+  (statut/SF2, VU, volume synthé, PANIC) + **16 lignes canal MIDI** dans
+  un Flickable : sélecteur de programme ‹ › avec noms GM, CH 10 =
+  batterie. Poll status 1 Hz (proxy) + VU 4 Hz (get_midix direct).
+- **Fix page LOOPER** : les 6 pistes scrollent (Flickable) — avant,
+  seules 4-5 étaient visibles.
+
+| Test E2 | Résultat |
+|---|---|
+| status/prog/gain/panic via proxy | tous ok, status reflète l'état réel fluid ✓ |
+| Multi-timbral CH1 piano + CH2 cordes (0x90/0x91) | 2 timbres simultanés, peak 8,2 % FS ✓ |
+| Persistance (restart daemon) | gain 0.8 + CH2=48 restaurés à l'identique ✓ |
+| QML | 0 erreur (PageExpander + PageLooper scroll) ✓ |
+
 ## Reste
 
-E2 : MIDI DIN physique (UART+opto — matériel), MIDI téléphone, MIDI out/
-thru, GUI (choix banque/programme/volume/VU), multi-timbral par canal.
-V2 : synthé homemade (modélisation vieux synthé — souhait utilisateur).
+E3 : MIDI DIN physique (UART+opto — matériel), MIDI téléphone, MIDI out/
+thru, choix de banque SF2 multiple, kits batterie nommés.
+V2 : synthé homemade (piste discutée : architecture type Korg M1 —
+AI Synthesis PCM+VDF+VDA, très faisable sur A53 ; contrainte = les
+échantillons (ROM Korg copyright) → auto-sampleur via MIDI out + entrées
+de la console, ou multisamples libres).
 
 ## Test utilisateur : EN ATTENTE (clavier/DAW → écoute ; penser à monter
 les faders P1/P2 et leur routage — config mixer à refaire post-fix persistance)

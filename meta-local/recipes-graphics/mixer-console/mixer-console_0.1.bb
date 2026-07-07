@@ -24,6 +24,7 @@ SRC_URI = " \
     file://qml/PageMastering.qml \
     file://qml/PagePads.qml \
     file://qml/PageLooper.qml \
+    file://qml/PageExpander.qml \
     file://qml/PageRouting.qml \
     file://qml/PageSystem.qml \
     file://qml/CalibrationOverlay.qml \

@@ -118,7 +118,16 @@ Item {
         }
 
         // ========================= PISTES =========================
-        Column {
+        // V12-MIDIX-GUI : Flickable — 6 pistes ne tiennent pas sur l'écran,
+        // scroll vertical tactile (les boutons restent des taps).
+        Flickable {
+            width: parent.width
+            height: parent.height - 70 - 24 - 2*10   // en-tête + légende + spacing
+            contentHeight: tracksCol.height
+            clip: true
+
+            Column {
+            id: tracksCol
             width: parent.width
             spacing: 8
             Repeater {
@@ -320,6 +329,7 @@ Item {
                         }
                     }
                 }
+            }
             }
         }
 

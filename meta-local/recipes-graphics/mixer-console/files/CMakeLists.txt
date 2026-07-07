@@ -23,6 +23,7 @@ qt_add_qml_module(mixer-console
         qml/PageMastering.qml
         qml/PagePads.qml
         qml/PageLooper.qml
+        qml/PageExpander.qml
         qml/PageRouting.qml
         qml/PageSystem.qml
         qml/CalibrationOverlay.qml
