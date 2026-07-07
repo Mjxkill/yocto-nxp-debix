@@ -2154,6 +2154,176 @@ static void bmx_calc(void)
 	mlog("bandmix: mix calculé");
 }
 
+/* ========= V13-VFOCUS — « place à la voix » (unmasking spectral) =========
+ * Dynamic EQ sidechainé : la musique (tranches rôle instrument du
+ * bandmix) est creusée UNIQUEMENT dans les bandes où la voix (tranches
+ * rôle lead/choir) a de l'énergie, UNIQUEMENT quand elle chante.
+ * 5 bandes peaking RBJ fixes (250/500/1k/2k/4k, Q 1,4) : analyse =
+ * passe-bande fixes sur le sidechain voix (post-fader) ; application =
+ * MÊMES 5 gains pour toutes les tranches musique → coefs recalculés UNE
+ * fois par bloc, 5 biquads cascade par tranche (états par tranche×bande).
+ * Zéro alloc, zéro transcendante par sample. ARCHI_V13_VOICEFOCUS.md. */
+#define VF_BANDS 5
+
+struct vf_bq { float b0, b1, b2, a1, a2; };
+
+static struct {
+	int   on;
+	float amount;                    /* 0..1 */
+	float max_cut_db;                /* profondeur max (défaut 4,5) */
+	/* précalculs par bande (fréquences fixes) */
+	float cw[VF_BANDS], alpha[VF_BANDS];   /* cos(w0), alpha(Q=1,4) */
+	struct vf_bq ana[VF_BANDS];      /* passe-bande analyse (fixes) */
+	struct vf_bq cut[VF_BANDS];      /* peaking application (par bloc) */
+	/* états */
+	float az[VF_BANDS][2];           /* biquads analyse */
+	float env[VF_BANDS];             /* enveloppes bande (crête lissée) */
+	float env_wb;                    /* large bande (activité voix) */
+	float cut_db[VF_BANDS];          /* cuts lissés (≥ 0 = creuse) */
+	float st[N_EXP_CH][VF_BANDS][2]; /* biquads application */
+	_Atomic uint32_t pub_cut[VF_BANDS];  /* milli-dB (GUI) */
+	_Atomic int active;
+} g_vf = { .amount = 0.5f, .max_cut_db = 4.5f };
+
+static void vf_init(void)
+{
+	static const float FR[VF_BANDS] = { 250, 500, 1000, 2000, 4000 };
+	for (int b = 0; b < VF_BANDS; b++) {
+		float w = 2.0f * (float)M_PI * FR[b] / (float)SAMPLE_RATE;
+		float sw = sinf(w);
+		g_vf.cw[b] = cosf(w);
+		g_vf.alpha[b] = sw / (2.0f * 1.4f);   /* Q = 1,4 */
+		/* passe-bande RBJ (pic 0 dB) */
+		float a0 = 1.0f + g_vf.alpha[b];
+		g_vf.ana[b].b0 = g_vf.alpha[b] / a0;
+		g_vf.ana[b].b1 = 0.0f;
+		g_vf.ana[b].b2 = -g_vf.alpha[b] / a0;
+		g_vf.ana[b].a1 = -2.0f * g_vf.cw[b] / a0;
+		g_vf.ana[b].a2 = (1.0f - g_vf.alpha[b]) / a0;
+		g_vf.cut[b] = (struct vf_bq){ 1, 0, 0, 0, 0 };   /* neutre */
+	}
+}
+
+/* peaking RBJ, gain −cut_db (cos/sin précalculés → qq mults par bloc) */
+static inline void vf_peak_coefs(int b, float cut_db)
+{
+	float A  = powf(10.0f, -cut_db / 40.0f);
+	float al = g_vf.alpha[b];
+	float a0 = 1.0f + al / A;
+	g_vf.cut[b].b0 = (1.0f + al * A) / a0;
+	g_vf.cut[b].b1 = -2.0f * g_vf.cw[b] / a0;
+	g_vf.cut[b].b2 = (1.0f - al * A) / a0;
+	g_vf.cut[b].a1 = -2.0f * g_vf.cw[b] / a0;
+	g_vf.cut[b].a2 = (1.0f - al / A) / a0;
+}
+
+static inline int vf_is_voice(int i)
+{
+	return g_bmx.role[i] == BR_LEAD || g_bmx.role[i] == BR_CHOIR;
+}
+static inline int vf_is_music(int i)
+{
+	int r = g_bmx.role[i];
+	return r >= BR_KICK && r <= BR_LINE;
+}
+
+/* Rendu (audio_thread, SOUS target_lock, après cmp_render) */
+static void duck_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
+{
+	if (!g_vf.on) {
+		if (atomic_load_explicit(&g_vf.active, memory_order_relaxed))
+			atomic_store(&g_vf.active, 0);
+		return;
+	}
+
+	/* 1. sidechain voix = somme post-fader des tranches lead/choir */
+	static float sc[PERIOD_FRAMES];
+	memset(sc, 0, sizeof(sc));
+	int nvoice = 0;
+	for (int i = 0; i < N_EXP_CH; i++) {
+		if (!vf_is_voice(i))
+			continue;
+		nvoice++;
+		const float g = g_st.input_gain[i];
+		for (int f = 0; f < PERIOD_FRAMES; f++)
+			sc[f] += in_block[i][f] * g;
+	}
+
+	/* 2. enveloppes : large bande + par bande (crête, att 5 ms/rel 180) */
+	float pk_wb = 0.0f, pk_b[VF_BANDS] = { 0 };
+	if (nvoice) {
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			float v = sc[f] < 0 ? -sc[f] : sc[f];
+			if (v > pk_wb) pk_wb = v;
+		}
+		for (int b = 0; b < VF_BANDS; b++) {
+			const struct vf_bq *q = &g_vf.ana[b];
+			float z1 = g_vf.az[b][0], z2 = g_vf.az[b][1];
+			float m = 0.0f;
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float x = sc[f];
+				float y = q->b0 * x + z1;
+				z1 = q->b1 * x - q->a1 * y + z2;
+				z2 = q->b2 * x - q->a2 * y;
+				float v = y < 0 ? -y : y;
+				if (v > m) m = v;
+			}
+			g_vf.az[b][0] = z1; g_vf.az[b][1] = z2;
+			pk_b[b] = m;
+		}
+	}
+	const float ka = 0.33f, kr = 0.011f;   /* 5 ms / 180 ms (blocs 2 ms) */
+	g_vf.env_wb += (pk_wb > g_vf.env_wb ? ka : kr) * (pk_wb - g_vf.env_wb);
+	float emax = 1e-12f;
+	for (int b = 0; b < VF_BANDS; b++) {
+		g_vf.env[b] += (pk_b[b] > g_vf.env[b] ? ka : kr)
+			       * (pk_b[b] - g_vf.env[b]);
+		if (g_vf.env[b] > emax) emax = g_vf.env[b];
+	}
+
+	/* 3. cuts cibles : voix active → proportionnel à la bande dominante */
+	int act = g_vf.env_wb > 0.005623f;   /* −45 dBFS */
+	atomic_store_explicit(&g_vf.active, act, memory_order_relaxed);
+	const float kca = 0.18f, kcr = 0.01f;   /* 10 ms / 200 ms */
+	int any = 0;
+	for (int b = 0; b < VF_BANDS; b++) {
+		float tgt = act ? g_vf.max_cut_db * g_vf.amount
+				  * (g_vf.env[b] / emax) : 0.0f;
+		g_vf.cut_db[b] += (tgt > g_vf.cut_db[b] ? kca : kcr)
+				  * (tgt - g_vf.cut_db[b]);
+		if (g_vf.cut_db[b] > 0.05f) {
+			vf_peak_coefs(b, g_vf.cut_db[b]);
+			any = 1;
+		}
+		atomic_store_explicit(&g_vf.pub_cut[b],
+				      (uint32_t)(g_vf.cut_db[b] * 1000.0f),
+				      memory_order_relaxed);
+	}
+	if (!any || !nvoice)
+		return;
+
+	/* 4. application : 5 peaking cascade sur les tranches musique */
+	for (int i = 0; i < N_EXP_CH; i++) {
+		if (!vf_is_music(i))
+			continue;
+		float *x = in_block[i];
+		for (int b = 0; b < VF_BANDS; b++) {
+			if (g_vf.cut_db[b] <= 0.05f)
+				continue;
+			const struct vf_bq *q = &g_vf.cut[b];
+			float z1 = g_vf.st[i][b][0], z2 = g_vf.st[i][b][1];
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float xi = x[f];
+				float y = q->b0 * xi + z1;
+				z1 = q->b1 * xi - q->a1 * y + z2;
+				z2 = q->b2 * xi - q->a2 * y;
+				x[f] = y;
+			}
+			g_vf.st[i][b][0] = z1; g_vf.st[i][b][1] = z2;
+		}
+	}
+}
+
 /* ========= V12-MIDIX — expandeur MIDI (consumer du ring SHM) =========
  * Le daemon midi-expander (fluidsynth, cores 0-1) rend le son du module
  * MIDI dans /dev/shm/ala-midix ; l'audio_thread le pop (non-bloquant,
@@ -2627,6 +2797,8 @@ static void *audio_thread(void *arg)
 		exp_render(in_block);
 		/* V13-COMP : compresseur par tranche, APRÈS le gate */
 		cmp_render(in_block);
+		/* V13-VFOCUS : la musique s'écarte des bandes de la voix */
+		duck_render(in_block);
 
 		/* V12-SMP/LOOP/MIDIX : sources internes → P1/P2 (addition) */
 		smp_render(in_block);
@@ -3854,6 +4026,41 @@ static void handle_cmd(int fd, const char *line)
 		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
 		write(fd, reply, n);
 
+	} else if (json_has_op(line, "set_vfocus")) {
+		/* V13-VFOCUS : {"op":"set_vfocus", on?, amount?(0-100),
+		 * max_cut_db?} — updates partiels */
+		int on = g_vf.on;
+		float am = -1.0f, mc = -1.0f;
+		(void)json_get_int(line, "on", &on);
+		(void)json_get_float(line, "amount", &am);
+		(void)json_get_float(line, "max_cut_db", &mc);
+		pthread_mutex_lock(&g_st.target_lock);
+		g_vf.on = on ? 1 : 0;
+		if (am >= 0.0f && am <= 100.0f)
+			g_vf.amount = am / 100.0f;
+		if (mc >= 0.0f && mc <= 12.0f)
+			g_vf.max_cut_db = mc;
+		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_vfocus\",\"on\":%d}\n",
+			g_vf.on);
+
+	} else if (json_has_op(line, "get_vfocus")) {
+		int n = snprintf(reply, sizeof(reply),
+			"{\"ok\":true,\"on\":%d,\"amount\":%.0f,"
+			"\"max_cut_db\":%.1f,\"active\":%d,\"cuts_db\":[",
+			g_vf.on, g_vf.amount * 100.0f, g_vf.max_cut_db,
+			atomic_load_explicit(&g_vf.active,
+					     memory_order_relaxed));
+		for (int b = 0; b < VF_BANDS; b++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%.2f",
+				      b ? "," : "",
+				      atomic_load_explicit(&g_vf.pub_cut[b],
+							   memory_order_relaxed)
+					/ 1000.0f);
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
+		write(fd, reply, n);
+
 	} else if (json_has_op(line, "set_comp")) {
 		/* V13-COMP : updates partiels comme set_expander */
 		int src = -1;
@@ -4899,6 +5106,8 @@ static void save_mixer_state(void)
 		fprintf(f, "bandmix %d %d %.6e\n", i, g_bmx.role[i],
 			g_bmx.ref_valid ? g_bmx.ref_share[i] : 0.0f);
 	fprintf(f, "bandmix_live %d %d\n", g_bmx.live, g_bmx.ref_valid);
+	fprintf(f, "vfocus %d %.0f %.1f\n", g_vf.on,
+		g_vf.amount * 100.0f, g_vf.max_cut_db);
 	pthread_mutex_unlock(&g_st.target_lock);
 
 	fclose(f);
@@ -5034,6 +5243,13 @@ static void load_mixer_state(void)
 				   role >= 0 && role < BR_NROLES) {
 				g_bmx.role[src] = role;
 				g_bmx.ref_share[src] = shr;
+			} else if (sscanf(bl, "vfocus %d %f %f",
+					  &on, &atk, &rel) == 3) {
+				g_vf.on = on ? 1 : 0;
+				if (atk >= 0.0f && atk <= 100.0f)
+					g_vf.amount = atk / 100.0f;
+				if (rel >= 0.0f && rel <= 12.0f)
+					g_vf.max_cut_db = rel;
 			}
 		}
 	}
@@ -5163,6 +5379,8 @@ int main(int argc, char **argv)
 	/* V13-COMP : défauts compresseurs (off) */
 	for (int i = 0; i < N_EXP_CH; i++)
 		cmp_configure(i, 0, -18.0f, 3.0f, 15.0f, 150.0f, 0.0f);
+	/* V13-VFOCUS : précalcul des bandes (fréquences fixes) */
+	vf_init();
 	pthread_mutex_init(&g_st.target_lock, NULL);
 	atomic_store(&g_st.running, 1);
 

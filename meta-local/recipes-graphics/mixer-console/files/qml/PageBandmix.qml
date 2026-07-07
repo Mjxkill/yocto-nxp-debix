@@ -15,9 +15,14 @@ Item {
     function stripName(i) { return i < 8 ? "M" + (i + 1) : "U" + (i - 7); }
 
     property var st: null      // bandmix_status
+    property var vf: null      // get_vfocus (place à la voix)
+    property bool vfDrag: false
     onVisibleChanged: if (visible) refresh()
     Timer { interval: 500; running: page.visible; repeat: true
             onTriggered: page.refresh() }
+    Timer { interval: 250; running: page.visible; repeat: true
+            onTriggered: mixer.call({ op: "get_vfocus" }, function(r) {
+                if (r.ok && !page.vfDrag) page.vf = r; }) }
     function refresh() {
         mixer.call({ op: "bandmix_status" }, function(r) {
             if (r.ok) page.st = r;
@@ -110,10 +115,103 @@ Item {
             }
         }
 
+        // ========= V13-VFOCUS : « PLACE À LA VOIX » (unmasking) =========
+        Rectangle {
+            width: parent.width; height: 56
+            color: "#171c21"; radius: 8; border.color: "#060809"
+            Row {
+                anchors.fill: parent; anchors.margins: 10; spacing: 14
+                Rectangle {
+                    width: 168; height: 36; radius: 5
+                    anchors.verticalCenter: parent.verticalCenter
+                    property bool on: page.vf !== null && page.vf.on === 1
+                    color: on ? "#2a2214" : "#1b2126"
+                    border.color: on ? "#e5a13c" : "#39434b"
+                    border.width: on ? 2 : 1
+                    Text { anchors.centerIn: parent
+                           text: "PLACE À LA VOIX"
+                           color: parent.on ? "#e5a13c" : "#8b959d"
+                           font.pixelSize: 10; font.bold: true
+                           font.letterSpacing: 2 }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: mixer.call({ op: "set_vfocus",
+                                               on: parent.on ? 0 : 1 },
+                                             function() {})
+                    }
+                }
+                Column {
+                    spacing: 3
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text { text: "AMOUNT  " + (page.vf ? page.vf.amount : 50)
+                           color: "#5c666e"; font.pixelSize: 8
+                           font.letterSpacing: 2 }
+                    Rectangle {
+                        width: 200; height: 20; radius: 10; color: "#0b0e11"
+                        Rectangle {
+                            height: parent.height; radius: 10
+                            width: parent.width * (page.vf ? page.vf.amount : 50) / 100
+                            color: "#39434b"
+                            Rectangle { width: 4; height: parent.height
+                                        anchors.right: parent.right
+                                        color: "#e5a13c" }
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            preventStealing: true
+                            onPressed: page.vfDrag = true
+                            onReleased: page.vfDrag = false
+                            onCanceled: page.vfDrag = false
+                            onPositionChanged: (m) => {
+                                if (!pressed) return;
+                                var v = Math.round(Math.max(0, Math.min(1,
+                                        m.x / width)) * 100);
+                                var d = page.vf; if (d) { d.amount = v; page.vf = d; }
+                                mixer.call({ op: "set_vfocus", amount: v },
+                                           function() {});
+                            }
+                        }
+                    }
+                }
+                // 5 barres de cut temps réel (la musique s'écarte)
+                Row {
+                    spacing: 5
+                    anchors.verticalCenter: parent.verticalCenter
+                    Repeater {
+                        model: ["250", "500", "1k", "2k", "4k"]
+                        Column {
+                            spacing: 2
+                            Rectangle {
+                                width: 26; height: 22; radius: 3
+                                color: "#0b0e11"
+                                Rectangle {
+                                    anchors.bottom: parent.bottom
+                                    width: parent.width; radius: 3
+                                    height: parent.height * Math.min(1,
+                                        (page.vf && page.vf.cuts_db
+                                         ? page.vf.cuts_db[index] : 0) /
+                                        (page.vf ? Math.max(1, page.vf.max_cut_db) : 4.5))
+                                    color: "#e8b84b"
+                                }
+                            }
+                            Text { text: modelData
+                                   anchors.horizontalCenter: parent.horizontalCenter
+                                   color: "#5c666e"; font.pixelSize: 7 }
+                        }
+                    }
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: page.vf && page.vf.active === 1 ? "♪ voix détectée" : ""
+                    color: "#4cc470"; font.pixelSize: 10
+                }
+            }
+        }
+
         // ================= 16 TRANCHES =================
         Flickable {
             width: parent.width
-            height: parent.height - 74 - 26 - 2*8
+            height: parent.height - 74 - 56 - 26 - 3*8
             contentHeight: bmxCol.height
             clip: true
             Column {
