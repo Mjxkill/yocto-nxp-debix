@@ -599,6 +599,31 @@ body{
     <div style="font-size:9px;color:var(--mut);">GM = banque GeneralUser · M1 = synthé A.L.A. (2 OSC + VDF + VDA) · CH 10 = batterie · port MIDI USB « Debix UAC2 8x8 MIDI 1 »</div>
   </div>
 
+  <!-- ============ V13 web : AUTO MIX (assistant groupe) ============ -->
+  <div id="bmxpage" class="page hid" data-page="BANDMIX"
+       style="display:flex;flex-direction:column;padding:12px 16px;gap:8px;overflow-y:auto;">
+    <div style="display:flex;align-items:center;gap:12px;background:#171c21;border-radius:8px;padding:10px 12px;">
+      <div>
+        <div style="color:var(--accent);font-size:11px;font-weight:700;letter-spacing:3px;">AUTO MIX</div>
+        <div id="bmxstat" style="font-size:10px;color:var(--mut);">…</div>
+      </div>
+      <span style="flex:1"></span>
+      <button class="wbtn" id="bmxcalc">CALCULER LE MIX</button>
+      <button class="wbtn" id="bmxlock">VERROUILLER</button>
+      <button class="wbtn ok" id="bmxlive">LIVE —</button>
+      <button class="wbtn" id="bmxdugan">DUGAN —</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;background:#171c21;border-radius:8px;padding:8px 12px;">
+      <button class="wbtn" id="bmxvf" style="min-width:150px;">PLACE À LA VOIX —</button>
+      <div style="font-size:8px;color:var(--mut);letter-spacing:2px;">AMOUNT</div>
+      <input type="range" id="bmxvfam" min="0" max="100" value="50" style="width:160px;">
+      <div id="bmxvfcuts" style="display:flex;gap:4px;align-items:flex-end;height:26px;"></div>
+      <span id="bmxvfact" style="color:#4cc470;font-size:10px;"></span>
+    </div>
+    <div id="bmxchans" style="display:flex;flex-direction:column;gap:5px;"></div>
+    <div style="font-size:9px;color:var(--mut);">1· rôle par tranche 2· MESURER (12 s, source seule) 3· CALCULER 4· ajuster puis VERROUILLER 5· LIVE ON</div>
+  </div>
+
   <!-- ============ V13 web : SCÈNE (automatismes + profils) ============ -->
   <div id="scenepage" class="page hid" data-page="SCENE"
        style="display:flex;flex-direction:column;padding:12px 16px;gap:10px;overflow-y:auto;">
@@ -645,6 +670,7 @@ body{
     <div class="tab" tabindex="0">PADS</div>
     <div class="tab" tabindex="0">LOOPER</div>
     <div class="tab" tabindex="0">EXPANDEUR</div>
+    <div class="tab" tabindex="0">AUTO MIX</div>
     <div class="tab" tabindex="0">SCÈNE</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
@@ -923,7 +949,8 @@ document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
   const name=t.textContent.trim();
   const map={"MIXER":"MIXER","EFFETS":"EFFETS","MASTERING":"MASTERING",
              "PADS":"PADS","LOOPER":"LOOPER","EXPANDEUR":"EXPANDEUR",
-             "SCÈNE":"SCENE","ROUTING":"ROUTING","SYSTÈME":"SYSTEME"};
+             "AUTO MIX":"BANDMIX","SCÈNE":"SCENE",
+             "ROUTING":"ROUTING","SYSTÈME":"SYSTEME"};
   const target=map[name]||"MIXER";
   window.CURPAGE=target;   /* V12 web : gate les pollers PADS/LOOPER/EXPANDEUR */
   document.querySelectorAll("#pages>.page").forEach(p=>
@@ -2942,6 +2969,81 @@ setInterval(xpdPoll,300);
 document.getElementById("xpdgain").addEventListener("change",e=>
   cmd({op:"midix_ctl",cmd:"gain",value:e.target.value/100}));
 document.getElementById("xpdpanic").addEventListener("click",()=>cmd({op:"midix_ctl",cmd:"panic"}));
+
+/* ---------------- AUTO MIX web (assistant groupe) ---------------- */
+const BMXROLES=["off","lead","choir","kick","snare","drums","bass","guitar","keys","line"];
+const BMXNAMES=["—","VOIX LEAD","CHŒURS","GR. CAISSE","C. CLAIRE","BATTERIE","BASSE","GUITARE","CLAVIER","LIGNE"];
+const bmxStrip=(i)=>i<8?"M"+(i+1):"U"+(i-7);
+let bmxSt=null,bmxVf=null,bmxDugan=false,bmxVfDrag=false;
+function bmxRender(){
+  const st=bmxSt;if(!st)return;
+  document.getElementById("bmxstat").textContent=
+    st.measuring>=0?("mesure "+bmxStrip(st.measuring)+" "+st.meas_elapsed+"/12 s")
+    :st.locking?"capture de l'équilibre… (30 s)"
+    :st.live?"LIVE — équilibre tenu"
+    :(st.ref_valid?"équilibre verrouillé, LIVE prêt":"assigne les rôles puis mesure");
+  const lv=document.getElementById("bmxlive");
+  lv.textContent=st.live?"LIVE ON":"LIVE OFF";
+  lv.style.color=st.live?"#4cc470":"";
+  const dg=document.getElementById("bmxdugan");
+  dg.textContent=bmxDugan?"DUGAN ON":"DUGAN OFF";
+  dg.style.color=bmxDugan?"var(--accent)":"";
+  const c=document.getElementById("bmxchans");
+  c.innerHTML=st.chans.map((ch,i)=>{
+    const active=ch.role!=="off",meas=st.measuring===i;
+    const ri=BMXROLES.indexOf(ch.role);
+    return `<div style="display:flex;align-items:center;gap:8px;border-radius:6px;padding:6px 8px;
+      background:${meas?"#2a1512":active?"#171c21":"#14181c"};
+      border:1px solid ${meas?"#e05545":active?"#39434b":"#22282e"};">
+      <span style="width:40px;font-weight:700;color:var(--accent);font-size:11px;">${bmxStrip(i)}</span>
+      <button class="wbtn" data-br="${i}" data-d="-1">&#8249;</button>
+      <span style="width:96px;text-align:center;font-weight:700;font-size:11px;
+        color:${active?"#e9e5da":"#3a434b"};">${ri>=0?BMXNAMES[ri]:ch.role}</span>
+      <button class="wbtn" data-br="${i}" data-d="1">&#8250;</button>
+      ${active?`<button class="wbtn ${ch.done?"ok":""}" data-bm="${i}" ${meas?"disabled":""}
+        style="width:120px;">${meas?("● "+st.meas_elapsed+"/12 s")
+          :(ch.done?("✓ "+ch.rms_db.toFixed(1)+" dB"):"MESURER")}</button>`:""}
+      ${active?`<span style="font-size:9px;color:var(--mut);font-family:monospace;">
+        KEEPER ${(ch.keeper_db>=0?"+":"")+ch.keeper_db.toFixed(1)} dB</span>`:""}
+      <span style="flex:1"></span>
+    </div>`;}).join("");
+  c.querySelectorAll("[data-br]").forEach(bt=>bt.addEventListener("click",()=>{
+    const i=+bt.dataset.br,cur=BMXROLES.indexOf(bmxSt.chans[i].role);
+    const nx=(cur+(+bt.dataset.d)+BMXROLES.length)%BMXROLES.length;
+    cmd({op:"bandmix_role",src:i,role:BMXROLES[nx]}).then(bmxPoll);}));
+  c.querySelectorAll("[data-bm]").forEach(bt=>bt.addEventListener("click",()=>
+    cmd({op:"bandmix_measure",src:+bt.dataset.bm}).then(bmxPoll)));
+}
+function bmxVfRender(){
+  const v=bmxVf;if(!v)return;
+  const b=document.getElementById("bmxvf");
+  b.textContent=v.on?"PLACE À LA VOIX ON":"PLACE À LA VOIX OFF";
+  b.style.color=v.on?"#b3a5f0":"";
+  if(!bmxVfDrag)document.getElementById("bmxvfam").value=v.amount;
+  document.getElementById("bmxvfact").textContent=v.active?"♪ voix détectée":"";
+  document.getElementById("bmxvfcuts").innerHTML=v.cuts_db.map(cd=>
+    `<div style="width:14px;border-radius:2px;background:#e8b84b;
+      height:${Math.max(2,Math.min(26,cd/Math.max(1,v.max_cut_db)*26))}px;"></div>`).join("");
+}
+function bmxPoll(){
+  if(window.CURPAGE!=="BANDMIX")return;
+  cmd({op:"bandmix_status"}).then(r=>{if(r.ok){bmxSt=r;bmxRender();}});
+  cmd({op:"get_vfocus"}).then(r=>{if(r.ok){bmxVf=r;bmxVfRender();}});
+  cmd({op:"get_automix"}).then(r=>{if(r.ok){bmxDugan=r.on===1;}});
+}
+setInterval(bmxPoll,500);
+document.getElementById("bmxcalc").addEventListener("click",()=>cmd({op:"bandmix_calc"}).then(bmxPoll));
+document.getElementById("bmxlock").addEventListener("click",()=>cmd({op:"bandmix_lock"}).then(bmxPoll));
+document.getElementById("bmxlive").addEventListener("click",()=>
+  cmd({op:"bandmix_live",on:bmxSt&&bmxSt.live?0:1}).then(bmxPoll));
+document.getElementById("bmxdugan").addEventListener("click",()=>
+  cmd({op:"set_automix_cfg",on:bmxDugan?0:1}).then(bmxPoll));
+document.getElementById("bmxvf").addEventListener("click",()=>
+  cmd({op:"set_vfocus",on:bmxVf&&bmxVf.on?0:1}).then(bmxPoll));
+const bmxAm=document.getElementById("bmxvfam");
+bmxAm.addEventListener("pointerdown",()=>{bmxVfDrag=true;});
+bmxAm.addEventListener("change",()=>{bmxVfDrag=false;
+  cmd({op:"set_vfocus",amount:+bmxAm.value});});
 
 /* ---------------- SCÈNE : automatismes + profils ---------------- */
 let scnSt={al:0,alN:0,alF:"",dugan:0,live:0,corr:0,mast:0,chain:0,vf:0,vfa:0,vft:0};
