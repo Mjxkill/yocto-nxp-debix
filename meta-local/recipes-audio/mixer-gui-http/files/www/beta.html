@@ -2996,10 +2996,31 @@ function scnSlots(list){
     <button class="wbtn" data-sr="${sc.slot}" ${sc.used?"":"disabled"}>RAPPEL</button>
     <button class="wbtn ok" data-ss="${sc.slot}">SAUVER</button>
   </div>`).join("");
-  c.querySelectorAll("[data-sr]").forEach(bt=>bt.addEventListener("click",()=>
-    cmd({op:"scene_recall",slot:+bt.dataset.sr}).then(()=>{scnPoll();scnList();})));
-  c.querySelectorAll("[data-ss]").forEach(bt=>bt.addEventListener("click",()=>
-    cmd({op:"scene_save",slot:+bt.dataset.ss}).then(scnList)));
+  /* V13-E2 : RAPPEL = double clic de confirmation ; SAUVER = nommage ;
+   * endpoints /api/scene/* = scène COMPLÈTE (mixer + TAC/DSP + synthé) */
+  c.querySelectorAll("[data-sr]").forEach(bt=>bt.addEventListener("click",()=>{
+    if(bt.dataset.armed!=="1"){
+      bt.dataset.armed="1";bt.textContent="CONFIRMER ?";
+      bt.style.color="#ff6a5a";bt.style.borderColor="#e05545";
+      setTimeout(()=>{bt.dataset.armed="0";bt.textContent="RAPPEL";
+        bt.style.color="";bt.style.borderColor="";},3000);
+      return;
+    }
+    fetch("/api/scene/recall",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({slot:+bt.dataset.sr})})
+      .then(()=>{scnPoll();scnList();});
+  }));
+  c.querySelectorAll("[data-ss]").forEach(bt=>bt.addEventListener("click",()=>{
+    const cur=(list.find(s=>s.slot===+bt.dataset.ss)||{}).name||"";
+    const nm=prompt("Nom de la scène "+(+bt.dataset.ss+1)+" :",cur);
+    if(nm===null)return;
+    fetch("/api/scene/save",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({slot:+bt.dataset.ss,
+                           name:nm.trim()||("Scène "+(+bt.dataset.ss+1))})})
+      .then(scnList);
+  }));
 }
 function scnList(){cmd({op:"scene_list"}).then(r=>{if(r.ok)scnSlots(r.scenes);});}
 function scnPoll(){

@@ -5,10 +5,21 @@
 #   2. replay des blobs DSP BYTES (DRC/MULTIBAND) — ignorés par alsactl —
 #      via l'endpoint gui-http (même chemin de code que l'application
 #      manuelle depuis les GUIs)
+# V13-SCENES E2 — argument optionnel $1 = répertoire de SCÈNE contenant
+#   asound.state + dsp-blobs/ : restaure depuis la scène au lieu de l'état
+#   courant (utilisé par POST /api/scene/recall).
 set -u
 BLOB_DIR=/var/lib/mixer-pro/dsp-blobs
 
-alsactl restore 2>/dev/null || true
+if [ $# -ge 1 ] && [ -d "$1" ]; then
+    SCN="$1"
+    if [ -f "$SCN/asound.state" ]; then
+        alsactl restore -f "$SCN/asound.state" 2>/dev/null || true
+    fi
+    [ -d "$SCN/dsp-blobs" ] && BLOB_DIR="$SCN/dsp-blobs"
+else
+    alsactl restore 2>/dev/null || true
+fi
 
 [ -d "$BLOB_DIR" ] || exit 0
 for f in "$BLOB_DIR"/*.hex; do

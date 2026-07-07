@@ -1237,6 +1237,97 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		return send_json(conn, n > 0 ? 200 : 503, reply);
 	}
 
+	/* === Routes POST /api/scene/save + /api/scene/recall === (V13-SCENES E2)
+	 * Orchestration COMPLÈTE d'une scène : mixer-pro (scene_save/recall)
+	 * + TAC/PGA (alsactl) + blobs DSP + patches synthé/canaux MIDI.
+	 * Body : {"slot":0-5,"name":"..."} — name optionnel (save). */
+	if (!strcmp(method, "POST") &&
+	    (!strcmp(url, "/api/scene/save") ||
+	     !strcmp(url, "/api/scene/recall"))) {
+		struct post_buf *pb = *con_cls;
+		if (!pb) {
+			pb = calloc(1, sizeof(*pb));
+			if (!pb) return MHD_NO;
+			*con_cls = pb;
+			return MHD_YES;
+		}
+		if (*upload_data_size > 0) {
+			size_t avail = POST_MAX_BYTES - 1 - pb->len;
+			size_t n = *upload_data_size < avail ? *upload_data_size : avail;
+			memcpy(pb->data + pb->len, upload_data, n);
+			pb->len += n;
+			pb->data[pb->len] = '\0';
+			*upload_data_size = 0;
+			return MHD_YES;
+		}
+		int slot = -1;
+		const char *sp = strstr(pb->data, "\"slot\"");
+		if (sp) sscanf(sp, "\"slot\"%*[: ]%d", &slot);
+		if (slot < 0 || slot > 5)
+			return send_json(conn, 400,
+				"{\"ok\":false,\"err\":\"bad slot\"}\n");
+		char name[48] = "";
+		const char *np = strstr(pb->data, "\"name\"");
+		if (np) {
+			np = strchr(np + 6, '"');
+			if (np) {
+				np++;
+				size_t i = 0;
+				while (*np && *np != '"' && i < sizeof(name) - 1)
+					name[i++] = *np++;
+				name[i] = '\0';
+			}
+		}
+		char req[128], reply[512], cmd[512];
+		char sdir[96];
+		snprintf(sdir, sizeof(sdir),
+			 "/var/lib/mixer-pro/scenes/scene%d.d", slot);
+		int save = !strcmp(url, "/api/scene/save");
+		if (save) {
+			if (name[0])
+				snprintf(req, sizeof(req),
+					 "{\"op\":\"scene_save\",\"slot\":%d,"
+					 "\"name\":\"%s\"}\n", slot, name);
+			else
+				snprintf(req, sizeof(req),
+					 "{\"op\":\"scene_save\",\"slot\":%d}\n",
+					 slot);
+			int rc = mixer_request(req, reply, sizeof(reply));
+			if (rc <= 0 || !strstr(reply, "\"ok\":true"))
+				return send_json(conn, 503, reply);
+			/* snapshot TAC/DSP/synthé */
+			snprintf(cmd, sizeof(cmd),
+				"mkdir -p %s && "
+				"alsactl store -f %s/asound.state 2>/dev/null; "
+				"rm -rf %s/dsp-blobs; "
+				"cp -a /var/lib/mixer-pro/dsp-blobs %s/dsp-blobs 2>/dev/null; "
+				"cp -a /var/lib/ala/synth-patches.conf %s/ 2>/dev/null; "
+				"cp -a /var/lib/ala/midix-chans.conf %s/ 2>/dev/null; true",
+				sdir, sdir, sdir, sdir, sdir, sdir);
+			(void)!system(cmd);
+			return send_json(conn, 200,
+				"{\"ok\":true,\"op\":\"scene_save_full\"}\n");
+		}
+		/* recall */
+		snprintf(req, sizeof(req),
+			 "{\"op\":\"scene_recall\",\"slot\":%d}\n", slot);
+		int rc = mixer_request(req, reply, sizeof(reply));
+		if (rc <= 0 || !strstr(reply, "\"ok\":true"))
+			return send_json(conn, 503, reply);
+		/* TAC/PGA + blobs DSP (script : alsactl restore -f + replay) */
+		snprintf(cmd, sizeof(cmd),
+			"[ -d %s ] && /usr/bin/ala-fx-restore.sh %s; "
+			"cp -a %s/synth-patches.conf /var/lib/ala/ 2>/dev/null; "
+			"cp -a %s/midix-chans.conf /var/lib/ala/ 2>/dev/null; true",
+			sdir, sdir, sdir, sdir);
+		(void)!system(cmd);
+		/* patches + canaux synthé rechargés (proxy mixer-pro) */
+		mixer_request("{\"op\":\"midix_ctl\",\"line\":\"reload\"}\n",
+			      reply, sizeof(reply));
+		return send_json(conn, 200,
+			"{\"ok\":true,\"op\":\"scene_recall_full\"}\n");
+	}
+
 	/* === Route POST /api/client-log === (V10-P2h diag)
 	 * Le front remonte ses erreurs fetch/JS ici (sendBeacon) — évite le
 	 * copier-coller utilisateur pour diagnostiquer les pannes distantes. */

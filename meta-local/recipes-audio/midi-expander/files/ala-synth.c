@@ -695,3 +695,9 @@ int sy_init(const char *sf2_path)
 	patch_load_all();
 	return 0;
 }
+
+void sy_reload_patches(void)
+{
+	patch_load_all();   /* les voix actives gardent leur copie ; les
+			     * prochaines notes prennent la banque rechargée */
+}

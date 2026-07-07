@@ -35,4 +35,8 @@ int  sy_status_json(char *out, size_t outsz);
 void sy_save_chans(FILE *f);
 int  sy_load_chan_line(const char *line);
 
+/* V13-SCENES E2 : recharge la banque de patches depuis le disque
+ * (rappel de scène — le fichier a été remplacé par gui-http). */
+void sy_reload_patches(void);
+
 #endif

@@ -21,6 +21,11 @@ Item {
     property bool vfActive: false
     property real vfTotal: 0        // somme des cuts (dB)
     property var scenes: []
+    // V13-E2 : confirmation RAPPEL (anti-fausse-manip live) + nommage
+    property int armedRecall: -1
+    property int nameSlot: -1
+    property string nameEdit: ""
+    Timer { id: disarm; interval: 3000; onTriggered: page.armedRecall = -1 }
 
     onVisibleChanged: if (visible) { poll(); pollLarsen(); loadScenes(); }
     Timer { interval: 400; running: page.visible; repeat: true
@@ -258,19 +263,34 @@ Item {
                                 elide: Text.ElideRight
                             }
                             Rectangle {
+                                property bool armed: page.armedRecall === index
                                 width: 150; height: 44; radius: 6
                                 anchors.verticalCenter: parent.verticalCenter
-                                color: used ? "#2a2214" : "#181b1e"
-                                border.color: used ? "#e5a13c" : "#22282e"
-                                Text { anchors.centerIn: parent; text: "RAPPEL"
-                                       color: used ? "#e5a13c" : "#3a434b"
+                                color: armed ? "#3a1512" : (used ? "#2a2214" : "#181b1e")
+                                border.color: armed ? "#e05545"
+                                              : (used ? "#e5a13c" : "#22282e")
+                                border.width: armed ? 2 : 1
+                                Text { anchors.centerIn: parent
+                                       text: parent.armed ? "CONFIRMER ?" : "RAPPEL"
+                                       color: parent.armed ? "#ff6a5a"
+                                              : (used ? "#e5a13c" : "#3a434b")
                                        font.pixelSize: 12; font.bold: true }
                                 TapHandler {
                                     enabled: used
                                     gesturePolicy: TapHandler.ReleaseWithinBounds
-                                    onTapped: mixer.call({ op: "scene_recall",
-                                                           slot: index },
-                                        function() { page.poll(); page.loadScenes(); })
+                                    onTapped: {
+                                        // V13-E2 : 2 taps (anti-fausse-manip)
+                                        if (page.armedRecall !== index) {
+                                            page.armedRecall = index;
+                                            disarm.restart();
+                                            return;
+                                        }
+                                        page.armedRecall = -1;
+                                        disarm.stop();
+                                        page.xhr("POST", "/api/scene/recall",
+                                            JSON.stringify({ slot: index }),
+                                            function() { page.poll(); page.loadScenes(); });
+                                    }
                                 }
                             }
                             Rectangle {
@@ -282,11 +302,121 @@ Item {
                                        font.bold: true }
                                 TapHandler {
                                     gesturePolicy: TapHandler.ReleaseWithinBounds
-                                    onTapped: mixer.call({ op: "scene_save",
-                                                           slot: index },
-                                        function() { page.loadScenes(); })
+                                    onTapped: {
+                                        // V13-E2 : nommage avant sauvegarde
+                                        page.nameSlot = index;
+                                        page.nameEdit = sc && sc.used === 1
+                                                        ? sc.name : "";
+                                    }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ========= V13-E2 : clavier de nommage de scène (overlay) =========
+    Rectangle {
+        visible: page.nameSlot >= 0
+        anchors.fill: parent
+        color: "#0e1114"
+        z: 300
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 12
+            width: parent.width - 60
+
+            Text {
+                text: "NOM DE LA SCÈNE " + (page.nameSlot + 1)
+                color: "#e5a13c"; font.pixelSize: 13; font.bold: true
+                font.letterSpacing: 3
+            }
+            Rectangle {
+                width: parent.width; height: 52; radius: 6
+                color: "#0b0e11"; border.color: "#e5a13c"
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left; anchors.leftMargin: 14
+                    text: page.nameEdit + "▏"
+                    color: "#e9e5da"; font.pixelSize: 20; font.bold: true
+                }
+            }
+            // rangées de touches
+            Repeater {
+                model: [
+                    "1234567890",
+                    "AZERTYUIOP",
+                    "QSDFGHJKLM",
+                    "WXCVBN-"
+                ]
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 6
+                    Repeater {
+                        model: modelData.length
+                        Rectangle {
+                            property string ch: modelData.charAt(index)
+                            width: 62; height: 52; radius: 6
+                            color: "#1b2126"; border.color: "#39434b"
+                            Text { anchors.centerIn: parent; text: parent.ch
+                                   color: "#e9e5da"; font.pixelSize: 17
+                                   font.bold: true }
+                            TapHandler {
+                                gesturePolicy: TapHandler.ReleaseWithinBounds
+                                onTapped: if (page.nameEdit.length < 20)
+                                              page.nameEdit += parent.ch
+                            }
+                        }
+                    }
+                }
+            }
+            Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 8
+                Rectangle {
+                    width: 170; height: 52; radius: 6
+                    color: "#1b2126"; border.color: "#39434b"
+                    Text { anchors.centerIn: parent; text: "ESPACE"
+                           color: "#8b959d"; font.pixelSize: 12; font.bold: true }
+                    TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: if (page.nameEdit.length < 20)
+                                      page.nameEdit += " " }
+                }
+                Rectangle {
+                    width: 110; height: 52; radius: 6
+                    color: "#1b2126"; border.color: "#39434b"
+                    Text { anchors.centerIn: parent; text: "⌫"
+                           color: "#c9c4b8"; font.pixelSize: 18 }
+                    TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: page.nameEdit =
+                            page.nameEdit.slice(0, -1) }
+                }
+                Rectangle {
+                    width: 130; height: 52; radius: 6
+                    color: "#2a1512"; border.color: "#7a3b32"
+                    Text { anchors.centerIn: parent; text: "ANNULER"
+                           color: "#f2796a"; font.pixelSize: 12; font.bold: true }
+                    TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: page.nameSlot = -1 }
+                }
+                Rectangle {
+                    width: 170; height: 52; radius: 6
+                    color: "#142a19"; border.color: "#4cc470"
+                    Text { anchors.centerIn: parent; text: "SAUVER"
+                           color: "#4cc470"; font.pixelSize: 13; font.bold: true }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: {
+                            var nm = page.nameEdit.trim();
+                            if (nm === "") nm = "Scène " + (page.nameSlot + 1);
+                            page.xhr("POST", "/api/scene/save",
+                                JSON.stringify({ slot: page.nameSlot,
+                                                 name: nm }),
+                                function() { page.loadScenes(); });
+                            page.nameSlot = -1;
                         }
                     }
                 }

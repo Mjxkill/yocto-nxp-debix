@@ -150,6 +150,15 @@ static void ctl_handle(int fd, const char *req)
 	int chan, num;
 	float val;
 
+	/* V13-SCENES E2 : rappel de scène — recharge patches + canaux
+	 * (les fichiers ont été remplacés par gui-http) */
+	if (!strncmp(req, "reload", 6)) {
+		sy_reload_patches();
+		chans_load();
+		(void)!write(fd, "{\"ok\":true,\"op\":\"reload\"}\n", 26);
+		return;
+	}
+
 	/* V12-SYNTH : engine / inst_list / patch_* traités par le moteur */
 	if (sy_ctl(req, out, sizeof(out))) {
 		if (!strncmp(req, "engine ", 7))
