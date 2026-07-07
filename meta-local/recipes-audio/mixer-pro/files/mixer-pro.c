@@ -1191,6 +1191,14 @@ static int  g_insert_spec_n = 0;
  * Init/swap protégé par target_lock (cohérent avec mix_block). */
 static fx_engine_t g_insert_chain;
 static atomic_int  g_insert_active = 0;
+/* V13-SCENES : bypass runtime du mastering (chaîne conservée chaude) */
+static atomic_int  g_insert_bypass = 0;
+
+/* V13-SCENES : profils complets (définis après save_state_to) */
+#define SCENE_SLOTS 6
+#define SCENE_DIR   "/var/lib/mixer-pro/scenes"
+static void save_state_to(const char *path);
+static int  scene_apply(const char *path);
 /* V9.5.12 — état Mixer Assistant (consommé par daemon mixer-ml-inference
  * via socket get_assistant). mixer-pro ne fait PAS d'inférence TFLite
  * (process séparé pour éviter conflit galcore + audio_thread RT99).
@@ -2820,8 +2828,11 @@ static void *audio_thread(void *arg)
 
 		/* V9.4 — Insert mastering post-master sur out_0+out_1 DSP.
 		 * In-place : out_block[0/1] modifié si insert actif. Autres out
-		 * (UAC2 stems, phone) restent dry. */
-		if (atomic_load_explicit(&g_insert_active, memory_order_acquire)) {
+		 * (UAC2 stems, phone) restent dry.
+		 * V13-SCENES : bypass runtime (bouton MASTERING) — la chaîne
+		 * reste chaude, bascule = 1 load atomique. */
+		if (atomic_load_explicit(&g_insert_active, memory_order_acquire) &&
+		    !atomic_load_explicit(&g_insert_bypass, memory_order_relaxed)) {
 			g_insert_chain.process_block(&g_insert_chain,
 				out_block[0], out_block[1],
 				out_block[0], out_block[1],
@@ -4026,6 +4037,83 @@ static void handle_cmd(int fd, const char *line)
 		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
 		write(fd, reply, n);
 
+	} else if (json_has_op(line, "scene_save")) {
+		/* V13-SCENES : {"op":"scene_save","slot":0-5,"name":"..."} */
+		int slot = -1;
+		char nm[48] = "";
+		(void)json_get_int(line, "slot", &slot);
+		(void)json_get_str(line, "name", nm, sizeof(nm));
+		if (slot < 0 || slot >= SCENE_SLOTS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad slot\"}\n");
+			return;
+		}
+		mkdir(SCENE_DIR, 0755);
+		char p[128];
+		snprintf(p, sizeof(p), SCENE_DIR "/scene%d", slot);
+		save_state_to(p);
+		if (nm[0]) {
+			snprintf(p, sizeof(p), SCENE_DIR "/scene%d.name", slot);
+			FILE *nf = fopen(p, "w");
+			if (nf) { fprintf(nf, "%s\n", nm); fclose(nf); }
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"scene_save\",\"slot\":%d}\n",
+			slot);
+
+	} else if (json_has_op(line, "scene_recall")) {
+		int slot = -1;
+		(void)json_get_int(line, "slot", &slot);
+		if (slot < 0 || slot >= SCENE_SLOTS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad slot\"}\n");
+			return;
+		}
+		char p[128];
+		snprintf(p, sizeof(p), SCENE_DIR "/scene%d", slot);
+		if (scene_apply(p) == 0)
+			dprintf(fd, "{\"ok\":true,\"op\":\"scene_recall\","
+				"\"slot\":%d}\n", slot);
+		else
+			dprintf(fd, "{\"ok\":false,\"err\":\"scene vide\"}\n");
+
+	} else if (json_has_op(line, "scene_list")) {
+		int n = snprintf(reply, sizeof(reply),
+				 "{\"ok\":true,\"scenes\":[");
+		for (int s = 0; s < SCENE_SLOTS; s++) {
+			char p[128], nm[48] = "";
+			snprintf(p, sizeof(p), SCENE_DIR "/scene%d", s);
+			int used = access(p, R_OK) == 0;
+			snprintf(p, sizeof(p), SCENE_DIR "/scene%d.name", s);
+			FILE *nf = fopen(p, "r");
+			if (nf) {
+				if (fgets(nm, sizeof(nm), nf)) {
+					char *e = strchr(nm, '\n');
+					if (e) *e = '\0';
+				}
+				fclose(nf);
+			}
+			if (!nm[0])
+				snprintf(nm, sizeof(nm), "Scène %d", s + 1);
+			n += snprintf(reply + n, sizeof(reply) - n,
+				"%s{\"slot\":%d,\"used\":%d,\"name\":\"%s\"}",
+				s ? "," : "", s, used, nm);
+		}
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
+		write(fd, reply, n);
+
+	} else if (json_has_op(line, "set_insert_bypass")) {
+		/* V13-SCENES : bouton MASTERING ON/OFF (chaîne gardée chaude) */
+		int on = 0;
+		(void)json_get_int(line, "on", &on);
+		atomic_store(&g_insert_bypass, on ? 0 : 1);   /* on=1 → actif */
+		dprintf(fd, "{\"ok\":true,\"mastering_on\":%d}\n", on ? 1 : 0);
+
+	} else if (json_has_op(line, "get_insert_bypass")) {
+		dprintf(fd, "{\"ok\":true,\"chain\":%d,\"bypass\":%d,"
+			"\"mastering_on\":%d}\n",
+			atomic_load(&g_insert_active),
+			atomic_load(&g_insert_bypass),
+			atomic_load(&g_insert_active) &&
+			!atomic_load(&g_insert_bypass));
+
 	} else if (json_has_op(line, "set_vfocus")) {
 		/* V13-VFOCUS : {"op":"set_vfocus", on?, amount?(0-100),
 		 * max_cut_db?} — updates partiels */
@@ -5051,11 +5139,13 @@ static void load_out_gain(void)
  * perdus à chaque reboot → re-setup manuel systématique).
  * Fichier texte versionné, écriture atomique (tmp + rename). */
 #define MIXER_STATE_PATH "/var/lib/mixer-pro/mixer_state"
-static void save_mixer_state(void)
+/* V13-SCENES : écrit l'état complet vers un chemin arbitraire (état
+ * courant OU slot de scène — même format, même parseur au retour). */
+static void save_state_to(const char *path)
 {
 	mkdir("/var/lib/mixer-pro", 0755);
 	char tmp_path[256];
-	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", MIXER_STATE_PATH);
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
 	FILE *f = fopen(tmp_path, "w");
 	if (!f) return;
 
@@ -5111,7 +5201,194 @@ static void save_mixer_state(void)
 	pthread_mutex_unlock(&g_st.target_lock);
 
 	fclose(f);
-	rename(tmp_path, MIXER_STATE_PATH);
+	rename(tmp_path, path);
+}
+
+static void save_mixer_state(void)
+{
+	save_state_to(MIXER_STATE_PATH);
+}
+
+/* ============ V13-SCENES — rappel de profil sans coupure audio ============
+ * Même format que mixer_state (GARDER EN PHASE avec load_mixer_state).
+ * Le fichier est lu EN MÉMOIRE puis parsé via fmemopen : aucune I/O
+ * disque sous target_lock. L'insert chain (LV2, lourde) est ré-initiée
+ * HORS lock puis swappée (pattern set_insert) seulement si le spec
+ * diffère du courant. Les gains atterrissent dans les TARGETS → les
+ * valeurs réelles glissent via smooth_gains (aucun clic). */
+static int scene_apply(const char *path)
+{
+	FILE *df = fopen(path, "r");
+	if (!df)
+		return -1;
+	char *buf = malloc(65536);
+	if (!buf) { fclose(df); return -1; }
+	size_t bn = fread(buf, 1, 65535, df);
+	fclose(df);
+	buf[bn] = '\0';
+	FILE *f = fmemopen(buf, bn, "r");
+	if (!f) { free(buf); return -1; }
+
+	int ver = 0;
+	if (fscanf(f, "version %d\n", &ver) != 1 || ver != 1) {
+		fclose(f); free(buf);
+		return -1;
+	}
+	/* --- insert spec → local (application différée hors lock) --- */
+	static char eng[FX_CHAIN_MAX][32], uri[FX_CHAIN_MAX][256];
+	int n_ins = 0, n_decl = 0;
+	if (fscanf(f, "insert %d\n", &n_decl) == 1 &&
+	    n_decl > 0 && n_decl <= FX_CHAIN_MAX) {
+		int ok = 1;
+		for (int i = 0; i < n_decl; i++) {
+			if (fscanf(f, "%31s %255s\n", eng[i], uri[i]) != 2)
+				{ ok = 0; break; }
+			if (!strcmp(uri[i], "-"))
+				uri[i][0] = '\0';
+		}
+		if (ok) n_ins = n_decl;
+	}
+	int am = 0, as = 0;
+	if (fscanf(f, "assistant %d %d\n", &am, &as) == 2) {
+		atomic_store_explicit(&g_assistant_mode,   am ? 1 : 0, memory_order_relaxed);
+		atomic_store_explicit(&g_assistant_source, as ? 1 : 0, memory_order_relaxed);
+	}
+
+	/* --- le reste sous lock (parse depuis la MÉMOIRE, pas le disque) --- */
+	pthread_mutex_lock(&g_st.target_lock);
+	{
+		int aon;
+		float aresp, afloor;
+		if (fscanf(f, " automix %d %f %f\n", &aon, &aresp, &afloor) == 3) {
+			g_st.automix_on = aon ? 1 : 0;
+			if (aresp >= 10.0f && aresp <= 2000.0f)
+				g_st.automix_resp_ms = aresp;
+			if (afloor > 0.0f && afloor <= 1.0f)
+				g_st.automix_floor = afloor;
+			if (fscanf(f, " automix_members") == 0)
+				for (int i = 0; i < N_INPUT_REAL; i++) {
+					int v;
+					if (fscanf(f, "%d", &v) != 1) break;
+					g_st.automix_member[i] = v ? 1 : 0;
+				}
+			if (fscanf(f, " automix_weights") == 0)
+				for (int i = 0; i < N_INPUT_REAL; i++) {
+					float v;
+					if (fscanf(f, "%f", &v) != 1) break;
+					if (v >= 0.01f && v <= 100.0f)
+						g_st.automix_weight[i] = v;
+				}
+		}
+	}
+	{
+		unsigned mm = 0;
+		if (fscanf(f, " mute_mask %u\n", &mm) == 1)
+			g_st.mute_mask = mm;
+	}
+	if (fscanf(f, " input_gains") == 0)
+		for (int i = 0; i < N_INPUT_TOTAL; i++) {
+			float v;
+			if (fscanf(f, "%f", &v) != 1) break;
+			if (v >= 0.0f && v <= 8.0f) g_st.input_target[i] = v;
+		}
+	if (fscanf(f, " fx_bus") == 0)
+		for (int b = 0; b < N_BUS_FX_CH; b++) {
+			float v;
+			if (fscanf(f, "%f", &v) != 1) break;
+			if (v >= 0.0f && v <= 8.0f) g_st.fx_bus_target[b] = v;
+		}
+	if (fscanf(f, " master") == 0)
+		for (int s = 0; s < N_INPUT_TOTAL; s++)
+			for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
+				float v;
+				if (fscanf(f, "%f", &v) != 1) goto tail;
+				if (v >= 0.0f && v <= 8.0f)
+					g_st.master_target[s][o] = v;
+			}
+tail:
+	{
+		int src, on;
+		float thr, ratio, atk, rel, rng, hold;
+		while (fscanf(f, " expander %d %d %f %f %f %f %f %f\n",
+			      &src, &on, &thr, &ratio, &atk, &rel,
+			      &rng, &hold) == 8)
+			exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
+	}
+	{
+		char bl[160];
+		int src, on, role, live, rv;
+		float thr, ratio, atk, rel, mk, shr;
+		while (fgets(bl, sizeof(bl), f)) {
+			if (sscanf(bl, "comp %d %d %f %f %f %f %f",
+				   &src, &on, &thr, &ratio, &atk, &rel,
+				   &mk) == 7)
+				cmp_configure(src, on, thr, ratio, atk, rel, mk);
+			else if (sscanf(bl, "bandmix_live %d %d",
+					&live, &rv) == 2) {
+				g_bmx.ref_valid = rv ? 1 : 0;
+				g_bmx.live = (live && rv) ? 1 : 0;
+			} else if (sscanf(bl, "bandmix %d %d %f",
+					  &src, &role, &shr) == 3 &&
+				   src >= 0 && src < N_EXP_CH &&
+				   role >= 0 && role < BR_NROLES) {
+				g_bmx.role[src] = role;
+				g_bmx.ref_share[src] = shr;
+			} else if (sscanf(bl, "vfocus %d %f %f",
+					  &on, &atk, &rel) == 3) {
+				g_vf.on = on ? 1 : 0;
+				if (atk >= 0.0f && atk <= 100.0f)
+					g_vf.amount = atk / 100.0f;
+				if (rel >= 0.0f && rel <= 12.0f)
+					g_vf.max_cut_db = rel;
+			}
+		}
+	}
+	pthread_mutex_unlock(&g_st.target_lock);
+	fclose(f);
+	free(buf);
+
+	/* --- insert chain : ré-init seulement si le spec diffère --- */
+	int same = (n_ins == g_insert_spec_n);
+	for (int i = 0; same && i < n_ins; i++)
+		same = !strcmp(eng[i], g_insert_spec_engine[i]) &&
+		       !strcmp(uri[i], g_insert_spec_uri[i]);
+	if (!same) {
+		if (n_ins == 0) {
+			pthread_mutex_lock(&g_st.target_lock);
+			int was = atomic_exchange(&g_insert_active, 0);
+			g_insert_spec_n = 0;
+			pthread_mutex_unlock(&g_st.target_lock);
+			if (was) fx_free(&g_insert_chain);
+		} else {
+			struct fx_chain_spec specs[FX_CHAIN_MAX];
+			for (int i = 0; i < n_ins; i++) {
+				specs[i].engine = eng[i];
+				specs[i].uri    = uri[i];
+			}
+			fx_engine_t chain = { 0 };
+			if (fx_init_chain(&chain, (float)SAMPLE_RATE,
+					  specs, n_ins)) {
+				pthread_mutex_lock(&g_st.target_lock);
+				fx_engine_t old = g_insert_chain;
+				int was = atomic_load(&g_insert_active);
+				for (int i = 0; i < n_ins; i++) {
+					snprintf(g_insert_spec_engine[i], 32,
+						 "%s", eng[i]);
+					snprintf(g_insert_spec_uri[i], 256,
+						 "%s", uri[i]);
+				}
+				g_insert_spec_n = n_ins;
+				g_insert_chain = chain;
+				atomic_store(&g_insert_active, 1);
+				pthread_mutex_unlock(&g_st.target_lock);
+				if (was) fx_free(&old);
+			} else
+				mlog("scene: insert chain init FAILED (spec gardé)");
+		}
+	}
+	atomic_store(&g_presets_dirty, 1);   /* la scène devient l'état courant */
+	mlog("scene: profil appliqué (%s)", path);
+	return 0;
 }
 
 /* Appelée dans main() AVANT le démarrage des threads (pas de lock requis,

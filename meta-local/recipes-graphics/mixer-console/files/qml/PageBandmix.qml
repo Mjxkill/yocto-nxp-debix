@@ -6,6 +6,7 @@ import QtQuick
 
 Item {
     id: page
+    signal duganSettings()   // V13 : ouvre le panneau réglages Dugan (main.qml)
 
     readonly property var roleKeys: ["off","lead","choir","kick","snare",
                                      "drums","bass","guitar","keys","line"]
@@ -66,7 +67,7 @@ Item {
                         color: "#8b959d"; font.pixelSize: 10
                     }
                 }
-                Item { width: parent.width - 620; height: 1 }
+                Item { width: parent.width - 790; height: 1 }
                 Rectangle {
                     width: 130; height: 46; radius: 6
                     anchors.verticalCenter: parent.verticalCenter
@@ -110,6 +111,35 @@ Item {
                         onTapped: mixer.call({ op: "bandmix_live",
                                                on: parent.on ? 0 : 1 },
                                              function() { page.refresh(); })
+                    }
+                }
+                // V13 : le Dugan (parole) vit ici désormais — retiré du master
+                Rectangle {
+                    width: 96; height: 46; radius: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: mixer.amxOn ? "#2a2214" : "#1b2126"
+                    border.color: mixer.amxOn ? "#e5a13c" : "#39434b"
+                    border.width: mixer.amxOn ? 2 : 1
+                    Text { anchors.centerIn: parent
+                           text: mixer.amxOn ? "DUGAN ON" : "DUGAN OFF"
+                           color: mixer.amxOn ? "#e5a13c" : "#8b959d"
+                           font.pixelSize: 11; font.bold: true }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: mixer.call({ op: "set_automix_cfg",
+                                               on: mixer.amxOn ? 0 : 1 },
+                                             function() {})
+                    }
+                }
+                Rectangle {
+                    width: 40; height: 46; radius: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: "#1b2126"; border.color: "#39434b"
+                    Text { anchors.centerIn: parent; text: "⚙"
+                           color: "#8b959d"; font.pixelSize: 15 }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: page.duganSettings()
                     }
                 }
             }

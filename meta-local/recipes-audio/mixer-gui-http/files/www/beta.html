@@ -382,8 +382,8 @@ body{
       <div class="mlrow">
         <div class="mlstate"><i></i><div class="l"><span class="a">MASTERING ML</span><span class="b">v5.20 · NPU 0.81ms ×2</span></div></div>
         <div class="gr"><span class="k">LIM GR</span><div class="grbar"><i id="grb" style="width:12%"></i></div></div>
-        <button class="sq" id="amx-global" style="width:auto;padding:0 10px;height:24px" title="Automix Dugan">AUTOMIX</button>
-        <button class="sq" id="amx-cfg" style="width:26px;height:24px" title="Réglages Dugan">&#9881;</button>
+        <!-- V13 : AUTOMIX déménagé → page SCÈNE (bouton tri-état) -->
+        <span id="amx-global" style="display:none"></span>
       </div>
 
       <div id="mfrow">
@@ -599,6 +599,19 @@ body{
     <div style="font-size:9px;color:var(--mut);">GM = banque GeneralUser · M1 = synthé A.L.A. (2 OSC + VDF + VDA) · CH 10 = batterie · port MIDI USB « Debix UAC2 8x8 MIDI 1 »</div>
   </div>
 
+  <!-- ============ V13 web : SCÈNE (automatismes + profils) ============ -->
+  <div id="scenepage" class="page hid" data-page="SCENE"
+       style="display:flex;flex-direction:column;padding:12px 16px;gap:10px;overflow-y:auto;">
+    <div style="color:var(--accent);font-size:11px;font-weight:700;letter-spacing:3px;">
+      SCÈNE · AUTOMATISMES
+      <button class="sq" id="amx-cfg" style="width:auto;padding:0 10px;height:22px;margin-left:14px;" title="Réglages Dugan">&#9881; DUGAN</button>
+    </div>
+    <div id="scnbtns" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;"></div>
+    <div style="font-size:9px;color:var(--mut);letter-spacing:1px;">
+      PROFILS · SAUVER fige toute la table — RAPPEL bascule instantanément</div>
+    <div id="scnslots" style="display:flex;flex-direction:column;gap:7px;"></div>
+  </div>
+
   <!-- éditeur de patch M1 (overlay) -->
   <div id="xpdedit" style="display:none;position:absolute;inset:0;background:#0e1114;z-index:60;padding:14px 18px;flex-direction:column;gap:8px;">
     <div style="display:flex;align-items:center;gap:10px;">
@@ -632,6 +645,7 @@ body{
     <div class="tab" tabindex="0">PADS</div>
     <div class="tab" tabindex="0">LOOPER</div>
     <div class="tab" tabindex="0">EXPANDEUR</div>
+    <div class="tab" tabindex="0">SCÈNE</div>
     <div class="tab" tabindex="0">ROUTING</div>
     <div class="tab" tabindex="0">SYSTÈME</div>
     <div class="scene">GUI <b id="guiver">P4f</b> · FW <b>2:10:0</b> · ÉTAT <b>PERSISTÉ</b> · FPS <b id="fpsro">—</b></div>
@@ -909,7 +923,7 @@ document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
   const name=t.textContent.trim();
   const map={"MIXER":"MIXER","EFFETS":"EFFETS","MASTERING":"MASTERING",
              "PADS":"PADS","LOOPER":"LOOPER","EXPANDEUR":"EXPANDEUR",
-             "ROUTING":"ROUTING","SYSTÈME":"SYSTEME"};
+             "SCÈNE":"SCENE","ROUTING":"ROUTING","SYSTÈME":"SYSTEME"};
   const target=map[name]||"MIXER";
   window.CURPAGE=target;   /* V12 web : gate les pollers PADS/LOOPER/EXPANDEUR */
   document.querySelectorAll("#pages>.page").forEach(p=>
@@ -2928,6 +2942,87 @@ setInterval(xpdPoll,300);
 document.getElementById("xpdgain").addEventListener("change",e=>
   cmd({op:"midix_ctl",cmd:"gain",value:e.target.value/100}));
 document.getElementById("xpdpanic").addEventListener("click",()=>cmd({op:"midix_ctl",cmd:"panic"}));
+
+/* ---------------- SCÈNE : automatismes + profils ---------------- */
+let scnSt={al:0,alN:0,alF:"",dugan:0,live:0,corr:0,mast:0,chain:0,vf:0,vfa:0,vft:0};
+function scnBtn(id,title,on,accent,state,info,vu,cb){
+  return `<div data-sb="${id}" style="height:108px;border-radius:10px;cursor:pointer;position:relative;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+    background:${on?"#1d1a10":"#14181c"};border:${on?"2px solid "+accent:"1px solid #39434b"};">
+    <div style="font-size:11px;font-weight:700;letter-spacing:2px;color:${on?accent:"#8b959d"};">${title}</div>
+    <div style="font-size:16px;font-weight:700;color:${on?"#e9e5da":"#5c666e"};">${state}</div>
+    <div style="font-size:9px;color:var(--mut);font-family:monospace;">${info}</div>
+    <div style="position:absolute;bottom:6px;left:12px;right:12px;height:6px;border-radius:3px;background:#0b0e11;overflow:hidden;">
+      <div style="height:100%;width:${Math.round(Math.max(0,Math.min(1,vu))*100)}%;background:${accent};"></div></div>
+  </div>`;
+}
+function scnRender(){
+  const s=scnSt,b=document.getElementById("scnbtns");
+  if(!b)return;
+  b.innerHTML=
+    scnBtn("al","ANTI-LARSEN",s.al===1,"#e05545",s.al?"ON":"OFF",
+      s.alN>0?s.alN+" notch · "+s.alF:(s.al?"veille — rien":"désactivé"),s.alN/6)
+   +scnBtn("amx","AUTOMIX",s.live||s.dugan,s.dugan?"#e5a13c":"#4cc470",
+      s.live?"MUSIQUE":(s.dugan?"VOIX":"OFF"),
+      (s.live||s.dugan)?("corr "+(s.corr>=0?"+":"")+s.corr.toFixed(1)+" dB"):"tap : musique/voix",
+      Math.abs(s.corr)/6)
+   +scnBtn("mast","MASTERING",s.mast===1,"#5aa9e6",s.mast?"ON":"OFF",
+      s.chain?"chaîne prête":"aucune chaîne",s.mast?0.4:0)
+   +scnBtn("vf","VOIX DEVANT",s.vf===1,"#b3a5f0",
+      s.vf?(s.vfa?"♪ ACTIF":"ON"):"OFF",
+      s.vf?("creuse "+s.vft.toFixed(1)+" dB"):"place à la voix",s.vft/15);
+  b.querySelector('[data-sb="al"]').addEventListener("click",()=>{
+    fetch("/api/larsen",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({enable:s.al?0:1})}).then(()=>scnPoll());});
+  b.querySelector('[data-sb="amx"]').addEventListener("click",()=>{
+    if(!s.live&&!s.dugan){cmd({op:"bandmix_live",on:1});cmd({op:"set_automix_cfg",on:0});}
+    else if(s.live){cmd({op:"bandmix_live",on:0});cmd({op:"set_automix_cfg",on:1});}
+    else cmd({op:"set_automix_cfg",on:0});
+    setTimeout(scnPoll,300);});
+  b.querySelector('[data-sb="mast"]').addEventListener("click",()=>{
+    cmd({op:"set_insert_bypass",on:s.mast?0:1}).then(scnPoll);});
+  b.querySelector('[data-sb="vf"]').addEventListener("click",()=>{
+    cmd({op:"set_vfocus",on:s.vf?0:1}).then(scnPoll);});
+}
+function scnSlots(list){
+  const c=document.getElementById("scnslots");
+  if(!c)return;
+  c.innerHTML=list.map(sc=>`<div style="display:flex;align-items:center;gap:12px;
+      border-radius:8px;padding:8px 10px;background:${sc.used?"#171c21":"#14181c"};
+      border:1px solid ${sc.used?"#39434b":"#22282e"};">
+    <div style="width:36px;height:36px;border-radius:18px;display:flex;align-items:center;justify-content:center;
+      background:${sc.used?"#e5a13c":"#1b2126"};color:${sc.used?"#0b0e11":"#5c666e"};font-weight:700;">${sc.slot+1}</div>
+    <span style="flex:1;font-weight:700;color:${sc.used?"#e9e5da":"#3a434b"};">${esc(sc.name)}</span>
+    <button class="wbtn" data-sr="${sc.slot}" ${sc.used?"":"disabled"}>RAPPEL</button>
+    <button class="wbtn ok" data-ss="${sc.slot}">SAUVER</button>
+  </div>`).join("");
+  c.querySelectorAll("[data-sr]").forEach(bt=>bt.addEventListener("click",()=>
+    cmd({op:"scene_recall",slot:+bt.dataset.sr}).then(()=>{scnPoll();scnList();})));
+  c.querySelectorAll("[data-ss]").forEach(bt=>bt.addEventListener("click",()=>
+    cmd({op:"scene_save",slot:+bt.dataset.ss}).then(scnList)));
+}
+function scnList(){cmd({op:"scene_list"}).then(r=>{if(r.ok)scnSlots(r.scenes);});}
+function scnPoll(){
+  if(window.CURPAGE!=="SCENE")return;
+  cmd({op:"get_automix"}).then(r=>{if(!r.ok)return;
+    scnSt.dugan=r.on;let m=0;
+    r.gains_db.forEach((g,i)=>{if(r.members[i]===1&&g<m)m=g;});
+    if(r.on)scnSt.corr=m;scnRender();});
+  cmd({op:"bandmix_status"}).then(r=>{if(!r.ok)return;
+    scnSt.live=r.live;
+    if(r.live){let m=0;r.chans.forEach(c=>{if(Math.abs(c.keeper_db)>Math.abs(m))m=c.keeper_db;});scnSt.corr=m;}
+    scnRender();});
+  cmd({op:"get_insert_bypass"}).then(r=>{if(r.ok){scnSt.mast=r.mastering_on;scnSt.chain=r.chain;scnRender();}});
+  cmd({op:"get_vfocus"}).then(r=>{if(r.ok){scnSt.vf=r.on;scnSt.vfa=r.active;
+    scnSt.vft=r.cuts_db.reduce((a,b)=>a+b,0);scnRender();}});
+  fetch("/api/larsen").then(r=>r.json()).then(r=>{if(!r.ok)return;
+    scnSt.al=r.enable;scnSt.alN=r.notches.length;
+    scnSt.alF=r.notches.length?r.notches[r.notches.length-1].freq+" Hz":"";
+    scnRender();}).catch(()=>{});
+}
+setInterval(scnPoll,600);
+setInterval(()=>{if(window.CURPAGE==="SCENE")scnList();},3000);
+scnRender();scnList();
 
 /* ---------------- ANTI-LARSEN (page SYSTÈME) ---------------- */
 function alPoll(){

@@ -407,11 +407,35 @@ static void status_open(void)
         listen(g_status_fd, 4);
 }
 
+static void clear_notch(int ch, struct notch *nt);
+
 static void status_serve(void)
 {
     int c = accept(g_status_fd, NULL, NULL);
     if (c < 0)
         return;
+    /* V13-SCENES : commande optionnelle avant la réponse — « enable 0|1 »
+     * (toggle runtime depuis la GUI). Clients existants n'envoient rien :
+     * timeout court puis status comme avant. */
+    {
+        struct timeval tv = { 0, 80000 };   /* 80 ms */
+        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        char cmd[32];
+        ssize_t r = recv(c, cmd, sizeof(cmd) - 1, 0);
+        if (r > 0) {
+            cmd[r] = '\0';
+            int en;
+            if (sscanf(cmd, "enable %d", &en) == 1) {
+                g_cfg.enable = en ? 1 : 0;
+                if (!g_cfg.enable)
+                    for (int ch2 = 0; ch2 < NCHAN; ch2++)
+                        for (int s2 = 0; s2 < SLOTS_PER_CH; s2++)
+                            if (g_notch[ch2][s2].used)
+                                clear_notch(ch2, &g_notch[ch2][s2]);
+                fprintf(stderr, "al: enable=%d (runtime)\n", g_cfg.enable);
+            }
+        }
+    }
     char buf[2048];
     int n = snprintf(buf, sizeof(buf),
                      "{\"ok\":true,\"enable\":%d,\"notches\":[", g_cfg.enable);
@@ -486,10 +510,10 @@ int main(void)
             for (int s = 0; s < SLOTS_PER_CH; s++)
                 bq_write(tac, SLOT_BQ[l][s], FLAT_BLOB);
 
-    if (!g_cfg.enable) {
-        fprintf(stderr, "al: enable=0 — slots libérés, sortie\n");
-        return 0;
-    }
+    if (!g_cfg.enable)
+        /* V13-SCENES : on RESTE résident (activable depuis la GUI via
+         * le socket) — la boucle saute l'analyse tant que enable=0. */
+        fprintf(stderr, "al: enable=0 — en veille (activable runtime)\n");
     /* BQ9/BQ10 exigent '3 Biquads/Ch' */
     for (int tac = 0; tac < 4; tac++)
         if (g_cfg.pair_en[tac])
@@ -527,6 +551,8 @@ int main(void)
             continue;
 
         for (int ch = 0; ch < NCHAN; ch++) {
+            if (!g_cfg.enable)   /* V13-SCENES : veille runtime */
+                break;
             if (!g_cfg.pair_en[ch / 2])
                 continue;
             if (spectrum_ch(frames, ch))

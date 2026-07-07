@@ -378,9 +378,11 @@ Window {
                     PagePads      { anchors.fill: parent; visible: scene.currentPage === 3 }
                     PageLooper    { anchors.fill: parent; visible: scene.currentPage === 4 }
                     PageExpander  { anchors.fill: parent; visible: scene.currentPage === 5 }
-                    PageBandmix   { anchors.fill: parent; visible: scene.currentPage === 6 }
-                    PageRouting   { anchors.fill: parent; visible: scene.currentPage === 7 }
-                    PageSystem    { anchors.fill: parent; visible: scene.currentPage === 8 }
+                    PageBandmix   { anchors.fill: parent; visible: scene.currentPage === 6
+                                    onDuganSettings: amxPanel.visible = true }
+                    PageScene     { anchors.fill: parent; visible: scene.currentPage === 7 }
+                    PageRouting   { anchors.fill: parent; visible: scene.currentPage === 8 }
+                    PageSystem    { anchors.fill: parent; visible: scene.currentPage === 9 }
                 }
 
                 // ===== barre de banques =====
@@ -533,38 +535,8 @@ Window {
                                     Text { id: peakLTxt; text: "PEAK L  -∞"; color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
                                     Text { id: peakRTxt; text: "PEAK R  -∞"; color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
                                     Text { text: "FW " + mixer.version; color: "#5c666e"; font.pixelSize: 9; font.family: "monospace" }
-                                    // V12-AMX : interrupteur global du groupe
-                                    Row {
-                                        spacing: 4
-                                        Rectangle {
-                                            width: 110; height: 30; radius: 5
-                                            color: mixer.amxOn ? "#2a2214" : "#1b2126"
-                                            border.color: mixer.amxOn ? "#e5a13c" : "#39434b"
-                                            Text {
-                                                anchors.centerIn: parent
-                                                text: "AUTOMIX"
-                                                color: mixer.amxOn ? "#e5a13c" : "#8b959d"
-                                                font.pixelSize: 10; font.bold: true
-                                                font.letterSpacing: 2
-                                            }
-                                            TapHandler {
-                                                gesturePolicy: TapHandler.ReleaseWithinBounds
-                                                onTapped: mixer.call({ op: "set_automix_cfg",
-                                                    on: mixer.amxOn ? 0 : 1 }, function(){})
-                                            }
-                                        }
-                                        // V12-AMX-UI : réglages Dugan (response/floor/poids)
-                                        Rectangle {
-                                            width: 30; height: 30; radius: 5
-                                            color: "#1b2126"; border.color: "#39434b"
-                                            Text { anchors.centerIn: parent; text: "⚙"
-                                                   color: "#8b959d"; font.pixelSize: 14 }
-                                            TapHandler {
-                                                gesturePolicy: TapHandler.ReleaseWithinBounds
-                                                onTapped: amxPanel.visible = true
-                                            }
-                                        }
-                                    }
+                                    // V13-SCENES : le bouton AUTOMIX (Dugan) a
+                                    // déménagé — panneau AUTO MIX + page SCÈNE.
                                 }
                             }
                         }
@@ -581,7 +553,7 @@ Window {
                         anchors.leftMargin: 14
                         spacing: 6
                         Repeater {
-                            model: ["MIXER", "EFFETS", "MASTERING", "PADS", "LOOPER", "EXPANDEUR", "AUTO MIX", "ROUTING", "SYSTÈME"]
+                            model: ["MIXER", "EFFETS", "MASTERING", "PADS", "LOOPER", "EXPANDEUR", "AUTO MIX", "SCÈNE", "ROUTING", "SYSTÈME"]
                             Rectangle {
                                 width: nvTxt.width + 34; height: 32; radius: 5
                                 color: scene.currentPage === index ? "#2a2214" : "transparent"
