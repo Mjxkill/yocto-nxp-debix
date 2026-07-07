@@ -967,6 +967,21 @@ document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
   document.querySelectorAll("#pages>.page").forEach(p=>
     p.classList.toggle("hid",p.dataset.page!==target));
 }));
+/* V13 : lien profond ?page=MIXER|EFFETS|MASTERING|PADS|LOOPER|EXPANDEUR|
+ * BANDMIX|SCENE|ROUTING|SYSTEME — favoris + captures du manuel */
+{
+  const want=(new URLSearchParams(location.search).get("page")||"").toUpperCase();
+  if(want){
+    window.CURPAGE=want;
+    document.querySelectorAll("#pages>.page").forEach(p=>
+      p.classList.toggle("hid",p.dataset.page!==want));
+    const rmap={"MIXER":"MIXER","EFFETS":"EFFETS","MASTERING":"MASTERING",
+      "PADS":"PADS","LOOPER":"LOOPER","EXPANDEUR":"EXPANDEUR",
+      "AUTO MIX":"BANDMIX","SCÈNE":"SCENE","ROUTING":"ROUTING","SYSTÈME":"SYSTEME"};
+    document.querySelectorAll(".tab").forEach(t=>
+      t.classList.toggle("on",rmap[t.textContent.trim()]===want));
+  }
+}
 /* bus FX + items + cats : sélection visuelle */
 document.querySelectorAll(".fxbus").forEach(b=>b.addEventListener("click",()=>{
   document.querySelectorAll(".fxbus").forEach(x=>x.classList.remove("on"));b.classList.add("on");}));
@@ -1177,7 +1192,7 @@ function drawSpec(t){
     spctx.fillRect(b*bw+1,hs-bh,bw-2,bh);
   }
   /* --- waterfall : décale l'historique d'1px vers le bas, nouvelle ligne en haut --- */
-  if(!window.PANEL){
+  if(!window.PANEL&&wfCanvas.width>0&&wfCanvas.height>1){
   wfctx.drawImage(wfCanvas,0,0,w,hw-1,0,1,w,hw-1);
   for(let b=0;b<NB;b++){
     const v=Math.min(1,specState[b]*1.25);
