@@ -88,6 +88,10 @@ struct mixer_state {
 	float automix_env[N_INPUT_TOTAL];       /* enveloppe énergie (audio) */
 	float automix_gain[N_INPUT_TOTAL];      /* lissé, appliqué (audio) */
 	float automix_gtarget[N_INPUT_TOTAL];   /* cible Dugan par bloc */
+	/* V13-BANDMIX : trim du keeper live (±3 dB, slew lent, jamais
+	 * les faders). Multiplié partout où automix_gain l'est. */
+	float keeper_gain[N_INPUT_TOTAL];
+	float keeper_target[N_INPUT_TOTAL];
 
 	/* E6.e : 1 moteur d'effet par bus (4 bus × stéréo, géré par fx_engine).
 	 * Defaults : 0=compressor, 1=reverb, 2=delay, 3=eq.
@@ -1533,8 +1537,10 @@ static void loop_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 
 		const int sa = tr->src_a;
 		const int sb = tr->src_b >= 0 ? tr->src_b : tr->src_a;
-		const float ga = g_st.input_gain[sa] * g_st.automix_gain[sa];
-		const float gb = g_st.input_gain[sb] * g_st.automix_gain[sb];
+		const float ga = g_st.input_gain[sa] * g_st.automix_gain[sa]
+				 * g_st.keeper_gain[sa];
+		const float gb = g_st.input_gain[sb] * g_st.automix_gain[sb]
+				 * g_st.keeper_gain[sb];
 
 		if (st == TR_REC) {
 			any_rec = 1;
@@ -1714,6 +1720,15 @@ static void smooth_gains(void)
 				(tgt - g_st.automix_gain[i]);
 		}
 	}
+
+	/* V13-BANDMIX : slew TRÈS lent du keeper (τ ≈ 2 s → ~0,5 dB/s pour
+	 * les petites corrections — incapable de pomper). */
+	{
+		const float alpha_k = 0.001f;   /* 1-exp(-2ms/2000ms) */
+		for (int i = 0; i < N_INPUT_TOTAL; i++)
+			g_st.keeper_gain[i] += alpha_k *
+				(g_st.keeper_target[i] - g_st.keeper_gain[i]);
+	}
 }
 
 /* ========= V12-EXP — expandeur/gate par tranche (16 voies réelles) =========
@@ -1820,6 +1835,323 @@ static void exp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 		}
 		e->gain = gt;
 	}
+}
+
+/* ========= V13-COMP — compresseur natif par tranche (16 voies) =========
+ * Downward compressor in-place sur in_block[0..15], APRÈS le gate
+ * (exp_render) : ordre console standard gate→comp. Même patron RT que le
+ * gate : enveloppe crête/bloc 2 ms, coefs précalculés au set, rampe de
+ * gain intra-bloc, GR atomic, off = zéro coût. Prérequis de l'assistant
+ * V13-BANDMIX (les tranches USB n'ont pas de DRC DSP).
+ * ARCHI_V13_BANDMIX.md. */
+struct cmp_ch {
+	int   on;
+	float thr_db, ratio, makeup_db;   /* config user */
+	float atk_ms, rel_ms;
+	float thr_lin, ka, kr, makeup_lin; /* précalc (control thread) */
+	float env, gain;                   /* état audio */
+	_Atomic uint32_t gr_mdb;           /* réduction courante milli-dB */
+};
+static struct cmp_ch g_cmp[N_EXP_CH];
+
+static void cmp_configure(int src, int on, float thr_db, float ratio,
+			  float atk_ms, float rel_ms, float makeup_db)
+{
+	if (src < 0 || src >= N_EXP_CH)
+		return;
+	struct cmp_ch *c = &g_cmp[src];
+	if (thr_db < -60.0f) thr_db = -60.0f;
+	if (thr_db > 0.0f)   thr_db = 0.0f;
+	if (ratio < 1.0f)    ratio = 1.0f;
+	if (ratio > 20.0f)   ratio = 20.0f;
+	if (atk_ms < 0.5f)   atk_ms = 0.5f;
+	if (atk_ms > 250.0f) atk_ms = 250.0f;
+	if (rel_ms < 5.0f)   rel_ms = 5.0f;
+	if (rel_ms > 2000.0f) rel_ms = 2000.0f;
+	if (makeup_db < 0.0f)  makeup_db = 0.0f;
+	if (makeup_db > 24.0f) makeup_db = 24.0f;
+	c->thr_db = thr_db;  c->ratio = ratio;  c->makeup_db = makeup_db;
+	c->atk_ms = atk_ms;  c->rel_ms = rel_ms;
+	c->thr_lin = powf(10.0f, thr_db / 20.0f);
+	c->ka = 1.0f - expf(-2.0f / atk_ms);
+	c->kr = 1.0f - expf(-2.0f / rel_ms);
+	c->makeup_lin = powf(10.0f, makeup_db / 20.0f);
+	c->on = on ? 1 : 0;
+	if (!c->on) {
+		c->env = 0.0f; c->gain = 1.0f;
+		atomic_store_explicit(&c->gr_mdb, 0, memory_order_relaxed);
+	}
+}
+
+/* Rendu (audio_thread, SOUS target_lock, juste après exp_render) */
+static void cmp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
+{
+	for (int i = 0; i < N_EXP_CH; i++) {
+		struct cmp_ch *c = &g_cmp[i];
+		if (!c->on)
+			continue;
+		float p = 0.0f;
+		const float *x = in_block[i];
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			float v = x[f] < 0 ? -x[f] : x[f];
+			if (v > p) p = v;
+		}
+		c->env += (p > c->env ? c->ka : c->kr) * (p - c->env);
+
+		float g_db = 0.0f;
+		if (c->env > c->thr_lin) {
+			float env_db = 20.0f * log10f(c->env + 1e-10f);
+			g_db = (c->thr_db - env_db) * (1.0f - 1.0f / c->ratio);
+		}
+		float gt = powf(10.0f, g_db / 20.0f) * c->makeup_lin;
+		atomic_store_explicit(&c->gr_mdb,
+				      (uint32_t)(-g_db * 1000.0f),
+				      memory_order_relaxed);
+
+		float g0 = c->gain;
+		float step = (gt - g0) / (float)PERIOD_FRAMES;
+		float *y = in_block[i];
+		float g = g0;
+		for (int f = 0; f < PERIOD_FRAMES; f++) {
+			g += step;
+			y[f] *= g;
+		}
+		c->gain = gt;
+	}
+}
+
+/* ========= V13-BANDMIX — assistant auto-mix musique =========
+ * Soundcheck mesuré par tranche → calcul déterministe par RÔLE (gain
+ * staging, gate, comp, fader de départ) → suivi live LENT (keeper ±3 dB,
+ * parts de loudness vs référence verrouillée, priorité voix). Le cerveau
+ * vit dans le plan de contrôle (persistence_thread 1 Hz) ; l'audio ne
+ * fait que publier les mean-squares et appliquer keeper_gain (multiplié
+ * dans la chaîne automix). ARCHI_V13_BANDMIX.md. */
+
+/* mean square par bloc (brut) + EWMA τ≈3 s, publiés par l'audio
+ * (bits float dans un u32). Le contrôle utilise l'EWMA (anti-aliasing —
+ * lire 1 bloc de 2 ms par seconde échantillonne 0,2 % du signal). */
+static _Atomic uint32_t g_ms_in[N_EXP_CH];
+static _Atomic uint32_t g_ms_avg[N_EXP_CH];
+static float            g_ms_sm[N_EXP_CH];   /* privé audio_thread */
+
+static inline float bmx_ms(int i)
+{
+	union { float f; uint32_t u; } v =
+		{ .u = atomic_load_explicit(&g_ms_in[i], memory_order_relaxed) };
+	return v.f;
+}
+static inline float bmx_avg(int i)
+{
+	union { float f; uint32_t u; } v =
+		{ .u = atomic_load_explicit(&g_ms_avg[i], memory_order_relaxed) };
+	return v.f;
+}
+
+enum { BR_OFF, BR_LEAD, BR_CHOIR, BR_KICK, BR_SNARE, BR_DRUMS,
+       BR_BASS, BR_GUITAR, BR_KEYS, BR_LINE, BR_NROLES };
+static const char *const BR_NAMES[BR_NROLES] = {
+	"off", "lead", "choir", "kick", "snare", "drums",
+	"bass", "guitar", "keys", "line" };
+
+/* presets par rôle : cible mix (dB rel. lead), gate, comp */
+static const struct bmx_preset {
+	float mix_db;
+	int   gate_on;  float gate_ratio, gate_hold;
+	int   comp_on;  float c_thr, c_ratio, c_atk, c_rel;
+} BMX_P[BR_NROLES] = {
+	[BR_OFF]    = { 0 },
+	[BR_LEAD]   = {  0.0f, 1,  2.0f,  80, 1, -18, 3.0f,  15, 150 },
+	[BR_CHOIR]  = { -4.0f, 1,  2.0f,  80, 1, -18, 3.0f,  15, 150 },
+	[BR_KICK]   = { -2.0f, 1, 20.0f,  60, 1, -14, 4.0f,   5,  80 },
+	[BR_SNARE]  = { -3.0f, 1, 20.0f,  60, 1, -15, 3.0f,   5, 100 },
+	[BR_DRUMS]  = { -6.0f, 0,  0,      0, 1, -16, 2.0f,  10, 150 },
+	[BR_BASS]   = { -3.0f, 0,  0,      0, 1, -18, 4.0f,  20, 250 },
+	[BR_GUITAR] = { -5.0f, 0,  0,      0, 1, -17, 2.5f,  15, 180 },
+	[BR_KEYS]   = { -5.0f, 0,  0,      0, 1, -17, 2.0f,  20, 200 },
+	[BR_LINE]   = { -5.0f, 0,  0,      0, 0, 0, 0, 0, 0 },
+};
+
+struct bmx_meas {
+	int    done;
+	float  rms_avg_db, peak_db, floor_db;
+};
+static struct {
+	int    role[N_EXP_CH];
+	struct bmx_meas m[N_EXP_CH];
+	/* soundcheck en cours (contrôle + audio) */
+	_Atomic int meas_src;         /* -1 = aucune */
+	struct timespec meas_t0;
+	double acc_ms; uint32_t nblk_s;   /* échantillonné à 1 Hz (ticks) */
+	float  peak_max, sm, minsm;
+	int    warm;
+	/* keeper live */
+	int    live;
+	int    ref_valid;
+	float  ref_share[N_EXP_CH];       /* parts de puissance verrouillées */
+	float  lt_ms[N_EXP_CH];           /* loudness long terme POST-fader (τ 10 s) */
+	float  lt_pre[N_EXP_CH];          /* idem PRÉ-fader (détection silence,
+					   * même référentiel que floor_db) */
+	float  kdb[N_EXP_CH];             /* correction courante dB (±3) */
+	int    locking;                    /* capture de référence en cours */
+	int    lock_ticks;
+	double lock_acc[N_EXP_CH];
+} g_bmx = { .meas_src = -1 };
+
+/* --- tick 1 Hz (persistence_thread) : soundcheck + lock + keeper --- */
+static void bmx_tick(void)
+{
+	/* 1. soundcheck : échantillonne la tranche mesurée */
+	int src = atomic_load(&g_bmx.meas_src);
+	if (src >= 0) {
+		float ms  = bmx_ms(src);    /* bloc brut : crête */
+		float avg = bmx_avg(src);   /* EWMA 3 s : moyenne/floor */
+		g_bmx.acc_ms += avg;
+		g_bmx.nblk_s++;
+		if (ms > g_bmx.peak_max) g_bmx.peak_max = ms;
+		if (g_bmx.warm++ >= 3 && avg < g_bmx.minsm)
+			g_bmx.minsm = avg;
+		(void)g_bmx.sm;
+		struct timespec now;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		if (now.tv_sec - g_bmx.meas_t0.tv_sec >= 12) {
+			struct bmx_meas *m = &g_bmx.m[src];
+			float avg = g_bmx.nblk_s ?
+				(float)(g_bmx.acc_ms / g_bmx.nblk_s) : 0.0f;
+			m->rms_avg_db = 10.0f * log10f(avg + 1e-12f);
+			m->peak_db    = 10.0f * log10f(g_bmx.peak_max + 1e-12f);
+			m->floor_db   = 10.0f * log10f(g_bmx.minsm + 1e-12f);
+			m->done = 1;
+			atomic_store(&g_bmx.meas_src, -1);
+			mlog("bandmix: mesure src %d — rms %.1f dB, floor %.1f dB",
+			     src, m->rms_avg_db, m->floor_db);
+		}
+	}
+
+	/* 2. loudness long terme (τ ≈ 10 s) pour lock + keeper.
+	 * lt_ms = POST-fader (parts du mix) ; lt_pre = PRÉ-fader (même
+	 * référentiel que floor_db mesuré → détection silence cohérente). */
+	const float kl = 0.095f;   /* 1 - exp(-1/10) */
+	for (int i = 0; i < N_EXP_CH; i++) {
+		float ms = bmx_avg(i);   /* EWMA 3 s — anti-aliasing */
+		/* BOUCLE FERMÉE : la mesure inclut keeper_gain, sinon le
+		 * correcteur ne voit jamais l'effet de ses corrections et
+		 * l'intégrateur file aux butées (observé au 1er test). */
+		float g = g_st.input_gain[i] * g_st.keeper_gain[i];
+		g_bmx.lt_ms[i] += kl * (ms * g * g - g_bmx.lt_ms[i]);
+		g_bmx.lt_pre[i] += kl * (ms - g_bmx.lt_pre[i]);
+	}
+
+	/* 3. capture de référence (VERROUILLER, 30 ticks) */
+	if (g_bmx.locking) {
+		for (int i = 0; i < N_EXP_CH; i++)
+			if (g_bmx.role[i] != BR_OFF)
+				g_bmx.lock_acc[i] += g_bmx.lt_ms[i];
+		if (++g_bmx.lock_ticks >= 30) {
+			double tot = 1e-12;
+			for (int i = 0; i < N_EXP_CH; i++)
+				tot += g_bmx.lock_acc[i];
+			for (int i = 0; i < N_EXP_CH; i++)
+				g_bmx.ref_share[i] =
+					(float)(g_bmx.lock_acc[i] / tot);
+			g_bmx.ref_valid = 1;
+			g_bmx.locking = 0;
+			atomic_store(&g_presets_dirty, 1);
+			mlog("bandmix: équilibre verrouillé");
+		}
+	}
+
+	/* 4. keeper live : parts courantes vs référence, ±3 dB, zone morte
+	 * 1 dB, tranches silencieuses ignorées, priorité voix lead */
+	if (!g_bmx.live || !g_bmx.ref_valid)
+		return;
+	double tot = 1e-12;
+	for (int i = 0; i < N_EXP_CH; i++)
+		if (g_bmx.role[i] != BR_OFF)
+			tot += g_bmx.lt_ms[i];
+	float lead_err = 0.0f;
+	for (int i = 0; i < N_EXP_CH; i++)
+		if (g_bmx.role[i] == BR_LEAD && g_bmx.ref_share[i] > 1e-9f)
+			lead_err = 10.0f * log10f(
+				(float)(g_bmx.lt_ms[i] / tot) /
+				g_bmx.ref_share[i] + 1e-12f);
+	for (int i = 0; i < N_EXP_CH; i++) {
+		if (g_bmx.role[i] == BR_OFF || g_bmx.ref_share[i] < 1e-9f)
+			continue;
+		/* silence : PRÉ-fader vs floor mesuré (même référentiel).
+		 * Sources continues (floor≈rms) : repli sur rms−15. */
+		float pre_db = 10.0f * log10f(g_bmx.lt_pre[i] + 1e-12f);
+		float thr_sil = g_bmx.m[i].done
+			? fminf(g_bmx.m[i].floor_db + 6.0f,
+				g_bmx.m[i].rms_avg_db - 15.0f)
+			: -70.0f;
+		if (pre_db < thr_sil)
+			continue;   /* instrument en pause : on ne touche pas */
+		float err = 10.0f * log10f(
+			(float)(g_bmx.lt_ms[i] / tot) / g_bmx.ref_share[i]
+			+ 1e-12f);
+		if (err > -1.0f && err < 1.0f)
+			continue;   /* zone morte */
+		float step = 0.5f;
+		if (g_bmx.role[i] == BR_LEAD && lead_err < -2.0f)
+			step = 1.0f;                 /* priorité voix */
+		else if (lead_err < -2.0f && err > 0.0f)
+			step = 0.25f;                /* les autres cèdent */
+		g_bmx.kdb[i] += (err > 0 ? -step : step);
+		if (g_bmx.kdb[i] > 3.0f)  g_bmx.kdb[i] = 3.0f;
+		if (g_bmx.kdb[i] < -3.0f) g_bmx.kdb[i] = -3.0f;
+	}
+	pthread_mutex_lock(&g_st.target_lock);
+	for (int i = 0; i < N_EXP_CH; i++)
+		g_st.keeper_target[i] = powf(10.0f, g_bmx.kdb[i] / 20.0f);
+	pthread_mutex_unlock(&g_st.target_lock);
+}
+
+/* --- CALCULER LE MIX : applique staging + gate + comp + faders --- */
+static void bmx_calc(void)
+{
+	for (int i = 0; i < N_EXP_CH; i++) {
+		int r = g_bmx.role[i];
+		if (r == BR_OFF || !g_bmx.m[i].done)
+			continue;
+		const struct bmx_preset *P = &BMX_P[r];
+		const struct bmx_meas *m = &g_bmx.m[i];
+		/* gain staging + cible de mix : rms → −20 dBFS puis offset
+		 * de rôle, le tout dans le fader (sémantique console E7.2),
+		 * garde-crête −6 dBFS (crête ≈ rms_max, marge 3 dB) */
+		float g_db = (-20.0f - m->rms_avg_db) + P->mix_db - 6.0f;
+		if (m->peak_db + g_db > -6.0f)
+			g_db = -6.0f - m->peak_db;
+		float g = powf(10.0f, g_db / 20.0f);
+		if (g < 0.02f) g = 0.02f;
+		if (g > 4.0f)  g = 4.0f;
+		pthread_mutex_lock(&g_st.target_lock);
+		g_st.input_target[i] = g;
+		/* gate : seuil = floor mesuré + 8 dB, plafonné rms − 10 */
+		if (P->gate_on) {
+			float thr = m->floor_db + 8.0f;
+			if (thr > m->rms_avg_db - 10.0f)
+				thr = m->rms_avg_db - 10.0f;
+			if (thr < -80.0f) thr = -80.0f;
+			exp_configure(i, 1, thr, P->gate_ratio, 2.0f,
+				      150.0f, 40.0f, P->gate_hold);
+		} else {
+			exp_configure(i, 0, g_exp[i].thr_db, g_exp[i].ratio,
+				      g_exp[i].atk_ms, g_exp[i].rel_ms,
+				      g_exp[i].range_db, g_exp[i].hold_ms);
+		}
+		/* comp : preset de rôle (seuil relatif au niveau stagé) */
+		if (P->comp_on)
+			cmp_configure(i, 1, P->c_thr, P->c_ratio,
+				      P->c_atk, P->c_rel, 0.0f);
+		else
+			cmp_configure(i, 0, g_cmp[i].thr_db, g_cmp[i].ratio,
+				      g_cmp[i].atk_ms, g_cmp[i].rel_ms,
+				      g_cmp[i].makeup_db);
+		pthread_mutex_unlock(&g_st.target_lock);
+	}
+	atomic_store(&g_presets_dirty, 1);
+	mlog("bandmix: mix calculé");
 }
 
 /* ========= V12-MIDIX — expandeur MIDI (consumer du ring SHM) =========
@@ -2039,8 +2371,10 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 	for (int i = 0; i < N_INPUT_REAL; i++) {
 		if (g_st.mute_mask & (1u << i))
 			continue;
-		/* V12-AMX : l'auto-gain compose avec le fader (≡1 hors automix) */
-		const float ig = g_st.input_gain[i] * g_st.automix_gain[i];
+		/* V12-AMX/V13 : auto-gain + keeper composent avec le fader
+		 * (≡1 hors automix / hors live) */
+		const float ig = g_st.input_gain[i] * g_st.automix_gain[i]
+				 * g_st.keeper_gain[i];
 		for (int b = 0; b < N_BUS_FX_CH; b++) {
 			const float g = ig * g_st.send_gain[i][b];
 			if (g == 0.0f) continue;   /* sparse skip */
@@ -2081,8 +2415,9 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 	for (int s = 0; s < N_INPUT_REAL; s++) {
 		if (g_st.mute_mask & (1u << s))
 			continue;
-		/* V12-AMX : idem phase A — cohérence sends/master */
-		const float ig = g_st.input_gain[s] * g_st.automix_gain[s];
+		/* V12-AMX/V13 : idem phase A — cohérence sends/master */
+		const float ig = g_st.input_gain[s] * g_st.automix_gain[s]
+				 * g_st.keeper_gain[s];
 		const float *src = in_block[s];
 		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
 			const float g = ig * g_st.master_gain[s][o];
@@ -2290,6 +2625,8 @@ static void *audio_thread(void *arg)
 		/* V12-EXP : gate/expandeur par tranche, in-place AVANT tout
 		 * consommateur (sends/master/looper/automix/tap) */
 		exp_render(in_block);
+		/* V13-COMP : compresseur par tranche, APRÈS le gate */
+		cmp_render(in_block);
 
 		/* V12-SMP/LOOP/MIDIX : sources internes → P1/P2 (addition) */
 		smp_render(in_block);
@@ -2384,14 +2721,34 @@ static void *audio_thread(void *arg)
 					f_to_s32(out_block[N_OUTPUT_DSP + N_OUTPUT_UAC2 + o][f]);
 		}
 
-		/* Peaks : max(abs) sur N samples par channel */
+		/* Peaks : max(abs) sur N samples par channel.
+		 * V13-BANDMIX : accumulation x² au passage → puissance moyenne
+		 * (mean square) publiée en atomic float par tranche 0..15,
+		 * lue par le plan de contrôle (soundcheck + keeper live). */
 		for (int i = 0; i < N_INPUT_REAL; i++) {
-			float m = 0.0f;
+			float m = 0.0f, acc = 0.0f;
 			for (int f = 0; f < PERIOD_FRAMES; f++) {
-				float v = in_block[i][f] < 0 ? -in_block[i][f] : in_block[i][f];
+				float s = in_block[i][f];
+				float v = s < 0 ? -s : s;
 				if (v > m) m = v;
+				acc += s * s;
 			}
 			pk_in[i] = (uint32_t)(m * 2147483647.0f);
+			if (i < N_EXP_CH) {
+				/* V13 : puissance brute (crêtes soundcheck) +
+				 * EWMA τ≈3 s calculée À CHAQUE BLOC (500 Hz) —
+				 * le contrôle qui lisait 1 bloc/s aliasait les
+				 * sources modulées (faux keeper). */
+				float msv = acc / (float)PERIOD_FRAMES;
+				union { float f; uint32_t u; } ms = { .f = msv };
+				atomic_store_explicit(&g_ms_in[i], ms.u,
+						      memory_order_relaxed);
+				g_ms_sm[i] += 0.000666f * (msv - g_ms_sm[i]);
+				union { float f; uint32_t u; } sa =
+					{ .f = g_ms_sm[i] };
+				atomic_store_explicit(&g_ms_avg[i], sa.u,
+						      memory_order_relaxed);
+			}
 		}
 		for (int i = 0; i < N_RETURN_CH; i++) {
 			float m = 0.0f;
@@ -3404,6 +3761,143 @@ static void handle_cmd(int fd, const char *line)
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_expander\",\"src\":%d,"
 			"\"on\":%d}\n", src, g_exp[src].on);
 
+	} else if (json_has_op(line, "bandmix_role")) {
+		/* V13 : {"op":"bandmix_role","src":N,"role":"lead|choir|..."} */
+		int src = -1;
+		char rn[16] = "";
+		(void)json_get_int(line, "src", &src);
+		(void)json_get_str(line, "role", rn, sizeof(rn));
+		int role = -1;
+		for (int r = 0; r < BR_NROLES; r++)
+			if (!strcmp(rn, BR_NAMES[r])) role = r;
+		if (src < 0 || src >= N_EXP_CH || role < 0) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad role\"}\n");
+			return;
+		}
+		g_bmx.role[src] = role;
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"src\":%d,\"role\":\"%s\"}\n",
+			src, BR_NAMES[role]);
+
+	} else if (json_has_op(line, "bandmix_measure")) {
+		/* {"op":"bandmix_measure","src":N} — 12 s, auto-stop.
+		 * src:-1 = annuler. */
+		int src = -2;
+		(void)json_get_int(line, "src", &src);
+		if (src == -1) {
+			atomic_store(&g_bmx.meas_src, -1);
+			dprintf(fd, "{\"ok\":true,\"measuring\":-1}\n");
+			return;
+		}
+		if (src < 0 || src >= N_EXP_CH ||
+		    atomic_load(&g_bmx.meas_src) >= 0) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"busy or bad src\"}\n");
+			return;
+		}
+		g_bmx.acc_ms = 0; g_bmx.nblk_s = 0;
+		g_bmx.peak_max = 0; g_bmx.sm = 0;
+		g_bmx.minsm = 1e9f; g_bmx.warm = 0;
+		clock_gettime(CLOCK_MONOTONIC, &g_bmx.meas_t0);
+		atomic_store(&g_bmx.meas_src, src);
+		dprintf(fd, "{\"ok\":true,\"measuring\":%d,\"secs\":12}\n", src);
+
+	} else if (json_has_op(line, "bandmix_calc")) {
+		bmx_calc();
+		dprintf(fd, "{\"ok\":true,\"op\":\"bandmix_calc\"}\n");
+
+	} else if (json_has_op(line, "bandmix_lock")) {
+		memset(g_bmx.lock_acc, 0, sizeof(g_bmx.lock_acc));
+		g_bmx.lock_ticks = 0;
+		g_bmx.locking = 1;
+		dprintf(fd, "{\"ok\":true,\"op\":\"bandmix_lock\",\"secs\":30}\n");
+
+	} else if (json_has_op(line, "bandmix_live")) {
+		int on = 0;
+		(void)json_get_int(line, "on", &on);
+		g_bmx.live = on ? 1 : 0;
+		if (!g_bmx.live) {
+			/* retour doux à 0 dB */
+			memset(g_bmx.kdb, 0, sizeof(g_bmx.kdb));
+			pthread_mutex_lock(&g_st.target_lock);
+			for (int i = 0; i < N_INPUT_TOTAL; i++)
+				g_st.keeper_target[i] = 1.0f;
+			pthread_mutex_unlock(&g_st.target_lock);
+		}
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"live\":%d}\n", g_bmx.live);
+
+	} else if (json_has_op(line, "bandmix_status")) {
+		int ms = atomic_load(&g_bmx.meas_src);
+		int elapsed = 0;
+		if (ms >= 0) {
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			elapsed = (int)(now.tv_sec - g_bmx.meas_t0.tv_sec);
+		}
+		int n = snprintf(reply, sizeof(reply),
+			"{\"ok\":true,\"live\":%d,\"ref_valid\":%d,"
+			"\"locking\":%d,\"measuring\":%d,\"meas_elapsed\":%d,"
+			"\"chans\":[",
+			g_bmx.live, g_bmx.ref_valid, g_bmx.locking,
+			ms, elapsed);
+		for (int i = 0; i < N_EXP_CH; i++) {
+			n += snprintf(reply + n, sizeof(reply) - n,
+				"%s{\"src\":%d,\"role\":\"%s\",\"done\":%d,"
+				"\"rms_db\":%.1f,\"floor_db\":%.1f,"
+				"\"keeper_db\":%.2f}",
+				i ? "," : "", i, BR_NAMES[g_bmx.role[i]],
+				g_bmx.m[i].done,
+				g_bmx.m[i].done ? g_bmx.m[i].rms_avg_db : -99.0f,
+				g_bmx.m[i].done ? g_bmx.m[i].floor_db : -99.0f,
+				g_bmx.kdb[i]);
+		}
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
+		write(fd, reply, n);
+
+	} else if (json_has_op(line, "set_comp")) {
+		/* V13-COMP : updates partiels comme set_expander */
+		int src = -1;
+		if (json_get_int(line, "src", &src) < 0 ||
+		    src < 0 || src >= N_EXP_CH) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad src\"}\n");
+			return;
+		}
+		struct cmp_ch *c = &g_cmp[src];
+		int on = c->on;
+		float thr = c->thr_db, ratio = c->ratio, atk = c->atk_ms,
+		      rel = c->rel_ms, mk = c->makeup_db;
+		(void)json_get_int(line, "on", &on);
+		(void)json_get_float(line, "threshold_db", &thr);
+		(void)json_get_float(line, "ratio", &ratio);
+		(void)json_get_float(line, "attack_ms", &atk);
+		(void)json_get_float(line, "release_ms", &rel);
+		(void)json_get_float(line, "makeup_db", &mk);
+		pthread_mutex_lock(&g_st.target_lock);
+		cmp_configure(src, on, thr, ratio, atk, rel, mk);
+		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_comp\",\"src\":%d,"
+			"\"on\":%d}\n", src, g_cmp[src].on);
+
+	} else if (json_has_op(line, "get_comp")) {
+		int n = snprintf(reply, sizeof(reply),
+				 "{\"ok\":true,\"channels\":[");
+		for (int i = 0; i < N_EXP_CH; i++) {
+			struct cmp_ch *c = &g_cmp[i];
+			n += snprintf(reply + n, sizeof(reply) - n,
+				"%s{\"src\":%d,\"on\":%d,\"threshold_db\":%.1f,"
+				"\"ratio\":%.1f,\"attack_ms\":%.1f,"
+				"\"release_ms\":%.0f,\"makeup_db\":%.1f,"
+				"\"gr_db\":%.1f}",
+				i ? "," : "", i, c->on, c->thr_db, c->ratio,
+				c->atk_ms, c->rel_ms, c->makeup_db,
+				atomic_load_explicit(&c->gr_mdb,
+						     memory_order_relaxed)
+					/ -1000.0f);
+		}
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
+		write(fd, reply, n);
+
 	} else if (json_has_op(line, "get_expander")) {
 		/* état complet + GR courant (milli-dB → dB) pour la GUI */
 		int n = snprintf(reply, sizeof(reply),
@@ -4396,6 +4890,15 @@ static void save_mixer_state(void)
 			i, g_exp[i].on, g_exp[i].thr_db, g_exp[i].ratio,
 			g_exp[i].atk_ms, g_exp[i].rel_ms, g_exp[i].range_db,
 			g_exp[i].hold_ms);
+	/* V13-COMP + BANDMIX (littéraux avec espace de tête au load) */
+	for (int i = 0; i < N_EXP_CH; i++)
+		fprintf(f, "comp %d %d %.1f %.1f %.1f %.0f %.1f\n",
+			i, g_cmp[i].on, g_cmp[i].thr_db, g_cmp[i].ratio,
+			g_cmp[i].atk_ms, g_cmp[i].rel_ms, g_cmp[i].makeup_db);
+	for (int i = 0; i < N_EXP_CH; i++)
+		fprintf(f, "bandmix %d %d %.6e\n", i, g_bmx.role[i],
+			g_bmx.ref_valid ? g_bmx.ref_share[i] : 0.0f);
+	fprintf(f, "bandmix_live %d %d\n", g_bmx.live, g_bmx.ref_valid);
 	pthread_mutex_unlock(&g_st.target_lock);
 
 	fclose(f);
@@ -4508,6 +5011,32 @@ static void load_mixer_state(void)
 			      &rng, &hold) == 8)
 			exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
 	}
+	/* V13-COMP + BANDMIX (optionnels) — fgets+sscanf ligne à ligne :
+	 * les boucles fscanf à littéral mangent les PRÉFIXES des mots-clés
+	 * voisins ("bandmix" avale le début de "bandmix_live") et
+	 * désynchronisent le flux. Tester le mot-clé long AVANT le court. */
+	{
+		char bl[160];
+		int src, on, role, live, rv;
+		float thr, ratio, atk, rel, mk, shr;
+		while (fgets(bl, sizeof(bl), f)) {
+			if (sscanf(bl, "comp %d %d %f %f %f %f %f",
+				   &src, &on, &thr, &ratio, &atk, &rel,
+				   &mk) == 7)
+				cmp_configure(src, on, thr, ratio, atk, rel, mk);
+			else if (sscanf(bl, "bandmix_live %d %d",
+					&live, &rv) == 2) {
+				g_bmx.ref_valid = rv ? 1 : 0;
+				g_bmx.live = (live && rv) ? 1 : 0;
+			} else if (sscanf(bl, "bandmix %d %d %f",
+					  &src, &role, &shr) == 3 &&
+				   src >= 0 && src < N_EXP_CH &&
+				   role >= 0 && role < BR_NROLES) {
+				g_bmx.role[src] = role;
+				g_bmx.ref_share[src] = shr;
+			}
+		}
+	}
 done:
 	fclose(f);
 	mlog("state: mixer_state restauré (assistant=%d/%d mute=0x%x)", am, as, mm);
@@ -4519,6 +5048,7 @@ static void *persistence_thread(void *arg)
 	while (atomic_load(&g_st.running)) {
 		sleep(1);
 		midix_try_map();   /* V12-MIDIX : mmap hors RT, retry 1 Hz */
+		bmx_tick();        /* V13-BANDMIX : soundcheck + keeper 1 Hz */
 		if (atomic_exchange(&g_presets_dirty, 0)) {
 			save_presets();
 			save_mic_map();      /* V9.5.21 */
@@ -4624,10 +5154,15 @@ int main(int argc, char **argv)
 		g_st.automix_env[i] = 0.0f;
 		g_st.automix_gain[i] = 1.0f;
 		g_st.automix_gtarget[i] = 1.0f;
+		g_st.keeper_gain[i] = 1.0f;     /* V13-BANDMIX */
+		g_st.keeper_target[i] = 1.0f;
 	}
 	/* V12-EXP : défauts gates (off) — avant load_mixer_state qui écrase */
 	for (int i = 0; i < N_EXP_CH; i++)
 		exp_configure(i, 0, -50.0f, 3.0f, 5.0f, 150.0f, 40.0f, 50.0f);
+	/* V13-COMP : défauts compresseurs (off) */
+	for (int i = 0; i < N_EXP_CH; i++)
+		cmp_configure(i, 0, -18.0f, 3.0f, 15.0f, 150.0f, 0.0f);
 	pthread_mutex_init(&g_st.target_lock, NULL);
 	atomic_store(&g_st.running, 1);
 
