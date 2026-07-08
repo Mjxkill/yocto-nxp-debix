@@ -2502,6 +2502,258 @@ function rowFor(c){
   }
   return kcell(c.short||"?",el("span","kn",c.type));
 }
+/* ============ V13-EQ : égaliseur paramétrique PRO (biquads TAC) ============
+ * Courbe de réponse interactive (drag des points : X=fréquence, Y=gain —
+ * ou Q pour les types sans gain ; molette = Q) + champs, + FFT temps réel
+ * de la voie en fond (tap 2 de l'analyseur pointé sur la tranche).
+ * 3 biquads par canal (mapping matériel TAC5212 : CH1=BQ1/5/9, CH2=BQ2/6/10). */
+const EQ_COLORS=["#e5a13c","#4cc470","#5aa9e6"];
+function bqCoeffs(p){
+  /* mêmes formules RBJ que rbjBlob, coefficients normalisés (pour |H|) */
+  const fs=48000,f=Math.max(20,Math.min(p.fHz,22000)),q=Math.max(0.1,Math.min(p.q,16));
+  const g=Math.max(-24,Math.min(p.gainDb||0,24));
+  const w0=2*Math.PI*f/fs,cw=Math.cos(w0),sw=Math.sin(w0),al=sw/(2*q);
+  const Aa=Math.pow(10,g/40),be=Math.sqrt(Aa)/q;
+  let b0,b1,b2,a0,a1,a2;
+  switch(+p.type|0){
+    case 1:b0=(1-cw)/2;b1=1-cw;b2=(1-cw)/2;a0=1+al;a1=-2*cw;a2=1-al;break;
+    case 2:b0=(1+cw)/2;b1=-(1+cw);b2=(1+cw)/2;a0=1+al;a1=-2*cw;a2=1-al;break;
+    case 3:b0=al;b1=0;b2=-al;a0=1+al;a1=-2*cw;a2=1-al;break;
+    case 4:b0=1;b1=-2*cw;b2=1;a0=1+al;a1=-2*cw;a2=1-al;break;
+    case 5:b0=1+al*Aa;b1=-2*cw;b2=1-al*Aa;a0=1+al/Aa;a1=-2*cw;a2=1-al/Aa;break;
+    case 6:b0=Aa*((Aa+1)-(Aa-1)*cw+be*sw);b1=2*Aa*((Aa-1)-(Aa+1)*cw);
+      b2=Aa*((Aa+1)-(Aa-1)*cw-be*sw);a0=(Aa+1)+(Aa-1)*cw+be*sw;
+      a1=-2*((Aa-1)+(Aa+1)*cw);a2=(Aa+1)+(Aa-1)*cw-be*sw;break;
+    case 7:b0=Aa*((Aa+1)+(Aa-1)*cw+be*sw);b1=-2*Aa*((Aa-1)+(Aa+1)*cw);
+      b2=Aa*((Aa+1)+(Aa-1)*cw-be*sw);a0=(Aa+1)-(Aa-1)*cw+be*sw;
+      a1=2*((Aa-1)-(Aa+1)*cw);a2=(Aa+1)-(Aa-1)*cw-be*sw;break;
+    case 8:b0=1-al;b1=-2*cw;b2=1+al;a0=1+al;a1=-2*cw;a2=1-al;break;
+    default:return null;
+  }
+  return{b0:b0/a0,b1:b1/a0,b2:b2/a0,a1:a1/a0,a2:a2/a0};
+}
+function bqMagDb(c,f){
+  const w=2*Math.PI*f/48000,cw=Math.cos(w),c2=Math.cos(2*w),sw=Math.sin(w),s2=Math.sin(2*w);
+  const nr=c.b0+c.b1*cw+c.b2*c2, ni=-(c.b1*sw+c.b2*s2);
+  const dr=1+c.a1*cw+c.a2*c2,  di=-(c.a1*sw+c.a2*s2);
+  return 10*Math.log10(((nr*nr+ni*ni)+1e-20)/((dr*dr+di*di)+1e-20));
+}
+function eqPanel(bqs){
+  const post=(o)=>fetch("/api/cmd",{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(o)})
+    .then(r=>r.json()).catch(()=>null);
+  const wrap=el("div","fxcard");
+  const ct=el("div","ct","ÉGALISEUR PARAMÉTRIQUE");
+  const em=document.createElement("em");
+  em.textContent=A.isOut
+    ?"  ·  1 biquad TAC du canal (BQ5/9 réservés anti-larsen) — drag : fréquence/gain · molette : Q"
+    :"  ·  3 biquads TAC du canal — drag : fréquence/gain · molette : Q";
+  ct.appendChild(em);wrap.appendChild(ct);
+
+  /* BQ vivants de CE canal (mapping modulo-4 du TAC5212 : CH1=BQ1/5/9,
+   * CH2=BQ2/6/10). Côté DAC (sorties) l'anti-larsen possède BQ5/9 et
+   * BQ6/10 → seul BQ1 (resp. BQ2) reste à l'utilisateur. */
+  const chIn=(A.idx%2);
+  const idxs=A.isOut?(chIn===0?[1]:[2]):(chIn===0?[1,5,9]:[2,6,10]);
+  const bands=idxs.map(i=>bqs.find(c=>{const m=parseBqName(c.fullName);return m&&+m.idx===i;}))
+                  .filter(Boolean);
+  if(!bands.length){wrap.appendChild(el("div","sfsub","Biquads indisponibles."));return wrap;}
+
+  /* le TAC n'insère que 'N Biquads/Ch' dans le chemin (config partagée) :
+   * il faut '3 Biquads/Ch' pour que BQ5/9 (resp. 6/10) agissent — même
+   * forçage que le daemon anti-larsen côté DAC. Appliqué à la 1ʳᵉ
+   * activation d'une bande, jamais au simple affichage. */
+  function ensure3(){
+    const tac=parseBqName(bands[0].fullName).tac;
+    const cfg=A.controls[tac+" "+(A.isOut?"DAC":"ADC")+" Biquad Config"];
+    if(!cfg)return;
+    const cur=String(cfg.value||"").replace(/'/g,"");
+    if(cur==="3"||/3 Biquads/.test(cur))return;
+    setAlsa(cfg,"3 Biquads/Ch");
+  }
+
+  const W=1180,H=320,FMIN=20,FMAX=20000,DBR=18;
+  const cv=document.createElement("canvas");
+  cv.width=W;cv.height=H;
+  cv.style.cssText="width:100%;height:320px;background:#0b0e11;border:1px solid #22282e;border-radius:6px;touch-action:none;display:block;";
+  wrap.appendChild(cv);
+  const ctx=cv.getContext("2d");
+  const xOf=f=>W*Math.log(f/FMIN)/Math.log(FMAX/FMIN);
+  const fOf=x=>FMIN*Math.pow(FMAX/FMIN,x/W);
+  const yOf=db=>H/2-db*(H/2)/DBR;
+  const dbOfY=y=>(H/2-y)*DBR/(H/2);
+
+  let fft=null;   /* s[128] int8 dB, bins déjà log 20→20k côté analyzer */
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    if(fft){
+      ctx.beginPath();ctx.moveTo(0,H);
+      for(let b=0;b<fft.length;b++){
+        const x=(b+0.5)*W/fft.length;
+        const y=H-Math.max(0,Math.min(1,(fft[b]+96)/96))*H;
+        ctx.lineTo(x,y);
+      }
+      ctx.lineTo(W,H);ctx.closePath();
+      ctx.fillStyle="rgba(76,196,112,.14)";ctx.fill();
+      ctx.strokeStyle="rgba(76,196,112,.45)";ctx.lineWidth=1;ctx.stroke();
+    }
+    ctx.font="10px monospace";ctx.lineWidth=1;
+    [50,100,200,500,1000,2000,5000,10000].forEach(f=>{
+      const x=xOf(f);
+      ctx.strokeStyle="#1b2126";
+      ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();
+      ctx.fillStyle="#5c666e";
+      ctx.fillText(f>=1000?(f/1000)+"k":f,x+3,H-5);
+    });
+    [-12,-6,0,6,12].forEach(db=>{
+      const y=yOf(db);
+      ctx.strokeStyle=db===0?"#2c343c":"#1b2126";
+      ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
+      ctx.fillStyle="#5c666e";
+      ctx.fillText((db>0?"+":"")+db,W-28,y-3);
+    });
+    const N=240,sum=new Float32Array(N);
+    bands.forEach((c,bi)=>{
+      const p=A.bq[c.fullName]||bqDefault();
+      if(p.type===0)return;
+      const co=bqCoeffs(p);if(!co)return;
+      ctx.beginPath();
+      for(let i=0;i<N;i++){
+        const f=fOf(i*W/(N-1)),db=bqMagDb(co,f);
+        sum[i]+=db;
+        const y=yOf(Math.max(-DBR,Math.min(DBR,db)));
+        i?ctx.lineTo(i*W/(N-1),y):ctx.moveTo(0,y);
+      }
+      ctx.strokeStyle=EQ_COLORS[bi]+"55";ctx.lineWidth=1.2;ctx.stroke();
+    });
+    ctx.beginPath();
+    for(let i=0;i<N;i++){
+      const y=yOf(Math.max(-DBR,Math.min(DBR,sum[i])));
+      i?ctx.lineTo(i*W/(N-1),y):ctx.moveTo(0,y);
+    }
+    ctx.strokeStyle="#e5a13c";ctx.lineWidth=2.5;ctx.stroke();
+    bands.forEach((c,bi)=>{
+      const p=A.bq[c.fullName]||bqDefault();
+      const on=p.type!==0;
+      const gy=[5,6,7].includes(p.type)?p.gainDb:0;
+      const x=xOf(Math.max(FMIN,Math.min(FMAX,p.fHz))),y=yOf(Math.max(-DBR,Math.min(DBR,gy)));
+      ctx.beginPath();ctx.arc(x,y,9,0,7);
+      ctx.fillStyle=on?EQ_COLORS[bi]:"#14181c";ctx.fill();
+      ctx.strokeStyle=EQ_COLORS[bi];ctx.lineWidth=2;ctx.stroke();
+      ctx.fillStyle=on?"#0b0e11":EQ_COLORS[bi];
+      ctx.font="bold 10px monospace";ctx.fillText(bi+1,x-3,y+3.5);
+    });
+  }
+
+  let drag=-1;
+  const hit=(mx,my)=>{
+    let best=-1,bd=26;
+    bands.forEach((c,bi)=>{
+      const p=A.bq[c.fullName]||bqDefault();
+      const gy=[5,6,7].includes(p.type)?p.gainDb:0;
+      const d=Math.hypot(mx-xOf(p.fHz),my-yOf(gy));
+      if(d<bd){bd=d;best=bi;}
+    });
+    return best;
+  };
+  const evPos=e=>{const r=cv.getBoundingClientRect();
+    return[(e.clientX-r.left)*W/r.width,(e.clientY-r.top)*H/r.height];};
+  cv.addEventListener("pointerdown",e=>{
+    const[mx,my]=evPos(e);drag=hit(mx,my);
+    if(drag>=0){cv.setPointerCapture(e.pointerId);e.preventDefault();}
+  });
+  cv.addEventListener("pointermove",e=>{
+    if(drag<0)return;
+    const[mx,my]=evPos(e);
+    const c=bands[drag],p=A.bq[c.fullName]||bqDefault();
+    const upd={fHz:Math.round(Math.max(FMIN,Math.min(FMAX,fOf(mx))))};
+    if(p.type===0){upd.type=5;ensure3();}        /* drag d'une bande OFF → peaking */
+    if([5,6,7].includes(upd.type??p.type))
+      upd.gainDb=Math.round(Math.max(-DBR,Math.min(DBR,dbOfY(my)))*10)/10;
+    else
+      upd.q=Math.round(Math.max(0.1,Math.min(10,(H-my)/H*10))*100)/100;
+    setBq(c.fullName,upd);syncRows();draw();
+  });
+  const endDrag=()=>{drag=-1;};
+  cv.addEventListener("pointerup",endDrag);cv.addEventListener("pointercancel",endDrag);
+  cv.addEventListener("wheel",e=>{
+    const[mx,my]=evPos(e);const bi=hit(mx,my);
+    if(bi<0)return;e.preventDefault();
+    const c=bands[bi],p=A.bq[c.fullName]||bqDefault();
+    const q=Math.round(Math.max(0.1,Math.min(16,p.q*(e.deltaY<0?1.12:0.89)))*100)/100;
+    setBq(c.fullName,{q});syncRows();draw();
+  },{passive:false});
+
+  const rows=el("div");rows.style.cssText="display:flex;flex-direction:column;gap:4px;margin-top:8px;";
+  wrap.appendChild(rows);
+  const inputs=[];
+  bands.forEach((c,bi)=>{
+    const p=A.bq[c.fullName]||bqDefault();
+    const r=el("div");
+    r.style.cssText="display:flex;align-items:center;gap:8px;";
+    r.innerHTML=`
+      <span style="width:14px;height:14px;border-radius:7px;background:${EQ_COLORS[bi]};"></span>
+      <button class="wbtn" data-eqon style="width:64px;">${p.type!==0?"ON":"OFF"}</button>
+      <select data-eqt style="background:#1b2126;color:#c9c4b8;border:1px solid #39434b;border-radius:4px;padding:6px;">
+        ${BIQUAD_TYPES.map((t,ti)=>`<option value="${ti}" ${p.type===ti?"selected":""}>${t}</option>`).join("")}
+      </select>
+      <label style="font-size:9px;color:var(--mut);">F<input data-eqf type="number" min="20" max="20000" step="1" value="${Math.round(p.fHz)}"
+        style="width:74px;background:#0b0e11;color:#e9e5da;border:1px solid #39434b;border-radius:4px;padding:5px;margin-left:4px;"> Hz</label>
+      <label style="font-size:9px;color:var(--mut);">G<input data-eqg type="number" min="-18" max="18" step="0.5" value="${p.gainDb}"
+        style="width:64px;background:#0b0e11;color:#e9e5da;border:1px solid #39434b;border-radius:4px;padding:5px;margin-left:4px;"> dB</label>
+      <label style="font-size:9px;color:var(--mut);">Q<input data-eqq type="number" min="0.1" max="16" step="0.05" value="${p.q}"
+        style="width:64px;background:#0b0e11;color:#e9e5da;border:1px solid #39434b;border-radius:4px;padding:5px;margin-left:4px;"></label>
+      <span style="font-size:9px;color:var(--mut);">BQ${parseBqName(c.fullName).idx}</span>`;
+    rows.appendChild(r);
+    inputs.push(r);
+    r.querySelector("[data-eqon]").addEventListener("click",()=>{
+      const q=A.bq[c.fullName]||bqDefault();
+      if(q.type===0)ensure3();
+      setBq(c.fullName,{type:q.type===0?(q.lastType||5):0,
+                        lastType:q.type!==0?q.type:(q.lastType||5)});
+      syncRows();draw();
+    });
+    r.querySelector("[data-eqt]").addEventListener("change",e=>{
+      if(+e.target.value!==0)ensure3();
+      setBq(c.fullName,{type:+e.target.value});syncRows();draw();});
+    r.querySelector("[data-eqf]").addEventListener("change",e=>{
+      setBq(c.fullName,{fHz:Math.max(20,Math.min(20000,+e.target.value||1000))});draw();});
+    r.querySelector("[data-eqg]").addEventListener("change",e=>{
+      setBq(c.fullName,{gainDb:Math.max(-18,Math.min(18,+e.target.value||0))});draw();});
+    r.querySelector("[data-eqq]").addEventListener("change",e=>{
+      setBq(c.fullName,{q:Math.max(0.1,Math.min(16,+e.target.value||0.707))});draw();});
+  });
+  function syncRows(){
+    bands.forEach((c,bi)=>{
+      const p=A.bq[c.fullName]||bqDefault(),r=inputs[bi];
+      const on=r.querySelector("[data-eqon]");
+      on.textContent=p.type!==0?"ON":"OFF";
+      on.style.color=p.type!==0?EQ_COLORS[bi]:"";
+      r.querySelector("[data-eqt]").value=p.type;
+      r.querySelector("[data-eqf]").value=Math.round(p.fHz);
+      r.querySelector("[data-eqg]").value=p.gainDb;
+      r.querySelector("[data-eqq]").value=p.q;
+    });
+  }
+
+  /* FFT de la voie : tap 2 de l'analyseur pointé sur CETTE tranche
+   * (entrée pour les strips IN, sortie pour les strips OUT).
+   * Nettoyé par render() (_eqCleanup) au changement d'onglet/fermeture. */
+  const kind=A.isOut?3:1;
+  post({op:"set_tap",tap:2,kind:kind,a:A.idx,b:-1});
+  const timer=setInterval(()=>{
+    post({op:"get_meters"}).then(j=>{
+      if(!j)return;
+      const t=(j.analyzer||[]).find(a=>a.k===kind&&a.a===A.idx);
+      if(t&&t.s){fft=t.s;draw();}
+    });
+  },200);
+  window._eqCleanup=()=>{clearInterval(timer);
+    post({op:"set_tap",tap:2,kind:0,a:0,b:-1});window._eqCleanup=null;};
+  draw();
+  return wrap;
+}
+
 function bqEditor(c){
   const blk=el("div","bqblk");
   const info=parseBqName(c.fullName);
@@ -2741,6 +2993,7 @@ function render(){
   /* V12-EXP web : gate par tranche (voies IN 0..15, natif mixer-pro) */
   if(!A.isOut&&A.idx<16)groups.splice(1,0,{title:"GATE",custom:"gate"});
   if(window._gateTimer){clearInterval(window._gateTimer);window._gateTimer=null;}
+  if(window._eqCleanup)window._eqCleanup();
   const tabs=$("#sftabs"),body=$("#sfbody");
   tabs.innerHTML="";body.innerHTML="";
   const act=groups.find(g=>g.title===A.tab)||groups[0];A.tab=act.title;
@@ -2765,13 +3018,21 @@ function render(){
     body.appendChild(cp.c);
   }
   if(bqs.length){
-    const cb=card("BIQUADS PROGRAMMABLES",bqs.length+" filtres · forme RBJ");
-    cb.g.style.display="block";
+    /* V13-EQ : courbe paramétrique pro + FFT de la voie */
+    try{body.appendChild(eqPanel(bqs));}
+    catch(e){body.appendChild(el("div","sfsub","⚠ EQ : "+e.message));}
+    /* accès expert aux 12 blobs bruts (autres canaux / BQ morts) */
+    const det=document.createElement("details");
+    det.style.cssText="margin-top:6px;";
+    const sm=document.createElement("summary");
+    sm.textContent="BIQUADS BRUTS ("+bqs.length+" filtres · forme RBJ)";
+    sm.style.cssText="cursor:pointer;font-size:10px;letter-spacing:.12em;color:var(--mut);padding:6px 2px;";
+    det.appendChild(sm);
     bqs.forEach(c=>{
-      try{cb.g.appendChild(bqEditor(c));}
-      catch(e){cb.g.appendChild(el("div","sfsub","⚠ "+(c.short||"?")+" : "+e.message));}
+      try{det.appendChild(bqEditor(c));}
+      catch(e){det.appendChild(el("div","sfsub","⚠ "+(c.short||"?")+" : "+e.message));}
     });
-    body.appendChild(cb.c);
+    body.appendChild(det);
   }
   blobs.forEach(c=>{
     try{body.appendChild(drcEditor(c));}
@@ -2847,6 +3108,16 @@ document.querySelectorAll("#bank .strip").forEach((elm,i)=>{
   elm.querySelector(".id").addEventListener("click",h);
   elm.querySelector(".src").addEventListener("click",h);
 });
+/* lien profond tiroir : ?strip=N (0..17) ou ?strip=oN (sortie) + &fxtab=TITRE
+ * — captures du manuel + debug sans passer par un clic */
+{
+  const q=new URLSearchParams(location.search),s=q.get("strip");
+  if(s!==null&&s!==""){
+    const out=/^o/i.test(s),idx=parseInt(s.replace(/\D/g,""),10)||0;
+    openDrawer({idx,t:out?"out":"in"});
+    const ft=q.get("fxtab");if(ft)A.tab=ft.toUpperCase();
+  }
+}
 /* bouton RESET TAC topbar */
 const tb=$("#tacbtn");
 if(tb)tb.addEventListener("click",()=>{
