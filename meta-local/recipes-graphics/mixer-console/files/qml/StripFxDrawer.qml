@@ -469,7 +469,9 @@ Rectangle {
                             color: "#0b0e11"; border.color: "#22282e"; radius: 6
                         }
 
-                        // FFT de la voie : 64 barres, cibles posées à 5 Hz
+                        // FFT de la voie : 64 barres — cibles posées à 10 Hz,
+                        // ballistique PAR FRAME (même recette que SpectrumView :
+                        // poser les valeurs brutes à basse cadence = saccades)
                         Row {
                             id: fftRow
                             anchors.fill: parent
@@ -482,6 +484,7 @@ Rectangle {
                                     width: (fftRow.width - 63) / 64
                                     height: fftRow.height
                                     property real v: 0
+                                    property real tgt: 0
                                     Rectangle {
                                         anchors.bottom: parent.bottom
                                         width: parent.width
@@ -492,7 +495,7 @@ Rectangle {
                             }
                         }
                         Timer {
-                            interval: 200; repeat: true
+                            interval: 100; repeat: true
                             running: eqPanel.visible && drawer.visible
                             onTriggered: {
                                 mixer.call({ op: "get_meters" }, function(r) {
@@ -505,11 +508,26 @@ Rectangle {
                                             const it = fftRep.itemAt(b);
                                             if (!it) continue;
                                             const m = Math.max(t.s[b * 2], t.s[b * 2 + 1]);
-                                            it.v = Math.max(0, Math.min(1, (m + 96) / 96));
+                                            it.tgt = Math.max(0, Math.min(1, (m + 96) / 96));
                                         }
                                         break;
                                     }
                                 });
+                            }
+                        }
+                        property int _tick: 0
+                        FrameAnimation {
+                            running: eqPanel.visible && drawer.visible
+                            onTriggered: {
+                                if ((graph._tick++ & 1) === 1) return;   // 22 Hz suffisent
+                                const dt = Math.min(frameTime * 2, 0.1);
+                                const kA = 1 - Math.exp(-dt / 0.030);
+                                const kR = 1 - Math.exp(-dt / 0.120);
+                                for (let b = 0; b < 64; b++) {
+                                    const it = fftRep.itemAt(b);
+                                    if (!it) continue;
+                                    it.v += (it.tgt - it.v) * (it.tgt > it.v ? kA : kR);
+                                }
                             }
                         }
 

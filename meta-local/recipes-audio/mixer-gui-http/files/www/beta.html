@@ -2738,17 +2738,31 @@ function eqPanel(bqs){
 
   /* FFT de la voie : tap 2 de l'analyseur pointé sur CETTE tranche
    * (entrée pour les strips IN, sortie pour les strips OUT).
-   * Nettoyé par render() (_eqCleanup) au changement d'onglet/fermeture. */
+   * Cibles à 10 Hz + ballistique 25 Hz (poser les valeurs brutes à basse
+   * cadence = saccades). Nettoyé par render() (_eqCleanup). */
   const kind=A.isOut?3:1;
   post({op:"set_tap",tap:2,kind:kind,a:A.idx,b:-1});
+  let fftT=null;
   const timer=setInterval(()=>{
     post({op:"get_meters"}).then(j=>{
       if(!j)return;
       const t=(j.analyzer||[]).find(a=>a.k===kind&&a.a===A.idx);
-      if(t&&t.s){fft=t.s;draw();}
+      if(t&&t.s)fftT=t.s;
     });
-  },200);
-  window._eqCleanup=()=>{clearInterval(timer);
+  },100);
+  const anim=setInterval(()=>{
+    if(!fftT)return;
+    if(!fft){fft=fftT.slice();draw();return;}
+    const kA=0.74,kR=0.28;   /* dt 40 ms : attaque τ30 ms, retombée τ120 ms */
+    let mv=0;
+    for(let b=0;b<fft.length;b++){
+      const d=fftT[b]-fft[b];
+      fft[b]+=d*(d>0?kA:kR);
+      mv=Math.max(mv,Math.abs(d));
+    }
+    if(mv>0.5)draw();
+  },40);
+  window._eqCleanup=()=>{clearInterval(timer);clearInterval(anim);
     post({op:"set_tap",tap:2,kind:0,a:0,b:-1});window._eqCleanup=null;};
   draw();
   return wrap;
