@@ -581,8 +581,10 @@ static int amixer_value_safe(const char *v)
 	if (!v || !*v) return 0;
 	for (const char *p = v; *p; p++) {
 		char c = *p;
+		/* '/' requis par les items d'enum TAC ("3 Biquads/Ch") —
+		 * sans lui le forçage biquads de l'EQ échouait en silence */
 		if (!(isalnum((unsigned char)c) || c == ' ' || c == '.' ||
-		      c == ',' || c == '-' || c == '_'))
+		      c == ',' || c == '-' || c == '_' || c == '/'))
 			return 0;
 	}
 	return strlen(v) < 256;
