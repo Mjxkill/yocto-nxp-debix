@@ -3207,6 +3207,7 @@ static void handle_cmd(int fd, const char *line)
 		pthread_mutex_lock(&g_st.target_lock);
 		g_st.send_target[in][bus] = gain;
 		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);   /* V13.1 : persistance sends */
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"op\":\"set_send\",\"in\":%d,\"bus\":%d,\"gain\":%.4f}\n",
 			 in, bus, gain);
@@ -5198,6 +5199,16 @@ static void save_state_to(const char *path)
 	fprintf(f, "bandmix_live %d %d\n", g_bmx.live, g_bmx.ref_valid);
 	fprintf(f, "vfocus %d %.0f %.1f\n", g_vf.on,
 		g_vf.amount * 100.0f, g_vf.max_cut_db);
+	/* V13.1 : matrice des sends par tranche (départs FX) — trouvé absent
+	 * par la campagne de validation. En FIN de fichier, une ligne par
+	 * tranche, parsé par la boucle fgets des loaders (états antérieurs
+	 * sans ces lignes = compatibles). */
+	for (int s = 0; s < N_INPUT_TOTAL; s++) {
+		fprintf(f, "sends %d", s);
+		for (int b = 0; b < N_BUS_FX_CH; b++)
+			fprintf(f, " %.4f", g_st.send_target[s][b]);
+		fprintf(f, "\n");
+	}
 	pthread_mutex_unlock(&g_st.target_lock);
 
 	fclose(f);
@@ -5317,7 +5328,7 @@ tail:
 	{
 		char bl[160];
 		int src, on, role, live, rv;
-		float thr, ratio, atk, rel, mk, shr;
+		float thr, ratio, atk, rel, mk, shr, sv[8];
 		while (fgets(bl, sizeof(bl), f)) {
 			if (sscanf(bl, "comp %d %d %f %f %f %f %f",
 				   &src, &on, &thr, &ratio, &atk, &rel,
@@ -5340,6 +5351,14 @@ tail:
 					g_vf.amount = atk / 100.0f;
 				if (rel >= 0.0f && rel <= 12.0f)
 					g_vf.max_cut_db = rel;
+			} else if (sscanf(bl, "sends %d %f %f %f %f %f %f %f %f",
+					  &src, &sv[0], &sv[1], &sv[2], &sv[3],
+					  &sv[4], &sv[5], &sv[6], &sv[7]) == 9 &&
+				   src >= 0 && src < N_INPUT_TOTAL) {
+				/* V13.1 : départs FX par tranche */
+				for (int b = 0; b < N_BUS_FX_CH && b < 8; b++)
+					if (sv[b] >= 0.0f && sv[b] <= 8.0f)
+						g_st.send_target[src][b] = sv[b];
 			}
 		}
 	}
@@ -5504,7 +5523,7 @@ static void load_mixer_state(void)
 	{
 		char bl[160];
 		int src, on, role, live, rv;
-		float thr, ratio, atk, rel, mk, shr;
+		float thr, ratio, atk, rel, mk, shr, sv[8];
 		while (fgets(bl, sizeof(bl), f)) {
 			if (sscanf(bl, "comp %d %d %f %f %f %f %f",
 				   &src, &on, &thr, &ratio, &atk, &rel,
@@ -5527,6 +5546,14 @@ static void load_mixer_state(void)
 					g_vf.amount = atk / 100.0f;
 				if (rel >= 0.0f && rel <= 12.0f)
 					g_vf.max_cut_db = rel;
+			} else if (sscanf(bl, "sends %d %f %f %f %f %f %f %f %f",
+					  &src, &sv[0], &sv[1], &sv[2], &sv[3],
+					  &sv[4], &sv[5], &sv[6], &sv[7]) == 9 &&
+				   src >= 0 && src < N_INPUT_TOTAL) {
+				/* V13.1 : départs FX par tranche */
+				for (int b = 0; b < N_BUS_FX_CH && b < 8; b++)
+					if (sv[b] >= 0.0f && sv[b] <= 8.0f)
+						g_st.send_target[src][b] = sv[b];
 			}
 		}
 	}
