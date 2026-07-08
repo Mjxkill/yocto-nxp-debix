@@ -924,8 +924,10 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 		}
 
 		if (!strcmp(url, "/api/meters")) {
-			/* E7.1 : REST polling fallback / debug curl */
-			char reply[2048];
+			/* E7.1 : REST polling fallback / debug curl.
+			 * V13.1 : 8 KB — avec les 4 taps analyzer actifs le
+			 * get_meters dépasse 2 KB → JSON tronqué (VU page SCÈNE) */
+			char reply[8192];
 			int n = mixer_request("{\"op\":\"get_meters\"}\n", reply, sizeof(reply));
 			return send_json(conn, n > 0 ? 200 : 503, reply);
 		}
