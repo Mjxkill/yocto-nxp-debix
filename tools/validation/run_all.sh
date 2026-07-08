@@ -12,7 +12,7 @@ echo "=== Backup préalable"
 ssh root@$IP 'B=/root/tests/backup_$(date +%Y%m%d_%H%M); mkdir -p $B;
   cp -a /var/lib/mixer-pro /var/lib/alsa/asound.state /var/lib/ala $B/ 2>/dev/null; echo $B'
 
-for p in p2 p3 p4 p5; do
+for p in p2 p3 p4 p5 p8_full; do
     echo "=== validate_$p"
     scp -O -q "$DIR/validate_$p.py" root@$IP:/root/tests/
     ssh root@$IP "python3 /root/tests/validate_$p.py"

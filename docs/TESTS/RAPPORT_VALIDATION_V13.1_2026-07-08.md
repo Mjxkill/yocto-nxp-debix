@@ -112,6 +112,29 @@ travail réel mix+play reste ≈ 500 µs sur le budget de 2000 µs (marge ×4).
 La mesure /proc/stat des cores isolés 2-3 (NO_HZ) est indicative. Aucune
 casse audio sous stress API, y compris le scénario combiné.
 
+## P8 — TOUT ACTIVÉ (60 s, ajouté à la demande)
+
+Simultanément : **gates ON ×16 + comps ON ×16 + EQ TAC 3 bandes ×8 mics
+(24 blobs) + automix Dugan 8 membres + voix devant + bandmix live +
+mastering + 4 taps FFT + looper 6 pistes en lecture + sampler 0,8 s +
+4 clients GUI get_meters 10 Hz** :
+
+| Fenêtre | cpu0 | cpu1 | cpu2 | cpu3 |
+|---|---|---|---|---|
+| 0-20 s | 81 % | 61 % | 5 % | 13 % |
+| 20-40 s | 81 % | 62 % | 27 % | 14 % |
+| 40-60 s | 82 % | 62 % | 33 % | 14 % |
+
+- **xrun Δ = 0, drops Δ = 0** sur les 60 s.
+- prof audio : cap 1461 µs (attente) + **mix 513 µs** + play 12 µs —
+  tout le traitement additionnel (gates+comps+automix+vfocus+looper+
+  sampler) ne coûte que **~60 µs de plus** que l'idle (452 µs). Marge
+  restante ≈ ×3,8 sur le budget 2 ms.
+- Restauration intégrale vérifiée : 16 gates, 16 comps, 24 blobs EQ
+  (comparaison octet à octet), automix/vfocus/taps/looper/sampler.
+
+Script : `tools/validation/validate_p8_full.py`.
+
 ## P6 — Reboot (×2)
 
 - Reboot 1 : services ✓, scènes ✓, mixer_state (sends incl.) ✓, xrun 0…

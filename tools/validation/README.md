@@ -21,6 +21,7 @@ test utilise le slot 5 (libéré ensuite).
 | `validate_p3.py` | P3 | persistance restart mixer-pro + scène complète slot 5 |
 | `validate_p4.py` | P4 | sampler, looper, midix, automix, bandmix, taps, larsen, routes HTTP |
 | `validate_p5.py` | P5 | CPU/xrun par scénario de charge (tableau) |
+| `validate_p8_full.py` | P8 | TOUT ACTIVÉ 60 s : gates+comps ×16, EQ ×24, automix, vfocus, looper ×6, sampler, 4 pollers — restauration intégrale vérifiée |
 | `soak.py` | — | endurance : CSV 1 échantillon/min + burst stress/10 min (`nohup python3 soak.py &` sur la carte) |
 
 ## P6 (reboot) — manuel
