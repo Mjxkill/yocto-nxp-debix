@@ -91,7 +91,7 @@ MASTERING) ; `set_automix` = adhésion par tranche, enable global =
 - **Bandmix** : status, refus propre de measure sans src, cancel OK.
 - **Taps** : 4 taps simultanés actifs et cohérents, libération + retour
   du tap 3 master.
-- **Anti-larsen** : GET status OK (toggle testé côté SCÈNE par l'utilisateur).
+- **Anti-larsen** : GET status OK (`enable` + notches actifs).
 - Routes HTTP : /api/state, /api/sysload, /api/meters (après fix), /api/drift.
 
 ## P5 — Charge CPU / xrun par action
@@ -157,7 +157,5 @@ Ce que l'automatisation ne peut PAS vérifier depuis le PC :
 - Boost > 0 dB impossible dans les biquads TAC (format Q1.31) — option
   EQ logiciel mixer-pro si besoin.
 - Slot shift SAI RX au boot (workaround restart) — sprint SOF dédié.
-- `/api/larsen` : le champ enabled n'est pas exposé en GET (toggle testé
-  via GUI uniquement).
 - tar hôte Ubuntu cassé pour pseudo — workaround en place (voir mémoire
   `host_tar_pseudo_fix`), à refaire si `tmp/` est réinitialisé.

@@ -261,7 +261,7 @@ champs optionnels font des **updates partiels** (champ absent = inchangé).
 
 | Fichier | Contenu | Écrit par |
 |---|---|---|
-| `/var/lib/mixer-pro/mixer_state` | état complet : version, insert spec, assistant, automix (cfg+membres+poids), mute_mask, input_gains[26], fx_bus[8], master[26×18], expander[16], comp[16], bandmix (rôles+réf+live), vfocus | persistence_thread (dirty, 1 s) + shutdown |
+| `/var/lib/mixer-pro/mixer_state` | état complet : version, insert spec, assistant, automix (cfg+membres+poids), mute_mask, input_gains[26], fx_bus[8], master[26×18], expander[16], comp[16], bandmix (rôles+réf+live), vfocus, sends[26×8] (V13.1) | persistence_thread (dirty, 1 s) + shutdown |
 | `/var/lib/mixer-pro/scenes/sceneN{,.name,.d/}` | profils (même format + TAC/blobs/synthé dans `.d/`) | scene_save / gui-http |
 | presets / mic_map / out_gain | fichiers dédiés V9.5.21 | idem |
 | `/var/lib/mixer-pro/dsp-blobs/*.hex` | blobs BYTES DSP (miroir des écritures GUI) | gui-http |
@@ -272,6 +272,26 @@ champs optionnels font des **updates partiels** (champ absent = inchangé).
 boucle à compte exact DOIT commencer par `" "` (skip d'espace), et les
 mots-clés à préfixe commun se parsent en `fgets`+`sscanf` (le littéral
 `"bandmix"` avale le début de `"bandmix_live"`).
+
+### Pièges d'API (campagne de validation 2026-07-08)
+
+- **Gains linéaires partout** : `set_input_gain {"gain":0.5}`,
+  `set_send {"gain":0.1}`, `set_master {"gain":...}` ;
+  `get_output_gain` renvoie `gains` en millièmes (1000 = unité) mais
+  `set_output_gain` prend `{"db":-6.0}`.
+- `set_insert_bypass` prend `{"on":1}` (sémantique bouton MASTERING :
+  on=1 → chaîne active, bypass=0).
+- `set_automix` = adhésion **par tranche** (`src` requis) ;
+  l'enable global est `set_automix_cfg {"on":1}`.
+- Looper : la fin d'un enregistrement = action **`play`** sur la piste
+  (fige la longueur ; piste maîtresse = définit `master_len`).
+- `bandmix_measure` exige `src` et lance une mesure 12 s
+  (`src:-1` = annuler).
+- **Numérotation des cartes ALSA instable au boot** (softac5212tdm vue
+  carte 4 puis 5) : toujours `-c softac5212tdm`, jamais un index.
+- Au boot, le restore ALSA de la carte TAC peut échouer (carte/DSP pas
+  prêts) : `ala-fx-restore.sh` fait retry + **vérification témoin** et
+  garde une copie `asound.state.boot` (V13.1).
 
 ---
 

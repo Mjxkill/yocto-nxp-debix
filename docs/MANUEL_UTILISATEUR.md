@@ -238,10 +238,32 @@ Depuis la page MIXER, **tap sur le nom d'une tranche** :
 - **Onglet GATE** : l'expandeur/noise gate de la voie — interrupteur,
   **barre de réduction en temps réel**, seuil/ratio/attack/release/
   range/hold. C'est l'outil « toms de batterie » et « micros ouverts » ;
-- **Onglets TAC** (voies micro) : volumes, biquads programmables
-  (égaliseur paramétrique avec éditeur), AGC/HPF du préampli ;
+- **Onglet TAC BIQUADS** : l'égaliseur paramétrique (ci-dessous) ;
+- **Onglets TAC** (voies micro) : volumes, AGC/HPF du préampli ;
 - **Onglets CHAÎNE DSP** : compresseur DRC et multibande **par canal** ;
 - **ROUTAGE + SENDS** : le routage rapide de la tranche.
+
+### L'égaliseur paramétrique (onglet TAC BIQUADS)
+
+![Égaliseur paramétrique](img/page_eq_parametrique.png)
+
+Un EQ « comme sur une console pro », qui pilote les biquads matériels du
+préampli TAC :
+
+- **La courbe de réponse** (20 Hz – 20 kHz) : attrape une **poignée
+  numérotée** et déplace-la — horizontal = fréquence, vertical = gain
+  (ou largeur Q pour les types sans gain). À la souris, la **molette
+  règle le Q**. Attraper une poignée éteinte active la bande en Peak.
+- **La FFT de la voie** s'affiche en vert derrière la courbe : tu vois
+  en direct l'effet de ton réglage sur le spectre réel du micro.
+- **Une ligne par bande** : ON/OFF, type de filtre (Peak, LowShelf,
+  HighShelf, passe-haut/bas, Notch…), champs **F / G / Q** synchronisés
+  avec la courbe.
+- 3 bandes par voie d'entrée (limite matérielle du TAC). Sur les
+  **sorties**, 1 bande utilisateur (les deux autres appartiennent à
+  l'anti-larsen). Les atténuations sont fidèles ; les boosts sont
+  plafonnés par le format interne du codec.
+- « BIQUADS BRUTS » (replié) : accès expert aux 12 blobs hexadécimaux.
 
 ---
 
