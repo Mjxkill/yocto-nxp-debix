@@ -10,15 +10,41 @@
 #   courant (utilisé par POST /api/scene/recall).
 set -u
 BLOB_DIR=/var/lib/mixer-pro/dsp-blobs
+STATE=/var/lib/alsa/asound.state
+CARD=softac5212tdm
+WITNESS="TAC0 ADC Biquad Config"
+
+# V13.1 (campagne de validation P6) : au boot le restore udev échoue
+# (exit 99, carte/DSP pas prêts) et un restore unique silencieux peut
+# échouer aussi ; ensuite le store débouncé de gui-http ÉCRASE
+# asound.state avec l'état post-tac-reset → config TAC perdue à jamais.
+# → copie de sûreté + retry avec VÉRIFICATION sur un contrôle témoin.
+verify_witness() {
+    want=$(sed -n "/name '$WITNESS'/,/}/{s/.*value '\(.*\)'/\1/p;}" "$STATE" | head -1)
+    [ -n "$want" ] || return 0        # témoin absent du state → pas de vérif
+    out=$(amixer -c "$CARD" cget "iface=MIXER,name='$WITNESS'" 2>/dev/null)
+    got=$(echo "$out" | sed -n 's/^ *: values=\([0-9]*\).*/\1/p')
+    idx=$(echo "$out" | sed -n "s|.*Item #\([0-9]*\) '$want'.*|\1|p")
+    [ -n "$got" ] && [ "$got" = "$idx" ]
+}
 
 if [ $# -ge 1 ] && [ -d "$1" ]; then
     SCN="$1"
     if [ -f "$SCN/asound.state" ]; then
-        alsactl restore -f "$SCN/asound.state" 2>/dev/null || true
+        alsactl restore -f "$SCN/asound.state" 2>&1 | grep -vi ucm || true
     fi
     [ -d "$SCN/dsp-blobs" ] && BLOB_DIR="$SCN/dsp-blobs"
 else
-    alsactl restore 2>/dev/null || true
+    [ -f "$STATE" ] && cp "$STATE" "$STATE.boot"
+    i=0
+    while [ $i -lt 5 ]; do
+        alsactl restore 2>&1 | grep -vi ucm || true
+        verify_witness && { echo "fx-restore: alsactl vérifié (essai $((i+1)))"; break; }
+        i=$((i+1))
+        echo "fx-restore: vérif témoin KO, retry $i/5"
+        sleep 2
+    done
+    [ $i -ge 5 ] && echo "fx-restore: ECHEC restore TAC après 5 essais (état sûr: $STATE.boot)"
 fi
 
 [ -d "$BLOB_DIR" ] || exit 0
