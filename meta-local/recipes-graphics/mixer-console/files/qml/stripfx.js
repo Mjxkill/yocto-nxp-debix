@@ -154,6 +154,44 @@ function rbjBlob(type, fHz, q, gainDb, fs) {
     return out;
 }
 
+/* V13-EQ : coefficients normalisés (float) d'une bande pour tracer |H(f)| —
+ * mêmes formules RBJ que rbjBlob, sans la quantification Q1.31 du TAC. */
+function bqCoeffs(p) {
+    const fs = 48000, f = Math.max(20, Math.min(p.fHz, 22000)),
+          q = Math.max(0.1, Math.min(p.q, 16)),
+          g = Math.max(-24, Math.min(p.gainDb || 0, 24));
+    const w0 = 2 * Math.PI * f / fs, cw = Math.cos(w0), sw = Math.sin(w0), al = sw / (2 * q);
+    const A = Math.pow(10, g / 40), be = Math.sqrt(A) / q;
+    let b0, b1, b2, a0, a1, a2;
+    switch (+p.type | 0) {
+    case 1: b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = (1 - cw) / 2; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break;
+    case 2: b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = (1 + cw) / 2; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break;
+    case 3: b0 = al; b1 = 0; b2 = -al; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break;
+    case 4: b0 = 1; b1 = -2 * cw; b2 = 1; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break;
+    case 5: b0 = 1 + al * A; b1 = -2 * cw; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * cw; a2 = 1 - al / A; break;
+    case 6: b0 = A * ((A + 1) - (A - 1) * cw + be * sw); b1 = 2 * A * ((A - 1) - (A + 1) * cw);
+        b2 = A * ((A + 1) - (A - 1) * cw - be * sw); a0 = (A + 1) + (A - 1) * cw + be * sw;
+        a1 = -2 * ((A - 1) + (A + 1) * cw); a2 = (A + 1) + (A - 1) * cw - be * sw; break;
+    case 7: b0 = A * ((A + 1) + (A - 1) * cw + be * sw); b1 = -2 * A * ((A - 1) + (A + 1) * cw);
+        b2 = A * ((A + 1) + (A - 1) * cw - be * sw); a0 = (A + 1) - (A - 1) * cw + be * sw;
+        a1 = 2 * ((A - 1) - (A + 1) * cw); a2 = (A + 1) - (A - 1) * cw - be * sw; break;
+    case 8: b0 = 1 - al; b1 = -2 * cw; b2 = 1 + al; a0 = 1 + al; a1 = -2 * cw; a2 = 1 - al; break;
+    default: return null;
+    }
+    return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 };
+}
+function bqMagDb(c, f) {
+    const w = 2 * Math.PI * f / 48000, cw = Math.cos(w), c2 = Math.cos(2 * w),
+          sw = Math.sin(w), s2 = Math.sin(2 * w);
+    const nr = c.b0 + c.b1 * cw + c.b2 * c2, ni = -(c.b1 * sw + c.b2 * s2);
+    const dr = 1 + c.a1 * cw + c.a2 * c2, di = -(c.a1 * sw + c.a2 * s2);
+    return 10 * Math.log10(((nr * nr + ni * ni) + 1e-20) / ((dr * dr + di * di) + 1e-20));
+}
+function bqIdx(name) {
+    const m = (name || "").match(/BQ(\d+) Coefs$/);
+    return m ? +m[1] : 0;
+}
+
 // ============ blobs DRC / MULTIBAND (hex ↔ objets) ============
 var DRC_PARAMS_SIZE = 88, DRC_CFG_HDR = 20, MBDRC_HDR = 324, ABI_HDR = 32;
 function q24f(v) { return v / (1 << 24); }

@@ -453,10 +453,13 @@ Item {
                 Row {
                     anchors.horizontalCenter: parent.horizontalCenter
                     spacing: 6
+                    // le modelData du Repeater interne (int) masque celui de
+                    // la rangée (string) → on capture la rangée ici
+                    property string rowStr: modelData
                     Repeater {
-                        model: modelData.length
+                        model: rowStr.length
                         Rectangle {
-                            property string ch: modelData.charAt(index)
+                            property string ch: rowStr.charAt(index)
                             width: 62; height: 52; radius: 6
                             color: "#1b2126"; border.color: "#39434b"
                             Text { anchors.centerIn: parent; text: parent.ch

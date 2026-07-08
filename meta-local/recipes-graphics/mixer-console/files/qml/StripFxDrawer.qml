@@ -18,6 +18,7 @@ Rectangle {
     property string tab: ""
     property var blobs: ({})
     property var bqParams: ({})
+    property bool showRawBq: false
     property string status: ""
 
     function chanName() {
@@ -27,7 +28,8 @@ Rectangle {
     }
 
     function open(idx, out) {
-        chanIdx = idx; isOut = out; tab = ""; blobs = {}; status = "Lecture des contrôles ALSA…";
+        chanIdx = idx; isOut = out; tab = ""; blobs = {}; showRawBq = false;
+        status = "Lecture des contrôles ALSA…";
         visible = true;
         groups = [];
         xhr("GET", "/api/alsa/contents", null, function(txt) {
@@ -347,11 +349,386 @@ Rectangle {
                     }
                 }
 
+                // ============ V13-EQ : ÉGALISEUR PARAMÉTRIQUE (onglet TAC BIQUADS) ============
+                // Courbe de réponse interactive + FFT de la voie en fond.
+                // FFT = 64 barres scenegraph maj 5 Hz (leçon N1 : pas de
+                // repaint Canvas plein cadre par frame) ; la courbe n'est
+                // repeinte QUE sur changement de paramètre.
+                Column {
+                    id: eqPanel
+                    width: bodyCol.width
+                    spacing: 8
+                    visible: {
+                        const g = drawer.activeGroup();
+                        drawer.tab;   // dépendance
+                        return g !== null && g.biquads === true;
+                    }
+
+                    property var bands: []     // [{ctl, color}] BQ vivants du canal
+                    property int dragIdx: -1
+                    property var pendWrite: ({})
+
+                    onVisibleChanged: {
+                        if (visible) { rebuildBands(); tapSet(true); }
+                        else { dragIdx = -1; tapSet(false); }
+                    }
+                    /* FFT : tap 2 de l'analyseur sur CETTE voie (INPUT en
+                     * entrée, OUTPUT en sortie), libéré à la fermeture */
+                    function tapSet(on) {
+                        mixer.call({ op: "set_tap", tap: 2,
+                                     kind: on ? (drawer.isOut ? 3 : 1) : 0,
+                                     a: on ? drawer.chanIdx : 0, b: -1 },
+                                   function() {});
+                    }
+                    /* mapping matériel TAC5212 : CH1=BQ1/5/9, CH2=BQ2/6/10.
+                     * Côté DAC (sorties) l'anti-larsen possède BQ5/9 et
+                     * BQ6/10 → une seule bande utilisateur (BQ1/BQ2). */
+                    function rebuildBands() {
+                        const g = drawer.activeGroup();
+                        if (!g || !g.biquads) { bands = []; return; }
+                        const ch = drawer.chanIdx % 2;
+                        const idxs = drawer.isOut ? (ch === 0 ? [1] : [2])
+                                     : (ch === 0 ? [1, 5, 9] : [2, 6, 10]);
+                        const cols = ["#e5a13c", "#4cc470", "#5aa9e6"];
+                        const out = [];
+                        for (let i = 0; i < idxs.length; i++) {
+                            let found = null;
+                            for (const c of g.controls)
+                                if (FX.bqIdx(c.fullName) === idxs[i]) { found = c; break; }
+                            if (found) out.push({ ctl: found, color: cols[i] });
+                        }
+                        bands = out;
+                        curve.requestPaint();
+                    }
+                    function bp(i) {
+                        return drawer.bqParams[bands[i].ctl.fullName]
+                               || { type: 0, fHz: 1000, q: 0.707, gainDb: 0 };
+                    }
+                    function setBand(i, partial) {
+                        const name = bands[i].ctl.fullName;
+                        const cur = Object.assign({}, bp(i), partial);
+                        const all = drawer.bqParams;
+                        all[name] = cur;
+                        drawer.bqParams = all;      // notifie les bindings
+                        const pw = pendWrite;
+                        pw[name] = { ctl: bands[i].ctl, p: cur };
+                        pendWrite = pw;
+                        writeTimer.restart();
+                        curve.requestPaint();
+                    }
+                    Timer {
+                        id: writeTimer
+                        interval: 60
+                        onTriggered: {
+                            for (const n in eqPanel.pendWrite) {
+                                const w = eqPanel.pendWrite[n];
+                                drawer.setAlsa(w.ctl, FX.rbjBlob(w.p.type, w.p.fHz,
+                                    w.p.q, w.p.gainDb, 48000).join(","));
+                            }
+                            eqPanel.pendWrite = {};
+                        }
+                    }
+                    /* le TAC n'insère que 'N Biquads/Ch' dans le chemin :
+                     * '3 Biquads/Ch' requis pour BQ5/9 (resp. 6/10) — même
+                     * forçage que le daemon anti-larsen côté DAC. Appliqué
+                     * à la 1ʳᵉ activation d'une bande, pas au simple
+                     * affichage. */
+                    function ensure3() {
+                        const nm = "TAC" + Math.floor(drawer.chanIdx / 2)
+                                 + (drawer.isOut ? " DAC" : " ADC") + " Biquad Config";
+                        const cfg = drawer.controls[nm];
+                        if (!cfg) return;
+                        const cur = String(cfg.value || "").replace(/'/g, "");
+                        if (cur === "3" || cur.indexOf("3 Biquads") >= 0) return;
+                        drawer.setAlsa(cfg, "3 Biquads/Ch");
+                        cfg.value = "3";
+                    }
+                    function xOf(f, W) { return W * Math.log(Math.max(20, f) / 20) / Math.log(1000); }
+                    function fOf(x, W) { return 20 * Math.pow(1000, Math.max(0, Math.min(1, x / W))); }
+                    function yOf(db, H) { return H / 2 - db * (H / 2) / 18; }
+                    function dbOfY(y, H) { return (H / 2 - y) * 18 / (H / 2); }
+                    function gainY(p) { return [5, 6, 7].indexOf(p.type) >= 0
+                                        ? Math.max(-18, Math.min(18, p.gainDb)) : 0; }
+
+                    Text {
+                        text: drawer.isOut
+                              ? "ÉGALISEUR PARAMÉTRIQUE — 1 biquad TAC (BQ5/9 réservés anti-larsen) · drag : fréquence/gain"
+                              : "ÉGALISEUR PARAMÉTRIQUE — 3 biquads TAC du canal · drag : fréquence/gain"
+                        color: "#e5a13c"; font.pixelSize: 11; font.bold: true
+                        font.letterSpacing: 2
+                    }
+
+                    // ---- zone graphique : FFT (barres) + courbe (Canvas) + poignées ----
+                    Item {
+                        id: graph
+                        width: bodyCol.width
+                        height: 270
+
+                        Rectangle {
+                            anchors.fill: parent
+                            color: "#0b0e11"; border.color: "#22282e"; radius: 6
+                        }
+
+                        // FFT de la voie : 64 barres, cibles posées à 5 Hz
+                        Row {
+                            id: fftRow
+                            anchors.fill: parent
+                            anchors.margins: 3
+                            spacing: 1
+                            Repeater {
+                                id: fftRep
+                                model: 64
+                                Item {
+                                    width: (fftRow.width - 63) / 64
+                                    height: fftRow.height
+                                    property real v: 0
+                                    Rectangle {
+                                        anchors.bottom: parent.bottom
+                                        width: parent.width
+                                        height: parent.height * parent.v
+                                        color: "#17402a"
+                                    }
+                                }
+                            }
+                        }
+                        Timer {
+                            interval: 200; repeat: true
+                            running: eqPanel.visible && drawer.visible
+                            onTriggered: {
+                                mixer.call({ op: "get_meters" }, function(r) {
+                                    if (!r || !r.analyzer) return;
+                                    const kind = drawer.isOut ? 3 : 1;
+                                    for (const t of r.analyzer) {
+                                        if (t.k !== kind || t.a !== drawer.chanIdx || !t.s)
+                                            continue;
+                                        for (let b = 0; b < 64; b++) {
+                                            const it = fftRep.itemAt(b);
+                                            if (!it) continue;
+                                            const m = Math.max(t.s[b * 2], t.s[b * 2 + 1]);
+                                            it.v = Math.max(0, Math.min(1, (m + 96) / 96));
+                                        }
+                                        break;
+                                    }
+                                });
+                            }
+                        }
+
+                        Canvas {
+                            id: curve
+                            anchors.fill: parent
+                            onPaint: {
+                                const ctx = getContext("2d");
+                                ctx.reset();
+                                const W = width, H = height;
+                                ctx.font = "9px monospace";
+                                ctx.lineWidth = 1;
+                                for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+                                    const x = eqPanel.xOf(f, W);
+                                    ctx.strokeStyle = "#1b2126";
+                                    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+                                    ctx.fillStyle = "#5c666e";
+                                    ctx.fillText(f >= 1000 ? (f / 1000) + "k" : "" + f, x + 3, H - 5);
+                                }
+                                for (const db of [-12, -6, 0, 6, 12]) {
+                                    const y = eqPanel.yOf(db, H);
+                                    ctx.strokeStyle = db === 0 ? "#2c343c" : "#1b2126";
+                                    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+                                    ctx.fillStyle = "#5c666e";
+                                    ctx.fillText((db > 0 ? "+" : "") + db, W - 26, y - 3);
+                                }
+                                const N = 160, sum = new Array(N).fill(0);
+                                for (let i = 0; i < eqPanel.bands.length; i++) {
+                                    const p = eqPanel.bp(i);
+                                    if (p.type === 0) continue;
+                                    const co = FX.bqCoeffs(p);
+                                    if (!co) continue;
+                                    ctx.beginPath();
+                                    for (let k = 0; k < N; k++) {
+                                        const db = FX.bqMagDb(co, eqPanel.fOf(k * W / (N - 1), W));
+                                        sum[k] += db;
+                                        const y = eqPanel.yOf(Math.max(-18, Math.min(18, db)), H);
+                                        if (k) ctx.lineTo(k * W / (N - 1), y); else ctx.moveTo(0, y);
+                                    }
+                                    ctx.lineWidth = 1.2;
+                                    ctx.globalAlpha = 0.35;
+                                    ctx.strokeStyle = eqPanel.bands[i].color;
+                                    ctx.stroke();
+                                    ctx.globalAlpha = 1;
+                                }
+                                ctx.beginPath();
+                                for (let k = 0; k < N; k++) {
+                                    const y = eqPanel.yOf(Math.max(-18, Math.min(18, sum[k])), H);
+                                    if (k) ctx.lineTo(k * W / (N - 1), y); else ctx.moveTo(0, y);
+                                }
+                                ctx.lineWidth = 2.5;
+                                ctx.strokeStyle = "#e5a13c";
+                                ctx.stroke();
+                            }
+                        }
+
+                        // poignées (bindings sur drawer.bqParams : réassigné à chaque setBand)
+                        Repeater {
+                            model: eqPanel.bands
+                            Rectangle {
+                                property var p: { drawer.bqParams; return eqPanel.bp(index); }
+                                width: 30; height: 30; radius: 15
+                                x: eqPanel.xOf(p.fHz, graph.width) - 15
+                                y: eqPanel.yOf(eqPanel.gainY(p), graph.height) - 15
+                                color: p.type !== 0 ? modelData.color : "#14181c"
+                                border.color: modelData.color; border.width: 2
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: index + 1
+                                    color: p.type !== 0 ? "#0b0e11" : modelData.color
+                                    font.pixelSize: 13; font.bold: true
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            preventStealing: true
+                            onPressed: (e) => {
+                                let best = -1, bd = 44;
+                                for (let i = 0; i < eqPanel.bands.length; i++) {
+                                    const p = eqPanel.bp(i);
+                                    const d = Math.hypot(
+                                        e.x - eqPanel.xOf(p.fHz, width),
+                                        e.y - eqPanel.yOf(eqPanel.gainY(p), height));
+                                    if (d < bd) { bd = d; best = i; }
+                                }
+                                eqPanel.dragIdx = best;
+                            }
+                            onReleased: eqPanel.dragIdx = -1
+                            onCanceled: eqPanel.dragIdx = -1
+                            onPositionChanged: (e) => {
+                                if (!pressed || eqPanel.dragIdx < 0) return;
+                                const i = eqPanel.dragIdx, p = eqPanel.bp(i);
+                                const upd = { fHz: Math.round(eqPanel.fOf(e.x, width)) };
+                                if (p.type === 0) { upd.type = 5; eqPanel.ensure3(); }
+                                const t = upd.type !== undefined ? upd.type : p.type;
+                                if ([5, 6, 7].indexOf(t) >= 0)
+                                    upd.gainDb = Math.round(Math.max(-18, Math.min(18,
+                                        eqPanel.dbOfY(e.y, height))) * 10) / 10;
+                                else
+                                    upd.q = Math.round(Math.max(0.1, Math.min(10,
+                                        (height - e.y) / height * 10)) * 100) / 100;
+                                eqPanel.setBand(i, upd);
+                            }
+                        }
+                    }
+
+                    // ---- une ligne de réglages par bande ----
+                    Repeater {
+                        model: eqPanel.bands
+                        Row {
+                            spacing: 14
+                            height: 84
+                            property var p: { drawer.bqParams; return eqPanel.bp(index); }
+                            onPChanged: {
+                                if (!fk.interacting) fk.value = p.fHz;
+                                if (!gk.interacting) gk.value = p.gainDb;
+                                if (!qk.interacting) qk.value = p.q;
+                            }
+                            Rectangle {
+                                width: 14; height: 14; radius: 7
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: modelData.color
+                            }
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 74; height: 30; radius: 15
+                                color: p.type !== 0 ? "#2a2214" : "#1b2126"
+                                border.color: p.type !== 0 ? modelData.color : "#39434b"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: p.type !== 0 ? "ON" : "OFF"
+                                    color: p.type !== 0 ? modelData.color : "#5c666e"
+                                    font.pixelSize: 11; font.bold: true
+                                }
+                                TapHandler {
+                                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                                    onTapped: {
+                                        if (p.type === 0) eqPanel.ensure3();
+                                        eqPanel.setBand(index, {
+                                            type: p.type === 0 ? (p.lastType || 5) : 0,
+                                            lastType: p.type !== 0 ? p.type : (p.lastType || 5)
+                                        });
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 120; height: 30; radius: 4
+                                color: "#1b2126"; border.color: "#39434b"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: FX.BIQUAD_TYPES[p.type]
+                                    color: "#e9e5da"; font.pixelSize: 11
+                                }
+                                TapHandler {
+                                    onTapped: {
+                                        const t = (p.type + 1) % FX.BIQUAD_TYPES.length;
+                                        if (t !== 0) eqPanel.ensure3();
+                                        eqPanel.setBand(index, { type: t });
+                                    }
+                                }
+                            }
+                            Knob {
+                                id: fk
+                                anchors.verticalCenter: parent.verticalCenter
+                                from: 20; to: 20000; unit: "Hz"; logScale: true
+                                Component.onCompleted: value = p.fHz
+                                onMoved: (v) => eqPanel.setBand(index, { fHz: Math.round(v) })
+                            }
+                            Knob {
+                                id: gk
+                                anchors.verticalCenter: parent.verticalCenter
+                                from: -18; to: 18; unit: "dB"
+                                Component.onCompleted: value = p.gainDb
+                                onMoved: (v) => eqPanel.setBand(index,
+                                    { gainDb: Math.round(v * 10) / 10 })
+                            }
+                            Knob {
+                                id: qk
+                                anchors.verticalCenter: parent.verticalCenter
+                                from: 0.1; to: 16; unit: "Q"
+                                Component.onCompleted: value = p.q
+                                onMoved: (v) => eqPanel.setBand(index,
+                                    { q: Math.round(v * 100) / 100 })
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "BQ" + FX.bqIdx(modelData.ctl.fullName)
+                                color: "#5c666e"; font.pixelSize: 10
+                            }
+                        }
+                    }
+
+                    // accès expert aux 12 blobs bruts
+                    Rectangle {
+                        width: 260; height: 28; radius: 4
+                        color: drawer.showRawBq ? "#2a2214" : "#1b2126"
+                        border.color: drawer.showRawBq ? "#e5a13c" : "#39434b"
+                        Text {
+                            anchors.centerIn: parent
+                            text: (drawer.showRawBq ? "▾" : "▸") + " BIQUADS BRUTS (12 filtres RBJ)"
+                            color: drawer.showRawBq ? "#e5a13c" : "#8b959d"
+                            font.pixelSize: 10; font.bold: true
+                        }
+                        TapHandler { onTapped: drawer.showRawBq = !drawer.showRawBq }
+                    }
+                }
+
                 Repeater {
                     model: {
                         const g = drawer.activeGroup();
                         drawer.tab;   // dépendance
-                        return g ? g.controls : [];
+                        if (!g) return [];
+                        /* V13-EQ : sur l'onglet biquads, les 12 blobs bruts
+                         * ne s'affichent que via le bouton BIQUADS BRUTS */
+                        if (g.biquads === true && !drawer.showRawBq) return [];
+                        return g.controls;
                     }
                     delegate: Loader {
                         width: bodyCol.width

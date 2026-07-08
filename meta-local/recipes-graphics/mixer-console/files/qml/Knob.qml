@@ -9,7 +9,25 @@ Item {
     property string unit: "dB"
     property string label: ""
     property bool interacting: false
+    // V13-EQ : échelle logarithmique (fréquences) — drag et arc en log,
+    // affichage compact "1.2k". from/to doivent être > 0.
+    property bool logScale: false
     signal moved(real v)
+
+    function norm(v) {
+        return logScale ? Math.log(v / from) / Math.log(to / from)
+                        : (v - from) / (to - from);
+    }
+    function deNorm(n) {
+        n = Math.max(0, Math.min(1, n));
+        return logScale ? from * Math.pow(to / from, n) : from + n * (to - from);
+    }
+    function fmt(v) {
+        if (logScale && unit === "Hz")
+            return v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 1 : 2) + " kHz"
+                             : Math.round(v) + " Hz";
+        return v.toFixed(1) + (unit.length ? " " + unit : "");
+    }
 
     width: 50
     height: 74
@@ -22,7 +40,7 @@ Item {
         onPaint: {
             const ctx = getContext("2d");
             const c = width / 2, r = c - 3;
-            const n = (knob.value - knob.from) / (knob.to - knob.from);
+            const n = knob.norm(knob.value);
             const a0 = -Math.PI * 0.75 - Math.PI / 2;
             const a1 = a0 + n * Math.PI * 1.5;
             ctx.reset();
@@ -60,7 +78,7 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: cv.bottom
         anchors.topMargin: 1
-        text: knob.value.toFixed(1) + (knob.unit.length ? " " + knob.unit : "")
+        text: knob.fmt(knob.value)
         color: "#8b959d"
         font.pixelSize: 10
         font.family: "monospace"
@@ -76,8 +94,13 @@ Item {
         onReleased: knob.interacting = false
         onCanceled: knob.interacting = false
         onPositionChanged: (e) => {
-            const span = knob.to - knob.from;
-            let v = v0 + (y0 - e.y) * span / 200.0;
+            let v;
+            if (knob.logScale) {
+                v = knob.deNorm(knob.norm(v0) + (y0 - e.y) / 200.0);
+            } else {
+                const span = knob.to - knob.from;
+                v = v0 + (y0 - e.y) * span / 200.0;
+            }
             v = Math.max(knob.from, Math.min(knob.to, v));
             knob.value = v;
             knob.moved(v);
