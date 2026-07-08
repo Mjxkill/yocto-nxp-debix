@@ -43,6 +43,9 @@ body{
   border-radius:10px;
   box-shadow:0 24px 70px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.05);
   display:grid;
+  /* V13 fix largeur : piste contrainte a 1280 — sinon la colonne auto
+   * suit le max-content du navbar (10 onglets) et TOUT deborde a droite */
+  grid-template-columns:minmax(0,1fr);
   grid-template-rows:60px 1fr 50px;
   overflow:hidden;
   transform-origin:top center;
@@ -203,12 +206,13 @@ body{
 
 /* ===== barre basse ===== */
 #navbar{
+  min-width:0;
   display:flex;align-items:center;gap:4px;padding:0 10px;
   border-top:1px solid var(--line);
   background:linear-gradient(0deg,#1d2329,#171c21);
 }
 .tab{
-  padding:9px 20px;border-radius:5px;font-size:12px;font-weight:600;letter-spacing:.18em;
+  padding:9px 11px;border-radius:5px;font-size:11px;font-weight:600;letter-spacing:.12em;white-space:nowrap;
   color:var(--mut);cursor:pointer;border:1px solid transparent;
 }
 .tab:focus-visible{outline:2px solid var(--accent);}
@@ -224,8 +228,13 @@ body{
 .scene b{color:var(--text);font-weight:500;}
 
 /* ===== page EFFETS ===== */
-#pages{position:relative;min-height:0;display:grid;}
-#pages>.page{grid-area:1/1;min-height:0;}
+/* V13 fix : piste UNIQUE contrainte à la largeur du châssis — sans
+ * template, la piste auto prenait le max-content de la page la plus
+ * large (PADS/LOOPER/SCÈNE…) et tout débordait à droite. */
+#pages{position:relative;min-height:0;display:grid;
+       grid-template-columns:minmax(0,1fr);
+       width:100%;min-width:0;overflow:hidden;}
+#pages>.page{grid-area:1/1;min-height:0;min-width:0;max-width:100%;}
 .page.hid{display:none !important;}
 #fxpage{display:grid;grid-template-columns:196px 1fr;min-height:0;}
 #fxbrowse{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;}
@@ -550,7 +559,7 @@ body{
       <button class="wbtn" id="padreload">RECHARGER</button>
       <button class="wbtn warn" id="padstopall">STOP ALL</button>
     </div>
-    <div id="padgrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;"></div>
+    <div id="padgrid" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;"></div>
     <div style="font-size:9px;color:var(--mut);">TAP = lecture (re-tap = relance) · niveau/routage sur les tranches P1/P2 du MIXER</div>
   </div>
 
@@ -642,7 +651,7 @@ body{
             <div id="scnvur" style="height:100%;width:0;background:#4cc470;"></div></div></div>
       </div>
     </div>
-    <div id="scnbtns" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;"></div>
+    <div id="scnbtns" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;"></div>
     <div style="font-size:9px;color:var(--mut);letter-spacing:1px;">
       PROFILS · SAUVER fige toute la table — RAPPEL bascule instantanément</div>
     <div id="scnslots" style="display:flex;flex-direction:column;gap:7px;"></div>
@@ -981,6 +990,25 @@ document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
     document.querySelectorAll(".tab").forEach(t=>
       t.classList.toggle("on",rmap[t.textContent.trim()]===want));
   }
+}
+/* diag géométrie : ?geo=1 → panneau des largeurs réelles (debug layout) */
+if(new URLSearchParams(location.search).get("geo")){
+  setTimeout(()=>{
+    const lines=[];
+    let e=document.getElementById("pages");
+    while(e&&e!==document.body){
+      lines.push(`↑ ${e.tagName}#${e.id||"-"} ow=${e.offsetWidth} cs.w=${getComputedStyle(e).width} disp=${getComputedStyle(e).display}`);
+      e=e.parentElement;
+    }
+    document.querySelectorAll("#stage *").forEach(el=>{
+      if(el.offsetWidth>1300&&lines.length<26)
+        lines.push(`⚠ ${el.tagName}#${el.id||"-"}.${(el.className||"").toString().split(" ")[0]||"-"} ow=${el.offsetWidth}`);
+    });
+    const d=document.createElement("div");
+    d.style.cssText="position:fixed;top:4px;left:4px;z-index:9999;background:#000;color:#0f0;font:11px monospace;padding:6px;border:1px solid #0f0;max-height:92vh;overflow:auto;";
+    d.innerHTML=lines.join("<br>");
+    document.body.appendChild(d);
+  },2500);
 }
 /* bus FX + items + cats : sélection visuelle */
 document.querySelectorAll(".fxbus").forEach(b=>b.addEventListener("click",()=>{
