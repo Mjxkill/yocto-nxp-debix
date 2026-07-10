@@ -323,17 +323,31 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: 6
                             property real vu: 0
+                            // piste VIDE : VU = ENTRÉE de la source
+                            // (mixer.inLevels, déjà normalisé -60..0 dB) —
+                            // on cale son niveau AVANT d'enregistrer
+                            property bool showInput: isEmpty
                             FrameAnimation {
-                                running: page.visible && (isRec || (isPlay && !muted))
+                                running: page.visible &&
+                                         (isRec || vuCol.showInput || (isPlay && !muted))
                                 onTriggered: {
                                     const dt = Math.min(frameTime, 0.1);
                                     const kA = 1 - Math.exp(-dt / 0.030);
                                     const kR = 1 - Math.exp(-dt / 0.120);
                                     var tgt = 0;
-                                    var f = (tr ? tr.peak : 0) / 2147483647.0;
-                                    if (f > 0) {
-                                        var db = 20 * Math.log(f) / Math.LN10;
-                                        tgt = Math.max(0, Math.min(1, (db + 48) / 48));
+                                    if (vuCol.showInput) {
+                                        const lv = mixer.inLevels;
+                                        const a = tr ? tr.src_a : index;
+                                        const b = tr ? tr.src_b : -1;
+                                        tgt = a < lv.length ? lv[a] : 0;
+                                        if (b >= 0 && b < lv.length && lv[b] > tgt)
+                                            tgt = lv[b];
+                                    } else {
+                                        var f = (tr ? tr.peak : 0) / 2147483647.0;
+                                        if (f > 0) {
+                                            var db = 20 * Math.log(f) / Math.LN10;
+                                            tgt = Math.max(0, Math.min(1, (db + 48) / 48));
+                                        }
                                     }
                                     vuCol.vu += (tgt - vuCol.vu)
                                                 * (tgt > vuCol.vu ? kA : kR);
@@ -344,7 +358,8 @@ Item {
                                 text: (tr && tr.len_s > 0)
                                       ? "NIVEAU  " + tr.len_s.toFixed(2) + " s"
                                       : (isRec ? "● ENREGISTRE…"
-                                         : (isArmed ? "⏳ DÉPART AU TOUR" : "NIVEAU  —"))
+                                         : (isArmed ? "⏳ DÉPART AU TOUR"
+                                            : "ENTRÉE  " + page.srcName(tr ? tr.src_a : index)))
                                 color: isRec ? "#e05545"
                                        : (isArmed ? "#e8b84b" : "#5c666e")
                                 font.pixelSize: 9
@@ -356,7 +371,9 @@ Item {
                                 Rectangle {
                                     height: parent.height; radius: 13
                                     width: parent.width * vuCol.vu
-                                    color: isRec ? "#e05545" : trackRow.accent
+                                    color: isRec ? "#e05545"
+                                           : (vuCol.showInput ? "#3d8a54"
+                                              : trackRow.accent)
                                 }
                             }
                         }

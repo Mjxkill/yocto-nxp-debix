@@ -36,10 +36,11 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
 
     /* meters 30 Hz — skip si le socket a du retard (pas d'empilement).
      * V10-N8 : page MIXER uniquement (seule à afficher des niveaux).
-     * V13-E2b : + page SCÈNE (7) — vumètres signal des gros boutons. */
+     * V13-E2b : + page SCÈNE (7) — vumètres signal des gros boutons.
+     * V13.2 : + page LOOPER (4) — VU d'entrée des pistes vides/armées. */
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, [this] {
-        if ((m_activePage == 0 || m_activePage == 7) &&
+        if ((m_activePage == 0 || m_activePage == 4 || m_activePage == 7) &&
             m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_meters_lite\"}\n", TagMeters);
     });
