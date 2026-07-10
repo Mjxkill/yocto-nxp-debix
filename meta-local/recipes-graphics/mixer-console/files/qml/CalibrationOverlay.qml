@@ -22,7 +22,7 @@ Rectangle {
     property int countdown: 30
 
     function initTargets() {
-        step = 0; tapCount = 0; acc = { x: 0, y: 0 }; rawPts = [];
+        step = 0; tapCount = 0; acc = { pts: [] }; rawPts = [];
         verifyStep = 0; countdown = 30;
         const mx = 0.08 * width, my = 0.08 * height;
         targets = verifying
@@ -63,13 +63,19 @@ Rectangle {
                 return;
             }
             if (overlay.step >= 5) return;
-            overlay.acc = { x: overlay.acc.x + x, y: overlay.acc.y + y };
+            // V13.2 : MÉDIANE des 3 appuis par axe (la moyenne subissait
+            // un doigt qui ripe ; la médiane rejette l'appui aberrant)
+            const cur = overlay.acc.pts ? overlay.acc.pts.slice() : [];
+            cur.push({ x: x, y: y });
+            overlay.acc = { pts: cur };
             overlay.tapCount++;
             if (overlay.tapCount >= 3) {
+                const med = a => a.slice().sort((u, v) => u - v)[1];
                 const pts = overlay.rawPts.slice();
-                pts.push({ x: overlay.acc.x / 3, y: overlay.acc.y / 3 });
+                pts.push({ x: med(cur.map(p => p.x)),
+                           y: med(cur.map(p => p.y)) });
                 overlay.rawPts = pts;
-                overlay.acc = { x: 0, y: 0 };
+                overlay.acc = { pts: [] };
                 overlay.tapCount = 0;
                 overlay.step++;
                 if (overlay.step >= 5)

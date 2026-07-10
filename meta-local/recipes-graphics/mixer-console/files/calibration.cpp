@@ -89,8 +89,13 @@ bool CalibrationHelper::finish(const QVariantList &raw, const QVariantList &targ
     QFile f(QString::fromLatin1(RULE_PATH));
     if (f.open(QIODevice::ReadOnly)) {
         const QString txt = QString::fromUtf8(f.readAll());
+        /* V13.2 : le motif doit couvrir l'accolade de ENV{...} — sans elle
+         * la matrice courante n'était JAMAIS relue (M0 restait identité) et
+         * chaque recalibration écrasait la précédente par son inverse au
+         * lieu de la composer (matrices 17:18/17:20 du 2026-07-10 quasi
+         * réciproques — bug confirmé par le journal). */
         QRegularExpression re(QStringLiteral(
-            "LIBINPUT_CALIBRATION_MATRIX\\\"?=\\\"([-0-9.eE ]+)\\\""));
+            "LIBINPUT_CALIBRATION_MATRIX\\}=\\\"([-0-9.eE ]+)\\\""));
         const auto m = re.match(txt);
         if (m.hasMatch()) {
             const QStringList parts = m.captured(1).split(' ', Qt::SkipEmptyParts);
