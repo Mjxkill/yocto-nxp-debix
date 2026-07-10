@@ -37,10 +37,45 @@ Item {
     onVisibleChanged: if (visible) refresh()
     Timer { interval: 250; running: page.visible; repeat: true; onTriggered: page.refresh() }
 
+    // V13.2-FLUID : le poll (4 Hz) ne pose que des CIBLES ; la position est
+    // extrapolée à la frame et les VU ont une ballistique attaque/retombée
+    // (recette SpectrumView — jamais d'affichage au rythme du réseau).
+    property real posDisp: 0
+    property real mvuDisp: 0
+    property real _pollPos: 0
+    property double _pollT: 0
+
     function refresh() {
         mixer.call({ op: "looper_status" }, function(r) {
-            if (r.ok) page.status = r;
+            if (r.ok) {
+                page.status = r;
+                page._pollPos = r.pos_s;
+                page._pollT = Date.now();
+            }
         });
+    }
+
+    FrameAnimation {
+        running: page.visible
+        onTriggered: {
+            const st = page.status;
+            const mlen = st.master_len_s || 0;
+            if (mlen > 0 && st.run)
+                page.posDisp = (page._pollPos
+                                + (Date.now() - page._pollT) / 1000.0) % mlen;
+            else
+                page.posDisp = st.pos_s || 0;
+            const dt = Math.min(frameTime, 0.1);
+            const kA = 1 - Math.exp(-dt / 0.030);
+            const kR = 1 - Math.exp(-dt / 0.120);
+            var tgt = 0;
+            var f = (st.master_peak || 0) / 2147483647.0;
+            if (f > 0) {
+                var db = 20 * Math.log(f) / Math.LN10;
+                tgt = Math.max(0, Math.min(1, (db + 48) / 48));
+            }
+            page.mvuDisp += (tgt - page.mvuDisp) * (tgt > page.mvuDisp ? kA : kR);
+        }
     }
     function setGain(t, db) {
         mixer.call({ op: "looper_track_cfg", track: t, gain_db: db },
@@ -79,21 +114,22 @@ Item {
                     Text {
                         text: page.status.master_len_s > 0
                               ? "boucle " + page.status.master_len_s.toFixed(2) + " s   "
-                                + page.status.pos_s.toFixed(1) + " s"
+                                + page.posDisp.toFixed(1) + " s"
                               : "aucune boucle — enregistrez une 1re piste"
                         color: "#8b959d"; font.pixelSize: 11; font.family: "monospace"
                     }
                 }
 
-                // barre de position maître
+                // barre de position maître (extrapolée à la frame)
                 Rectangle {
-                    width: 200; height: 10; radius: 5
+                    width: 200; height: 26; radius: 13
                     anchors.verticalCenter: parent.verticalCenter
                     color: "#0b0e11"
                     Rectangle {
-                        height: parent.height; radius: 5
+                        height: parent.height; radius: 13
                         width: page.status.master_len_s > 0
-                               ? parent.width * (page.status.pos_s / page.status.master_len_s) : 0
+                               ? parent.width * Math.min(1,
+                                     page.posDisp / page.status.master_len_s) : 0
                         color: page.status.run ? "#4cc470" : "#5c666e"
                     }
                 }
@@ -102,18 +138,13 @@ Item {
                 Column {
                     spacing: 3
                     anchors.verticalCenter: parent.verticalCenter
-                    Text { text: "MASTER"; color: "#5c666e"; font.pixelSize: 8
+                    Text { text: "MASTER"; color: "#5c666e"; font.pixelSize: 9
                            font.letterSpacing: 2 }
                     Rectangle {
-                        width: 110; height: 12; radius: 6; color: "#0b0e11"
+                        width: 110; height: 26; radius: 13; color: "#0b0e11"
                         Rectangle {
-                            height: parent.height; radius: 6
-                            width: {
-                                var f = (page.status.master_peak || 0) / 2147483647.0;
-                                if (f <= 0) return 0;
-                                var db = 20 * Math.log(f) / Math.LN10;
-                                return parent.width * Math.max(0, Math.min(1, (db + 48) / 48));
-                            }
+                            height: parent.height; radius: 13
+                            width: parent.width * page.mvuDisp
                             color: (page.status.master_peak || 0) > 1932735283
                                    ? "#e05545" : "#4cc470"   /* rouge > -0,9 dBFS */
                         }
@@ -262,37 +293,49 @@ Item {
                             }
                         }
 
-                        // --- VU crête + durée ---
+                        // --- VU crête + durée --- (même gabarit que VOLUME :
+                        // texte AU-DESSUS, barre 26 px ; ballistique à la frame)
                         Column {
+                            id: vuCol
                             width: 150
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: 6
-                            Rectangle {
-                                width: parent.width; height: 12; radius: 6
-                                color: "#0b0e11"
-                                Rectangle {
-                                    height: parent.height; radius: 6
-                                    // dB : -48..0 → 0..1 — vivant en PLAY
-                                    // (restitution) ET en REC (entrée)
-                                    width: {
-                                        if (!tr || (!isPlay && !isRec) || (isPlay && muted)) return 0;
-                                        var frac = tr.peak / 2147483647.0;
-                                        if (frac <= 0) return 0;
-                                        var db = 20 * Math.log(frac) / Math.LN10;
-                                        var n = (db + 48) / 48;
-                                        return parent.width * Math.max(0, Math.min(1, n));
+                            property real vu: 0
+                            FrameAnimation {
+                                running: page.visible && (isRec || (isPlay && !muted))
+                                onTriggered: {
+                                    const dt = Math.min(frameTime, 0.1);
+                                    const kA = 1 - Math.exp(-dt / 0.030);
+                                    const kR = 1 - Math.exp(-dt / 0.120);
+                                    var tgt = 0;
+                                    var f = (tr ? tr.peak : 0) / 2147483647.0;
+                                    if (f > 0) {
+                                        var db = 20 * Math.log(f) / Math.LN10;
+                                        tgt = Math.max(0, Math.min(1, (db + 48) / 48));
                                     }
-                                    color: isRec ? "#e05545" : trackRow.accent
+                                    vuCol.vu += (tgt - vuCol.vu)
+                                                * (tgt > vuCol.vu ? kA : kR);
                                 }
+                                onRunningChanged: if (!running) vuCol.vu = 0
                             }
                             Text {
                                 text: (tr && tr.len_s > 0)
-                                      ? tr.len_s.toFixed(2) + " s"
-                                      : (isRec ? "● enregistre…"
-                                         : (isArmed ? "⏳ départ au tour" : "—"))
+                                      ? "NIVEAU  " + tr.len_s.toFixed(2) + " s"
+                                      : (isRec ? "● ENREGISTRE…"
+                                         : (isArmed ? "⏳ DÉPART AU TOUR" : "NIVEAU  —"))
                                 color: isRec ? "#e05545"
-                                       : (isArmed ? "#e8b84b" : "#8b959d")
-                                font.pixelSize: 12; font.family: "monospace"
+                                       : (isArmed ? "#e8b84b" : "#5c666e")
+                                font.pixelSize: 9
+                                font.letterSpacing: 2
+                            }
+                            Rectangle {
+                                width: parent.width; height: 26; radius: 13
+                                color: "#0b0e11"
+                                Rectangle {
+                                    height: parent.height; radius: 13
+                                    width: parent.width * vuCol.vu
+                                    color: isRec ? "#e05545" : trackRow.accent
+                                }
                             }
                         }
 
