@@ -103,8 +103,15 @@ Item {
         Rectangle {
             width: parent.width; height: 70
             color: "#171c21"; radius: 8; border.color: "#060809"
-            Row {
-                anchors.fill: parent; anchors.margins: 12; spacing: 14
+            Item {
+                anchors.fill: parent; anchors.margins: 12
+
+                Row {
+                id: headLeft
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                height: parent.height
+                spacing: 14
 
                 Text {
                     text: "LOOPER"; color: "#e5a13c"; font.pixelSize: 13
@@ -155,23 +162,28 @@ Item {
                     }
                 }
 
-                Item { width: parent.width - 744; height: 1 }
+                }
 
-                Repeater {
-                    model: [
-                        ["▶ PLAY ALL",  "play_all",  "#4cc470", "#2a2214"],
-                        ["■ STOP ALL",  "stop_all",  "#8b959d", "#1b2126"],
-                        ["✕ CLEAR ALL", "clear_all", "#f2796a", "#2a1512"]
-                    ]
-                    Rectangle {
-                        width: 120; height: 44; radius: 6
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: modelData[3]; border.color: modelData[2]; border.width: 1
-                        Text { anchors.centerIn: parent; text: modelData[0]
-                               color: modelData[2]; font.pixelSize: 12; font.bold: true }
-                        TapHandler {
-                            gesturePolicy: TapHandler.ReleaseWithinBounds
-                            onTapped: page.globalCtl(modelData[1])
+                Row {
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 14
+                    Repeater {
+                        model: [
+                            ["▶ PLAY ALL",  "play_all",  "#4cc470", "#2a2214"],
+                            ["■ STOP ALL",  "stop_all",  "#8b959d", "#1b2126"],
+                            ["✕ CLEAR ALL", "clear_all", "#f2796a", "#2a1512"]
+                        ]
+                        Rectangle {
+                            width: 120; height: 44; radius: 6
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: modelData[3]; border.color: modelData[2]; border.width: 1
+                            Text { anchors.centerIn: parent; text: modelData[0]
+                                   color: modelData[2]; font.pixelSize: 12; font.bold: true }
+                            TapHandler {
+                                gesturePolicy: TapHandler.ReleaseWithinBounds
+                                onTapped: page.globalCtl(modelData[1])
+                            }
                         }
                     }
                 }
