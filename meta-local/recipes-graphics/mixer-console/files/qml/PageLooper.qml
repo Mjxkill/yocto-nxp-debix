@@ -25,12 +25,12 @@ Item {
     property var status: ({
         master_len_s: 0, pos_s: 0, run: 0, max_s: 40,
         tracks: [
-            { track: 0, state: "empty", len_s: 0, muted: 0, src_a: 0, src_b: -1, peak: 0 },
-            { track: 1, state: "empty", len_s: 0, muted: 0, src_a: 1, src_b: -1, peak: 0 },
-            { track: 2, state: "empty", len_s: 0, muted: 0, src_a: 2, src_b: -1, peak: 0 },
-            { track: 3, state: "empty", len_s: 0, muted: 0, src_a: 3, src_b: -1, peak: 0 },
-            { track: 4, state: "empty", len_s: 0, muted: 0, src_a: 4, src_b: -1, peak: 0 },
-            { track: 5, state: "empty", len_s: 0, muted: 0, src_a: 5, src_b: -1, peak: 0 }
+            { track: 0, state: "empty", len_s: 0, muted: 0, src_a: 0, src_b: -1, gain_db: 0, peak: 0 },
+            { track: 1, state: "empty", len_s: 0, muted: 0, src_a: 1, src_b: -1, gain_db: 0, peak: 0 },
+            { track: 2, state: "empty", len_s: 0, muted: 0, src_a: 2, src_b: -1, gain_db: 0, peak: 0 },
+            { track: 3, state: "empty", len_s: 0, muted: 0, src_a: 3, src_b: -1, gain_db: 0, peak: 0 },
+            { track: 4, state: "empty", len_s: 0, muted: 0, src_a: 4, src_b: -1, gain_db: 0, peak: 0 },
+            { track: 5, state: "empty", len_s: 0, muted: 0, src_a: 5, src_b: -1, gain_db: 0, peak: 0 }
         ]
     })
 
@@ -41,6 +41,10 @@ Item {
         mixer.call({ op: "looper_status" }, function(r) {
             if (r.ok) page.status = r;
         });
+    }
+    function setGain(t, db) {
+        mixer.call({ op: "looper_track_cfg", track: t, gain_db: db },
+                   function() {});
     }
     function trackCtl(t, action) {
         mixer.call({ op: "looper_track_ctl", track: t, action: action },
@@ -290,7 +294,51 @@ Item {
                             }
                         }
 
-                        Item { width: parent.width - 74 - 128 - 150 - 4*14 - 380; height: 1 }
+                        // --- volume de piste (gain lecture, -40..+6 dB) ---
+                        Column {
+                            width: 150
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 5
+                            property real curDb: tr ? tr.gain_db : 0
+                            property bool dragging: false
+                            Text { text: "VOLUME  " + ((tr ? tr.gain_db : 0) >= 0 ? "+" : "")
+                                         + (tr ? tr.gain_db : 0).toFixed(1) + " dB"
+                                   color: "#5c666e"; font.pixelSize: 9
+                                   font.letterSpacing: 2 }
+                            Rectangle {
+                                id: volTrack
+                                width: parent.width; height: 26; radius: 13
+                                color: "#0b0e11"
+                                Rectangle {
+                                    height: parent.height; radius: 13
+                                    width: parent.width *
+                                           Math.max(0, Math.min(1,
+                                               ((tr ? tr.gain_db : 0) + 40) / 46))
+                                    color: "#39434b"
+                                    Rectangle { width: 4; height: parent.height
+                                                anchors.right: parent.right
+                                                color: trackRow.accent }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -6
+                                    preventStealing: true
+                                    onPositionChanged: (m) => {
+                                        if (!pressed) return;
+                                        var f = Math.max(0, Math.min(1, m.x / volTrack.width));
+                                        var db = Math.round((-40 + f * 46) * 2) / 2;
+                                        page.setGain(index, db);
+                                    }
+                                    onClicked: (m) => {
+                                        var f = Math.max(0, Math.min(1, m.x / volTrack.width));
+                                        var db = Math.round((-40 + f * 46) * 2) / 2;
+                                        page.setGain(index, db);
+                                    }
+                                }
+                            }
+                        }
+
+                        Item { width: parent.width - 74 - 128 - 150 - 150 - 5*14 - 380; height: 1 }
 
                         // --- boutons transport piste ---
                         Row {

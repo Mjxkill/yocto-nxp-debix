@@ -3214,6 +3214,10 @@ function loopRender(st){
         <div style="height:100%;width:${(rec||(play&&!mut))?dbw(t.peak):0}%;background:${rec?"#e05545":ac};"></div></div>
       <span style="width:64px;font-family:monospace;font-size:10px;color:${rec?"#e05545":armed?"#e8b84b":"var(--mut)"};">
         ${t.len_s>0?t.len_s.toFixed(2)+" s":(rec?"● rec…":armed?"⏳ armé":"—")}</span>
+      <input type="range" data-t="${i}" data-a="vol" min="-40" max="6" step="0.5" value="${t.gain_db}"
+        style="width:110px;accent-color:${ac};" ${rec?"disabled":""}>
+      <span style="width:52px;font-family:monospace;font-size:10px;color:var(--mut);"
+        >${t.gain_db>=0?"+":""}${t.gain_db.toFixed(1)} dB</span>
       <span style="flex:1"></span>
       <button class="wbtn warn" data-t="${i}" data-a="rec"  ${(empty||armed)?"":"disabled"}
         style="${armed?"color:#e8b84b;border-color:#e8b84b;":""}">${armed?"⏳ ARMÉ":"&#9679; REC"}</button>
@@ -3222,7 +3226,16 @@ function loopRender(st){
         style="${mut?"color:#e8b84b;border-color:#e8b84b;":""}">${mut?"MUTED":"ON"}</button>
       <button class="wbtn warn" data-t="${i}" data-a="clear" ${(!empty&&!rec)?"":"disabled"}>&#10005;</button>
     </div>`;}).join("");
-  c.querySelectorAll("[data-a]").forEach(b=>b.addEventListener("click",()=>{
+  c.querySelectorAll("input[data-a=vol]").forEach(sl=>{
+    sl.addEventListener("input",()=>{
+      cmd({op:"looper_track_cfg",track:+sl.dataset.t,gain_db:+sl.value});
+    });
+    /* le poll re-render tout : gel pendant le drag du curseur */
+    sl.addEventListener("pointerdown",()=>{window._loopVolDrag=true;});
+    sl.addEventListener("pointerup",()=>{window._loopVolDrag=false;});
+    sl.addEventListener("pointercancel",()=>{window._loopVolDrag=false;});
+  });
+  c.querySelectorAll("button[data-a]").forEach(b=>b.addEventListener("click",()=>{
     const t=+b.dataset.t, a=b.dataset.a, tr=loopSt.tracks[t];
     if(a==="srcdn"||a==="srcup"){
       let s=tr.src_a+(a==="srcup"?1:-1); s=Math.max(0,Math.min(15,s));
@@ -3231,7 +3244,7 @@ function loopRender(st){
   }));
 }
 function loopPoll(){
-  if(window.CURPAGE!=="LOOPER")return;
+  if(window.CURPAGE!=="LOOPER"||window._loopVolDrag)return;
   cmd({op:"looper_status"}).then(r=>{if(r.ok){loopSt=r;loopRender(r);}});
 }
 setInterval(loopPoll,300);
