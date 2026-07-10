@@ -183,7 +183,9 @@ Item {
                     Row {
                         anchors.fill: parent
                         anchors.margins: 12
-                        spacing: 14
+                        // largeur fixe des 5 groupes = 850 px → l'espace
+                        // restant est réparti également (jamais < 14)
+                        spacing: Math.max(14, (width - 850) / 4)
 
                         // --- badge numéro + état ---
                         Column {
@@ -295,15 +297,22 @@ Item {
                         }
 
                         // --- volume de piste (gain lecture, -40..+6 dB) ---
+                        // Écho LOCAL : pendant le drag, l'affichage suit le
+                        // doigt à la frame ; le moteur/poll suivent derrière
+                        // (règle de fluidité — jamais d'UI qui attend le réseau)
                         Column {
+                            id: volCol
                             width: 150
                             anchors.verticalCenter: parent.verticalCenter
-                            spacing: 5
-                            property real curDb: tr ? tr.gain_db : 0
+                            spacing: 6
                             property bool dragging: false
-                            Text { text: "VOLUME  " + ((tr ? tr.gain_db : 0) >= 0 ? "+" : "")
-                                         + (tr ? tr.gain_db : 0).toFixed(1) + " dB"
-                                   color: "#5c666e"; font.pixelSize: 9
+                            property real localDb: 0
+                            property real showDb: dragging ? localDb
+                                                           : (tr ? tr.gain_db : 0)
+                            Text { text: "VOLUME  " + (volCol.showDb >= 0 ? "+" : "")
+                                         + volCol.showDb.toFixed(1) + " dB"
+                                   color: volCol.dragging ? "#e9e5da" : "#5c666e"
+                                   font.pixelSize: 9
                                    font.letterSpacing: 2 }
                             Rectangle {
                                 id: volTrack
@@ -312,33 +321,38 @@ Item {
                                 Rectangle {
                                     height: parent.height; radius: 13
                                     width: parent.width *
-                                           Math.max(0, Math.min(1,
-                                               ((tr ? tr.gain_db : 0) + 40) / 46))
-                                    color: "#39434b"
+                                           Math.max(0, Math.min(1, (volCol.showDb + 40) / 46))
+                                    color: volCol.dragging ? "#4a555f" : "#39434b"
                                     Rectangle { width: 4; height: parent.height
                                                 anchors.right: parent.right
                                                 color: trackRow.accent }
                                 }
                                 MouseArea {
                                     anchors.fill: parent
-                                    anchors.margins: -6
+                                    anchors.margins: -8
                                     preventStealing: true
+                                    function dbAt(mx) {
+                                        var f = Math.max(0, Math.min(1, mx / volTrack.width));
+                                        return Math.round((-40 + f * 46) * 2) / 2;
+                                    }
+                                    onPressed: (m) => {
+                                        volCol.localDb = dbAt(m.x);
+                                        volCol.dragging = true;
+                                        page.setGain(index, volCol.localDb);
+                                    }
                                     onPositionChanged: (m) => {
                                         if (!pressed) return;
-                                        var f = Math.max(0, Math.min(1, m.x / volTrack.width));
-                                        var db = Math.round((-40 + f * 46) * 2) / 2;
+                                        var db = dbAt(m.x);
+                                        if (db === volCol.localDb) return;
+                                        volCol.localDb = db;
                                         page.setGain(index, db);
                                     }
-                                    onClicked: (m) => {
-                                        var f = Math.max(0, Math.min(1, m.x / volTrack.width));
-                                        var db = Math.round((-40 + f * 46) * 2) / 2;
-                                        page.setGain(index, db);
-                                    }
+                                    onReleased: volCol.dragging = false
+                                    onCanceled: volCol.dragging = false
                                 }
                             }
                         }
 
-                        Item { width: parent.width - 74 - 128 - 150 - 150 - 5*14 - 380; height: 1 }
 
                         // --- boutons transport piste ---
                         Row {

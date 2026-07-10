@@ -3216,7 +3216,7 @@ function loopRender(st){
         ${t.len_s>0?t.len_s.toFixed(2)+" s":(rec?"● rec…":armed?"⏳ armé":"—")}</span>
       <input type="range" data-t="${i}" data-a="vol" min="-40" max="6" step="0.5" value="${t.gain_db}"
         style="width:110px;accent-color:${ac};" ${rec?"disabled":""}>
-      <span style="width:52px;font-family:monospace;font-size:10px;color:var(--mut);"
+      <span data-vl="${i}" style="width:52px;font-family:monospace;font-size:10px;color:var(--mut);"
         >${t.gain_db>=0?"+":""}${t.gain_db.toFixed(1)} dB</span>
       <span style="flex:1"></span>
       <button class="wbtn warn" data-t="${i}" data-a="rec"  ${(empty||armed)?"":"disabled"}
@@ -3228,7 +3228,10 @@ function loopRender(st){
     </div>`;}).join("");
   c.querySelectorAll("input[data-a=vol]").forEach(sl=>{
     sl.addEventListener("input",()=>{
-      cmd({op:"looper_track_cfg",track:+sl.dataset.t,gain_db:+sl.value});
+      const v=+sl.value;
+      const lb=c.querySelector(`[data-vl="${sl.dataset.t}"]`);
+      if(lb)lb.textContent=(v>=0?"+":"")+v.toFixed(1)+" dB";   /* écho local */
+      cmd({op:"looper_track_cfg",track:+sl.dataset.t,gain_db:v});
     });
     /* le poll re-render tout : gel pendant le drag du curseur */
     sl.addEventListener("pointerdown",()=>{window._loopVolDrag=true;});
