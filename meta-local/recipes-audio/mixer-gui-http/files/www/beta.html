@@ -447,6 +447,16 @@ function holdify(btn,cb,opts={}){
   <!-- ---- page EFFETS ---- -->
   <div id="fxpage" class="page hid" data-page="EFFETS">
     <div id="fxbrowse">
+      <div style="font-size:9px;letter-spacing:.2em;color:var(--mut);margin:0 0 3px 4px;">ENTRÉE (SENDS)  L / R</div>
+      <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:6px;">
+        <div style="height:12px;border-radius:6px;background:#0b0e11;overflow:hidden;"><div id="fxvinL" style="height:100%;width:0;background:#4cc470;border-radius:6px;"></div></div>
+        <div style="height:12px;border-radius:6px;background:#0b0e11;overflow:hidden;"><div id="fxvinR" style="height:100%;width:0;background:#4cc470;border-radius:6px;"></div></div>
+      </div>
+      <div style="font-size:9px;letter-spacing:.2em;color:var(--mut);margin:0 0 3px 4px;">SORTIE (RETOUR)  L / R</div>
+      <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px;">
+        <div style="height:12px;border-radius:6px;background:#0b0e11;overflow:hidden;"><div id="fxvoutL" style="height:100%;width:0;background:#e5a13c;border-radius:6px;"></div></div>
+        <div style="height:12px;border-radius:6px;background:#0b0e11;overflow:hidden;"><div id="fxvoutR" style="height:100%;width:0;background:#e5a13c;border-radius:6px;"></div></div>
+      </div>
       <div class="fxbustabs">
         <div class="fxbus on">FX1</div><div class="fxbus">FX2</div>
         <div class="fxbus">FX3</div><div class="fxbus">FX4</div>
@@ -545,8 +555,11 @@ function holdify(btn,cb,opts={}){
         <div class="tgrow" style="margin-top:6px"><span>ACTIF</span><div class="pwrsw on" id="mst-b1"><i></i></div></div></div>
       <div class="fxcard"><div class="ct">LIMITEUR <em>· slot 2</em></div>
         <div class="mn"><span>THRESHOLD</span><b id="ml-th">-</b></div>
-        <div class="mn"><span>GAIN IN</span><b id="ml-gin">-</b></div>
         <div class="mn"><span>ATT / REL</span><b id="ml-ar">-</b></div>
+        <div style="font-size:9px;letter-spacing:.2em;color:var(--mut);margin-top:6px;">RÉDUCTION  <b id="ml-grv" style="color:var(--text);">0.0 dB</b></div>
+        <div style="width:100%;height:26px;border-radius:13px;background:#0b0e11;overflow:hidden;margin-top:4px;position:relative;">
+          <div id="ml-grbar" style="position:absolute;right:0;top:0;height:100%;width:0;background:#e05545;border-radius:13px;"></div>
+        </div>
         <div class="tgrow" style="margin-top:6px"><span>ACTIF</span><div class="pwrsw on" id="mst-b2"><i></i></div></div></div>
     </div>
   </div>
@@ -1739,6 +1752,37 @@ function postT(key,o){const now=performance.now();clearTimeout(trm[key]);
   if(now-(thm[key]||0)>45){thm[key]=now;post(o);}
   else trm[key]=setTimeout(()=>{thm[key]=performance.now();post(o);},45);}
 
+/* V13.4 : VU du bus courant — cibles 10 Hz, ballistique rAF */
+let fxMeters={fx:[],inl:[]};
+setInterval(()=>{
+  if(window.CURPAGE!=="EFFETS")return;
+  post({op:"get_meters_lite"}).then(j=>{
+    if(j&&j.ok){fxMeters.fx=j.fx||[];fxMeters.inl=j.in||[];}
+  });
+},100);
+(function(){
+  const disp={inL:0,inR:0,outL:0,outR:0};
+  let last=performance.now();
+  const dbn=v=>{if(!v||v<=0)return 0;
+    const db=20*Math.log10(v/2147483647);
+    return Math.max(0,Math.min(1,(db+48)/48));};
+  function tick(){
+    const now=performance.now(),dt=Math.min((now-last)/1000,0.1);last=now;
+    if(window.CURPAGE==="EFFETS"){
+      const b=fxBus*2;
+      const kA=1-Math.exp(-dt/0.030),kR=1-Math.exp(-dt/0.120);
+      const st=(k,t)=>{disp[k]+=(t-disp[k])*(t>disp[k]?kA:kR);};
+      st("inL",dbn(fxMeters.fx[b]));st("inR",dbn(fxMeters.fx[b+1]));
+      st("outL",dbn(fxMeters.inl[18+b]));st("outR",dbn(fxMeters.inl[19+b]));
+      const put=(id,v)=>{const e=document.getElementById(id);if(e)e.style.width=(v*100)+"%";};
+      put("fxvinL",disp.inL);put("fxvinR",disp.inR);
+      put("fxvoutL",disp.outL);put("fxvoutR",disp.outR);
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+
 /* --- factory knob (repris du moteur maquette, version dynamique) --- */
 function makeKnob(o){ // {label,min,max,val,unit,log,step,onchange}
   const u=document.createElement("div");u.className="kunit";
@@ -1792,8 +1836,15 @@ function renderRack(fx){
   const name=(fx.type==="lv2")?(fx.uri||"?").split("/").pop():fx.type;
   let html=`<div class="rackhead"><span class="pname">${name}</span>
     <span class="pmeta">${fx.type==="lv2"?"LV2":"NATIF"} · BUS FX${fxBus+1}</span>
-    <div class="pwr"><span>REMPLACER</span></div></div>`;
+    ${fx.type&&fx.type!=="passthrough"
+      ?'<button class="wbtn warn" id="fxremove">✕ RETIRER L\'EFFET</button>':""}</div>`;
   rack.innerHTML=html;
+  const rm=document.getElementById("fxremove");
+  if(rm)rm.addEventListener("click",async()=>{
+    await post({op:"set_fx_engine",bus:fxBus,engine:"passthrough"});
+    const nfx=await post({op:"get_fx",bus:fxBus});
+    if(nfx&&nfx.ok)renderRack(nfx);
+  });
   if(fx.type!=="lv2"||!fx.params){
     const d=document.createElement("div");d.className="fxcard";
     d.innerHTML=`<div class="ct">MOTEUR ${String(fx.type||"?").toUpperCase()}</div>
@@ -1855,6 +1906,16 @@ function renderList(){
   if(!fxPlugins){list.innerHTML='<div class="fxit">chargement…</div>';return;}
   const rx=CATS[fxCat];
   list.innerHTML="";
+  const none=document.createElement("div");
+  none.className="fxit";
+  none.style.color="var(--accent)";
+  none.innerHTML="— AUCUN EFFET (bus neutre) —";
+  none.addEventListener("click",async()=>{
+    await post({op:"set_fx_engine",bus:fxBus,engine:"passthrough"});
+    const nfx=await post({op:"get_fx",bus:fxBus});
+    if(nfx&&nfx.ok)renderRack(nfx);
+  });
+  list.appendChild(none);
   fxPlugins.filter(p=>!rx||rx.test(p.name)).forEach(p=>{
     const d=document.createElement("div");d.className="fxit";
     d.innerHTML=`${p.name}<em>${p.ai}/${p.ao}</em>`;
@@ -1952,6 +2013,27 @@ function drawMlEnv(){
     x.stroke();x.shadowBlur=0;
   });
 }
+/* V13.4 : réduction limiteur FLUIDE (cible g_in via SSE, ballistique rAF) */
+(function(){
+  let disp=0,last=performance.now();
+  function tick(){
+    const now=performance.now(),dt=Math.min((now-last)/1000,0.1);last=now;
+    if(window.CURPAGE==="MASTERING"){
+      const lim=(window.STORE&&STORE.insert&&STORE.insert.chain)?(STORE.insert.chain[2]||{}):{};
+      let tgt=0;
+      if(lim.g_in!==undefined&&lim.g_in>0)
+        tgt=Math.max(0,Math.min(1,(-20*Math.log10(lim.g_in))/12));
+      const kA=1-Math.exp(-dt/0.030),kR=1-Math.exp(-dt/0.200);
+      disp+=(tgt-disp)*(tgt>disp?kA:kR);
+      const b=document.getElementById("ml-grbar"),v=document.getElementById("ml-grv");
+      if(b)b.style.width=(disp*100)+"%";
+      if(v)v.textContent=(disp*12).toFixed(1)+" dB";
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+
 function renderMastering(){
   const S=window.STORE;
   if(S.assistant){
