@@ -77,7 +77,8 @@ Item {
                     }
                 }
                 Row {
-                    spacing: 4
+                    width: parent.width
+                    spacing: Math.max(4, (width - 18 * 62) / 17)
                     Repeater {
                         id: mxRep
                         model: 18
@@ -87,7 +88,8 @@ Item {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: page.outNames[index]
                                 color: index < 8 ? "#e5a13c" : (index < 16 ? "#8b959d" : "#4cc470")
-                                font.pixelSize: 10; font.bold: true
+                                font.pixelSize: 9; font.bold: true
+                                font.letterSpacing: 2
                             }
                             Knob {
                                 id: mxKnob
@@ -111,7 +113,8 @@ Item {
                 anchors.fill: parent; anchors.margins: 12; spacing: 8
                 Text { text: "GAINS DE SORTIE · trim final persisté"; color: "#e5a13c"; font.pixelSize: 11; font.bold: true; font.letterSpacing: 3 }
                 Row {
-                    spacing: 4
+                    width: parent.width
+                    spacing: Math.max(4, (width - 18 * 62) / 17)
                     Repeater {
                         id: outRep
                         model: 18
@@ -121,7 +124,8 @@ Item {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: page.outNames[index]
                                 color: index < 8 ? "#e5a13c" : (index < 16 ? "#8b959d" : "#4cc470")
-                                font.pixelSize: 10; font.bold: true
+                                font.pixelSize: 9; font.bold: true
+                                font.letterSpacing: 2
                             }
                             Knob {
                                 id: outKnob
@@ -144,7 +148,8 @@ Item {
                 anchors.fill: parent; anchors.margins: 12; spacing: 8
                 Text { text: "REMAP MICS DSP · tap = source suivante"; color: "#e5a13c"; font.pixelSize: 11; font.bold: true; font.letterSpacing: 3 }
                 Row {
-                    spacing: 10
+                    width: parent.width
+                    spacing: Math.max(10, (width - 8 * 92) / 7)
                     Repeater {
                         id: remapRep
                         model: 8

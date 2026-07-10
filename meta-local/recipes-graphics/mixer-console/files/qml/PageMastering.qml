@@ -150,9 +150,10 @@ Item {
                             MouseArea { anchors.fill: parent; onClicked: page.setBypass(1, !page.excByp) }
                         }
                     }
-                    Text { text: "amount  " + (page.exc.amount !== undefined ? page.exc.amount.toFixed(3) : "—"); color: "#e9e5da"; font.pixelSize: 12; font.family: "monospace" }
-                    Text { text: "drive   " + (page.exc.drive !== undefined ? page.exc.drive.toFixed(2) : "—"); color: "#e9e5da"; font.pixelSize: 12; font.family: "monospace" }
-                    Text { text: "freq    " + (page.exc.freq !== undefined ? (page.exc.freq / 1000).toFixed(1) + " kHz" : "—"); color: "#e9e5da"; font.pixelSize: 12; font.family: "monospace" }
+                    Text { text: "AMOUNT " + (page.exc.amount !== undefined ? page.exc.amount.toFixed(3) : "—")
+                                 + "   ·   DRIVE " + (page.exc.drive !== undefined ? page.exc.drive.toFixed(2) : "—")
+                                 + "   ·   FREQ " + (page.exc.freq !== undefined ? (page.exc.freq / 1000).toFixed(1) + " kHz" : "—")
+                           color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
                 }
             }
 
@@ -172,10 +173,43 @@ Item {
                             MouseArea { anchors.fill: parent; onClicked: page.setBypass(2, !page.limByp) }
                         }
                     }
-                    Text { text: "threshold " + (page.lim.threshold !== undefined ? page.lim.threshold.toFixed(3) : "—"); color: "#e9e5da"; font.pixelSize: 12; font.family: "monospace" }
-                    Text { text: "attack    " + (page.lim.attack_ms !== undefined ? page.lim.attack_ms.toFixed(1) + " ms" : "—"); color: "#e9e5da"; font.pixelSize: 12; font.family: "monospace" }
-                    Text { text: "release   " + (page.lim.release_ms !== undefined ? page.lim.release_ms.toFixed(0) + " ms" : "—"); color: "#e9e5da"; font.pixelSize: 12; font.family: "monospace" }
-                    Text { text: "gain in   " + (page.lim.g_in !== undefined ? page.lim.g_in.toFixed(2) : "—"); color: "#e9e5da"; font.pixelSize: 12; font.family: "monospace" }
+                    Text { text: "SEUIL " + (page.lim.th !== undefined ? page.lim.th.toFixed(3) : "—")
+                                 + "   ·   ATT " + (page.lim.at !== undefined ? page.lim.at.toFixed(1) + " ms" : "—")
+                                 + "   ·   REL " + (page.lim.rt !== undefined ? page.lim.rt.toFixed(0) + " ms" : "—")
+                           color: "#8b959d"; font.pixelSize: 11; font.family: "monospace" }
+                    // réduction de gain FLUIDE (g_in via poll insert 5 Hz,
+                    // ballistique à la frame — gabarit standard)
+                    Column {
+                        id: grCol
+                        width: parent.width
+                        spacing: 6
+                        property real gr: 0
+                        FrameAnimation {
+                            running: page.visible
+                            onTriggered: {
+                                const dt = Math.min(frameTime, 0.1);
+                                const kA = 1 - Math.exp(-dt / 0.030);
+                                const kR = 1 - Math.exp(-dt / 0.200);
+                                var tgt = 0;
+                                if (page.lim.g_in !== undefined && page.lim.g_in > 0)
+                                    tgt = Math.max(0, Math.min(1,
+                                        (-20 * Math.log(page.lim.g_in) / Math.LN10) / 12.0));
+                                grCol.gr += (tgt - grCol.gr)
+                                            * (tgt > grCol.gr ? kA : kR);
+                            }
+                        }
+                        Text { text: "RÉDUCTION  " + (grCol.gr * 12).toFixed(1) + " dB"
+                               color: "#5c666e"; font.pixelSize: 9; font.letterSpacing: 2 }
+                        Rectangle {
+                            width: parent.width; height: 26; radius: 13; color: "#0b0e11"
+                            Rectangle {
+                                height: parent.height; radius: 13
+                                anchors.right: parent.right
+                                width: parent.width * grCol.gr
+                                color: "#e05545"
+                            }
+                        }
+                    }
                 }
             }
         }
