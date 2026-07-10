@@ -10,9 +10,22 @@ Item {
     onVisibleChanged: if (visible) refresh()
     Timer { interval: 500; running: page.visible; repeat: true; onTriggered: page.refresh() }
 
+    // V13.2-FLUID : le poll (2 Hz) pose des cibles ; la position de lecture
+    // des pads est EXTRAPOLÉE à la frame (progression + temps continus)
+    property double pollT: 0
+    property real nowTick: 0
+    FrameAnimation {
+        running: page.visible
+        onTriggered: page.nowTick = (Date.now() - page.pollT) / 1000.0
+    }
+
     function refresh() {
         mixer.call({ op: "sampler_list" }, function(r) {
-            if (r.ok) page.slots = r.slots;
+            if (r.ok) {
+                page.slots = r.slots;
+                page.pollT = Date.now();
+                page.nowTick = 0;
+            }
         });
     }
 
@@ -21,34 +34,40 @@ Item {
         anchors.margins: 14
         spacing: 10
 
-        Row {
+        // en-tête : titre à gauche, actions ANCRÉES à droite (gabarit 44 px)
+        Item {
             width: parent.width
-            spacing: 12
+            height: 44
             Text {
                 text: "PADS · " + "/var/lib/ala/samples"
                 color: "#e5a13c"; font.pixelSize: 11; font.bold: true
                 font.letterSpacing: 3
                 anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
             }
-            Item { width: parent.width - 460; height: 1 }
-            Rectangle {
-                width: 120; height: 32; radius: 5
-                color: "#1b2126"; border.color: "#39434b"
-                Text { anchors.centerIn: parent; text: "RECHARGER"; color: "#8b959d"; font.pixelSize: 10; font.bold: true }
-                TapHandler {
-                    gesturePolicy: TapHandler.ReleaseWithinBounds
-                    onTapped: mixer.call({ op: "sampler_reload" },
-                                         function() { page.refresh(); })
+            Row {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 14
+                Rectangle {
+                    width: 120; height: 44; radius: 6
+                    color: "#1b2126"; border.color: "#39434b"
+                    Text { anchors.centerIn: parent; text: "RECHARGER"; color: "#8b959d"; font.pixelSize: 12; font.bold: true }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: mixer.call({ op: "sampler_reload" },
+                                             function() { page.refresh(); })
+                    }
                 }
-            }
-            Rectangle {
-                width: 120; height: 32; radius: 5
-                color: "#2a1512"; border.color: "#7a3b32"
-                Text { anchors.centerIn: parent; text: "STOP ALL"; color: "#f2796a"; font.pixelSize: 10; font.bold: true }
-                TapHandler {
-                    gesturePolicy: TapHandler.ReleaseWithinBounds
-                    onTapped: mixer.call({ op: "sampler_stop", slot: -1 },
-                                         function() { page.refresh(); })
+                Rectangle {
+                    width: 120; height: 44; radius: 6
+                    color: "#2a1512"; border.color: "#7a3b32"
+                    Text { anchors.centerIn: parent; text: "■ STOP ALL"; color: "#f2796a"; font.pixelSize: 12; font.bold: true }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: mixer.call({ op: "sampler_stop", slot: -1 },
+                                             function() { page.refresh(); })
+                    }
                 }
             }
         }
@@ -87,11 +106,32 @@ Item {
                             anchors.horizontalCenter: parent.horizontalCenter
                             text: !parent.parent.hasWav ? ""
                                   : parent.parent.playing
-                                    ? parent.parent.sl.pos_s.toFixed(1) + " / "
+                                    ? parent.parent.posDisp.toFixed(1) + " / "
                                       + parent.parent.sl.len_s.toFixed(1) + " s"
                                     : parent.parent.sl.len_s.toFixed(1) + " s"
                             color: "#8b959d"; font.pixelSize: 11
                             font.family: "monospace"
+                        }
+                    }
+
+                    // position EXTRAPOLÉE à la frame + barre continue au pied
+                    property real posDisp: playing
+                        ? Math.min(sl.len_s, sl.pos_s + page.nowTick) : 0
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.margins: 6
+                        height: 8; radius: 4
+                        color: "#0b0e11"
+                        visible: parent.playing
+                        Rectangle {
+                            height: parent.height; radius: 4
+                            width: parent.parent.sl && parent.parent.sl.len_s > 0
+                                   ? parent.width * Math.min(1,
+                                         parent.parent.posDisp / parent.parent.sl.len_s)
+                                   : 0
+                            color: "#e5a13c"
                         }
                     }
 

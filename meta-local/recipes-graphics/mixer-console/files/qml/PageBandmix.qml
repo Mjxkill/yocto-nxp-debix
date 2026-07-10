@@ -46,10 +46,11 @@ Item {
         Rectangle {
             width: parent.width; height: 74
             color: "#171c21"; radius: 8; border.color: "#060809"
-            Row {
-                anchors.fill: parent; anchors.margins: 12; spacing: 12
+            Item {
+                anchors.fill: parent; anchors.margins: 12
                 Column {
                     spacing: 3
+                    anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     Text { text: "AUTO MIX"; color: "#e5a13c"; font.pixelSize: 13
                            font.bold: true; font.letterSpacing: 3 }
@@ -67,7 +68,11 @@ Item {
                         color: "#8b959d"; font.pixelSize: 10
                     }
                 }
-                Item { width: parent.width - 790; height: 1 }
+                Row {
+                id: bmxBtns
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 12
                 Rectangle {
                     width: 130; height: 46; radius: 6
                     anchors.verticalCenter: parent.verticalCenter
@@ -141,6 +146,7 @@ Item {
                         gesturePolicy: TapHandler.ReleaseWithinBounds
                         onTapped: page.duganSettings()
                     }
+                }
                 }
             }
         }
@@ -222,6 +228,7 @@ Item {
                                          ? page.vf.cuts_db[index] : 0) /
                                         (page.vf ? Math.max(1, page.vf.max_cut_db) : 4.5))
                                     color: "#e8b84b"
+                                    Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.OutQuad } }
                                 }
                             }
                             Text { text: modelData
@@ -348,8 +355,8 @@ Item {
                                              + (ch ? (ch.keeper_db >= 0 ? "+" : "")
                                                + ch.keeper_db.toFixed(1) : "0")
                                              + " dB"
-                                       color: "#5c666e"; font.pixelSize: 8
-                                       font.letterSpacing: 1 }
+                                       color: "#5c666e"; font.pixelSize: 9
+                                       font.letterSpacing: 2 }
                                 Rectangle {
                                     width: 150; height: 10; radius: 5
                                     color: "#0b0e11"
@@ -364,6 +371,10 @@ Item {
                                         width: Math.abs(k) / 3 * (parent.width / 2)
                                         height: parent.height; radius: 5
                                         color: k >= 0 ? "#4cc470" : "#e8b84b"
+                                        // le keeper corrige par pas (1 Hz) :
+                                        // glissement doux entre deux pas
+                                        Behavior on x { NumberAnimation { duration: 350; easing.type: Easing.OutCubic } }
+                                        Behavior on width { NumberAnimation { duration: 350; easing.type: Easing.OutCubic } }
                                     }
                                 }
                             }

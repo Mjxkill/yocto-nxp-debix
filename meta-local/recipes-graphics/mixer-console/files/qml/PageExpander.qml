@@ -51,6 +51,25 @@ Item {
     property string sf2: ""
     property var chans:   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     property var acts:    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    // V13.2-FLUID : activité lissée à la frame (1 seule FrameAnimation,
+    // décimée ×2 — recette SpectrumView), les barres lisent actsDisp
+    property var actsDisp: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    property int _atick: 0
+    FrameAnimation {
+        running: page.visible
+        onTriggered: {
+            if ((page._atick++ & 1) === 1) return;
+            const dt = Math.min(frameTime * 2, 0.1);
+            const kA = 1 - Math.exp(-dt / 0.030);
+            const kR = 1 - Math.exp(-dt / 0.150);
+            const out = page.actsDisp.slice();
+            for (let i = 0; i < 16; i++) {
+                const t = Math.min(1, (page.acts[i] || 0) / 1000.0);
+                out[i] += (t - out[i]) * (t > out[i] ? kA : kR);
+            }
+            page.actsDisp = out;
+        }
+    }
     property var engines: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     property var cpatch:  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
     property var patchNames: []
@@ -133,8 +152,13 @@ Item {
         Rectangle {
             width: parent.width; height: 86
             color: "#171c21"; radius: 8; border.color: "#060809"
-            Row {
-                anchors.fill: parent; anchors.margins: 12; spacing: 16
+            Item {
+                anchors.fill: parent; anchors.margins: 12
+
+                Row {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 16
 
                 Column {
                     spacing: 4
@@ -156,26 +180,48 @@ Item {
                             font.pixelSize: 11
                         }
                     }
-                    Rectangle {
-                        width: 200; height: 8; radius: 4; color: "#0b0e11"
-                        Rectangle {
-                            height: parent.height; radius: 4
-                            width: {
-                                var f = page.peak / 2147483647.0;
-                                if (f <= 0) return 0;
+                }
+
+                // VU synthé : gabarit standard (étiquette dessus, 26 px,
+                // ballistique à la frame — recette SpectrumView)
+                Column {
+                    id: xvuCol
+                    spacing: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    property real vu: 0
+                    FrameAnimation {
+                        running: page.visible
+                        onTriggered: {
+                            const dt = Math.min(frameTime, 0.1);
+                            const kA = 1 - Math.exp(-dt / 0.030);
+                            const kR = 1 - Math.exp(-dt / 0.120);
+                            var tgt = 0;
+                            var f = page.peak / 2147483647.0;
+                            if (f > 0) {
                                 var db = 20 * Math.log(f) / Math.LN10;
-                                return parent.width * Math.max(0, Math.min(1, (db + 48) / 48));
+                                tgt = Math.max(0, Math.min(1, (db + 48) / 48));
                             }
+                            xvuCol.vu += (tgt - xvuCol.vu)
+                                         * (tgt > xvuCol.vu ? kA : kR);
+                        }
+                    }
+                    Text { text: "NIVEAU"; color: "#5c666e"; font.pixelSize: 9
+                           font.letterSpacing: 2 }
+                    Rectangle {
+                        width: 200; height: 26; radius: 13; color: "#0b0e11"
+                        Rectangle {
+                            height: parent.height; radius: 13
+                            width: parent.width * xvuCol.vu
                             color: "#4cc470"
                         }
                     }
                 }
 
                 Column {
-                    spacing: 4
+                    spacing: 6
                     anchors.verticalCenter: parent.verticalCenter
                     Text { text: "VOLUME  " + page.synthGain.toFixed(2)
-                           color: "#8b959d"; font.pixelSize: 10; font.letterSpacing: 1 }
+                           color: "#5c666e"; font.pixelSize: 9; font.letterSpacing: 2 }
                     Rectangle {
                         width: 260; height: 26; radius: 13; color: "#0b0e11"
                         Rectangle {
@@ -204,10 +250,11 @@ Item {
                     }
                 }
 
-                Item { width: parent.width - 620; height: 1 }
+                }
 
                 Rectangle {
-                    width: 100; height: 48; radius: 6
+                    width: 120; height: 44; radius: 6
+                    anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     color: "#2a1512"; border.color: "#7a3b32"
                     Text { anchors.centerIn: parent; text: "PANIC"
@@ -363,9 +410,7 @@ Item {
                                 color: "#0b0e11"
                                 Rectangle {
                                     height: parent.height; radius: 6
-                                    width: parent.width * Math.min(1,
-                                           (index < page.acts.length
-                                            ? page.acts[index] : 0) / 1000.0)
+                                    width: parent.width * (page.actsDisp[index] || 0)
                                     color: chRow.isM1 ? "#b3a5f0"
                                            : (chRow.isDrums ? "#e8b84b" : "#4cc470")
                                 }
