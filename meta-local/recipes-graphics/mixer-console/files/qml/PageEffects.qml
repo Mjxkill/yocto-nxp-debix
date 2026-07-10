@@ -182,47 +182,106 @@ Item {
             width: parent.width - 212; height: parent.height
             color: "#171c21"; radius: 8; border.color: "#060809"
 
-            // rack
+            // rack — parité avec le look web : en-tête de rack + cartes
+            // de paramètres par GROUPE (V13.4)
             Flickable {
                 anchors.fill: parent; anchors.margins: 12
                 visible: !page.listOpen
-                contentHeight: rackFlow.height
+                contentHeight: rackCol.height
                 clip: true
-                Flow {
-                    id: rackFlow
+
+                Column {
+                    id: rackCol
                     width: parent.width
-                    spacing: 14
+                    spacing: 12
+
+                    // en-tête de rack : nom du plugin + méta
+                    Row {
+                        width: parent.width
+                        spacing: 12
+                        Text {
+                            text: page.fx.type === "lv2"
+                                  ? String(page.fx.uri || "?").split("/").pop()
+                                  : String(page.fx.type || "…").toUpperCase()
+                            color: "#e9e5da"; font.pixelSize: 16; font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            text: (page.fx.type === "lv2" ? "LV2" : "NATIF")
+                                  + "  ·  BUS FX" + (page.bus + 1)
+                            color: "#5c666e"; font.pixelSize: 10
+                            font.letterSpacing: 2
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    // cartes par groupe (BANDE 1/2/… ou GÉNÉRAL)
                     Repeater {
-                        model: page.fx.params ? Object.keys(page.fx.params) : []
-                        Column {
-                            width: 84
-                            spacing: 4
-                            property var meta: (page.fx.meta && page.fx.meta[modelData]) ? page.fx.meta[modelData] : {}
+                        model: {
+                            const keys = page.fx.params
+                                         ? Object.keys(page.fx.params) : [];
+                            const gs = {}, order = [];
+                            keys.forEach(k => {
+                                const g = page.grpOf(k);
+                                if (!gs[g]) { gs[g] = []; order.push(g); }
+                                gs[g].push(k);
+                            });
+                            order.sort((a, b) =>
+                                a === "GÉNÉRAL" ? -1 : b === "GÉNÉRAL" ? 1 : 0);
+                            return order.map(g => ({ name: g, keys: gs[g] }));
+                        }
+                        Rectangle {
+                            width: rackCol.width
+                            height: grpFlow.height + 46
+                            radius: 8
+                            color: "#1b2126"; border.color: "#060809"
                             Text {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                width: parent.width
-                                horizontalAlignment: Text.AlignHCenter
-                                elide: Text.ElideRight
-                                text: (meta.label || modelData)
-                                color: "#5c666e"; font.pixelSize: 9
-                                font.letterSpacing: 2
+                                x: 12; y: 10
+                                text: modelData.name
+                                color: "#e5a13c"; font.pixelSize: 10
+                                font.bold: true; font.letterSpacing: 3
                             }
-                            Knob {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                from: meta.min !== undefined ? meta.min : 0
-                                to: meta.max !== undefined ? meta.max : 1
-                                unit: meta.unit || ""
-                                Component.onCompleted: value = page.fx.params[modelData]
-                                onMoved: (v) => page.sendParam(modelData, v)
+                            Flow {
+                                id: grpFlow
+                                x: 12; y: 32
+                                width: parent.width - 24
+                                spacing: 14
+                                Repeater {
+                                    model: modelData.keys
+                                    Column {
+                                        width: 84
+                                        spacing: 4
+                                        property var meta: (page.fx.meta && page.fx.meta[modelData]) ? page.fx.meta[modelData] : {}
+                                        Text {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            width: parent.width
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                            text: (meta.label || modelData)
+                                            color: "#5c666e"; font.pixelSize: 9
+                                            font.letterSpacing: 2
+                                        }
+                                        Knob {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            from: meta.min !== undefined ? meta.min : 0
+                                            to: meta.max !== undefined ? meta.max : 1
+                                            unit: meta.unit || ""
+                                            Component.onCompleted: value = page.fx.params[modelData]
+                                            onMoved: (v) => page.sendParam(modelData, v)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                Text {
-                    visible: !page.fx.params || Object.keys(page.fx.params).length === 0
-                    anchors.centerIn: parent
-                    text: page.fx.type ? "Moteur « " + page.fx.type + " » sans paramètres exposés" : "Chargement…"
-                    color: "#5c666e"; font.pixelSize: 12
+
+                    Text {
+                        visible: !page.fx.params || Object.keys(page.fx.params).length === 0
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                        text: page.fx.type ? "Moteur « " + page.fx.type + " » sans paramètres exposés — choisis un effet dans la liste" : "Chargement…"
+                        color: "#5c666e"; font.pixelSize: 12
+                    }
                 }
             }
 
