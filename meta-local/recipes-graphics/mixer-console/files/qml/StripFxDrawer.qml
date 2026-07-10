@@ -27,9 +27,19 @@ Rectangle {
         return i < 8 ? "S" + (i + 1) : (i < 16 ? "U" + (i - 7) : "P" + (i - 15));
     }
 
+    // V13.3 : liens stéréo — miroir EQ TAC / DRC sur la paire liée
+    property var links: [0, 0, 0, 0, 0, 0, 0, 0]
+    function linkedPartner() {
+        return (!isOut && chanIdx < 16 && links[chanIdx >> 1] === 1)
+               ? (chanIdx ^ 1) : -1;
+    }
+
     function open(idx, out) {
         chanIdx = idx; isOut = out; tab = ""; blobs = {}; showRawBq = false;
         status = "Lecture des contrôles ALSA…";
+        mixer.call({ op: "get_links" }, function(r) {
+            if (r.ok && r.links) drawer.links = r.links;
+        });
         visible = true;
         groups = [];
         xhr("GET", "/api/alsa/contents", null, function(txt) {
@@ -111,6 +121,24 @@ Rectangle {
     function applyBlob(numid, done) {
         const b = blobs[numid];
         if (!b || b.selftest !== "OK") return;
+        // V13.3 : paire liée → le canal édité est recopié sur le jumeau
+        // (mêmes réglages DRC/crossover par bande) avant l'empaquetage
+        const lp = linkedPartner();
+        if (lp >= 0) {
+            const ch = chanIdx % 8, pc = lp % 8;
+            if (b.kind === "multiband") {
+                for (const row of b.drc)
+                    if (ch < row.length && pc < row.length)
+                        row[pc] = Object.assign({}, row[ch],
+                            { _raw: row[ch]._raw ? new Uint8Array(row[ch]._raw) : row[pc]._raw });
+                if (b.crossover_fcs_ch && b.crossover_fcs_ch[ch])
+                    b.crossover_fcs_ch[pc] =
+                        Object.assign({}, b.crossover_fcs_ch[ch]);
+            } else if (b.params && ch < b.params.length && pc < b.params.length) {
+                b.params[pc] = Object.assign({}, b.params[ch],
+                    { _raw: b.params[ch]._raw ? new Uint8Array(b.params[ch]._raw) : b.params[pc]._raw });
+            }
+        }
         const hex = FX.packBlob(b);
         xhr("POST", "/api/dsp/blob/set",
             JSON.stringify({ numid: numid, hex: hex }),
@@ -409,9 +437,30 @@ Rectangle {
                         const cur = Object.assign({}, bp(i), partial);
                         const all = drawer.bqParams;
                         all[name] = cur;
-                        drawer.bqParams = all;      // notifie les bindings
                         const pw = pendWrite;
                         pw[name] = { ctl: bands[i].ctl, p: cur };
+                        // V13.3 : paire liée (mics : même TAC, CH1↔CH2) →
+                        // la bande jumelle reçoit les MÊMES paramètres
+                        if (drawer.linkedPartner() >= 0 && drawer.chanIdx < 8) {
+                            const mineIdx = [1, 5, 9, 2, 6, 10];
+                            const twinIdx = [2, 6, 10, 1, 5, 9];
+                            const m = FX.bqIdx(name);
+                            const pos = mineIdx.indexOf(m);
+                            if (pos >= 0) {
+                                const g = drawer.activeGroup();
+                                if (g && g.biquads) {
+                                    for (const c of g.controls) {
+                                        if (FX.bqIdx(c.fullName) === twinIdx[pos]) {
+                                            all[c.fullName] =
+                                                Object.assign({}, cur);
+                                            pw[c.fullName] = { ctl: c, p: cur };
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        drawer.bqParams = all;      // notifie les bindings
                         pendWrite = pw;
                         writeTimer.restart();
                         curve.requestPaint();

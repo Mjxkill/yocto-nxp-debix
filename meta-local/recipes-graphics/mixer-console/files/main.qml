@@ -18,6 +18,14 @@ Window {
         rotation: 270
 
         property int currentPage: 0
+        // V13.3 : liens stéréo des paires (2k,2k+1) — source moteur
+        property var links: [0, 0, 0, 0, 0, 0, 0, 0]
+        function pollLinks() {
+            mixer.call({ op: "get_links" }, function(r) {
+                if (r.ok && r.links) scene.links = r.links;
+            });
+        }
+        Component.onCompleted: pollLinks()
         // V10-N8 : informe le client — les pollers meters/analyzer/insert
         // ne tournent que sur les pages qui les affichent
         onCurrentPageChanged: mixer.activePage = currentPage
@@ -424,11 +432,15 @@ Window {
                     width: parent.width
                     height: parent.height - 60 - 38 - 46
 
-                    // -- 8 tranches --
-                    Row {
-                        id: bankRow
+                    // -- 8 tranches (Item conteneur : le Row des strips +
+                    //    l'overlay des boutons de LIEN, hors flux) --
+                    Item {
                         width: parent.width - 320
                         height: parent.height
+
+                    Row {
+                        id: bankRow
+                        anchors.fill: parent
                         Repeater {
                             id: stripRep
                             model: 8
@@ -451,6 +463,15 @@ Window {
                                     // matrice appartient à la page routing
                                     if (def.t === "in") {
                                         mixer.setInputGain(def.idx, db);
+                                        // V13.3 : paire liée → le fader
+                                        // jumeau suit À LA FRAME (le moteur
+                                        // miroite déjà le gain réel)
+                                        if (def.idx < 16 &&
+                                            scene.links[def.idx >> 1] === 1) {
+                                            const p = stripRep.itemAt(index ^ 1);
+                                            if (p && !p.faderInteracting)
+                                                p.faderValue = (db + 60) / 66;
+                                        }
                                     } else {
                                         mixer.setOutputGain(def.idx, db);
                                     }
@@ -458,8 +479,21 @@ Window {
                                 onMuteToggled: (m) => { if (def && def.t === "in") mixer.setMute(def.idx, m); }
                                 onSendToggled: (bus, on) => {
                                     if (!def || def.t !== "in") return;
-                                    mixer.setSend(def.idx, bus * 2, on ? 0 : -72);
-                                    mixer.setSend(def.idx, bus * 2 + 1, on ? 0 : -72);
+                                    // V13.3 : paire liée = send STÉRÉO
+                                    // (impaire→L, paire→R) ; sinon mono
+                                    // vers les deux canaux du bus
+                                    const linked = def.idx < 16 &&
+                                        scene.links[def.idx >> 1] === 1;
+                                    if (linked) {
+                                        const left = (def.idx & 1) === 0;
+                                        mixer.setSend(def.idx, bus * 2,
+                                                      (on && left) ? 0 : -72);
+                                        mixer.setSend(def.idx, bus * 2 + 1,
+                                                      (on && !left) ? 0 : -72);
+                                    } else {
+                                        mixer.setSend(def.idx, bus * 2, on ? 0 : -72);
+                                        mixer.setSend(def.idx, bus * 2 + 1, on ? 0 : -72);
+                                    }
                                 }
                                 // V12-AMX : adhésion au groupe automix
                                 onAmxToggled: (on) => {
@@ -470,6 +504,41 @@ Window {
                                 }
                             }
                         }
+                    }
+
+                    // V13.3 : boutons de LIEN STÉRÉO aux jonctions des
+                    // paires — OVERLAY (hors flux du Row)
+                    Repeater {
+                        model: 4
+                        Rectangle {
+                            visible: scene.currentBank === 0 || scene.currentBank === 1
+                            property int pair: (scene.currentBank === 0 ? 0 : 4) + index
+                            property bool on: scene.links[pair] === 1
+                            z: 10
+                            width: 30; height: 30; radius: 15
+                            x: bankRow.width / 8 * (index * 2 + 1) - 15
+                            y: 6
+                            color: on ? "#2a2214" : "#14181c"
+                            border.color: on ? "#e5a13c" : "#39434b"
+                            border.width: on ? 2 : 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: "⛓"
+                                color: parent.on ? "#e5a13c" : "#5c666e"
+                                font.pixelSize: 14
+                            }
+                            TapHandler {
+                                margin: 6
+                                gesturePolicy: TapHandler.ReleaseWithinBounds
+                                onTapped: {
+                                    const v = parent.on ? 0 : 1;
+                                    mixer.call({ op: "set_link",
+                                                 pair: parent.pair, on: v },
+                                        function() { scene.pollLinks(); });
+                                }
+                            }
+                        }
+                    }
                     }
 
                     // -- master --

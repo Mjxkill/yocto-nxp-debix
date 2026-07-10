@@ -1497,6 +1497,22 @@ static void smp_scan(int locked)
  * ARCHI_V12_LOOPER_PRO.md. */
 #define LOOP_TRACKS      6
 #define LOOP_MAX_FRAMES  (40u * 48000u)   /* 40 s/piste — 6×40s stéréo = 88 MiB */
+/* ============ V13.3 : LIEN STÉRÉO de paires de tranches ============
+ * Paires fixes (2k, 2k+1) sur les 16 tranches réelles. Une paire liée :
+ * les écritures fader/mute/gate/comp/automix sur UNE tranche s'appliquent
+ * aux DEUX (miroir dans les handlers socket — jamais dans l'audio).
+ * Les sends ne sont PAS miroirés (pattern stéréo posé par les GUIs).
+ * Voir docs/ARCHI/ARCHI_V13.3_STEREO_LINK.md */
+#define N_LINK_PAIRS 8
+static _Atomic int g_link[N_LINK_PAIRS];
+static inline int link_partner(int src)
+{
+	if (src < 0 || src >= 2 * N_LINK_PAIRS)
+		return -1;
+	return atomic_load_explicit(&g_link[src / 2],
+				    memory_order_relaxed) ? (src ^ 1) : -1;
+}
+
 /* V13.2 : TR_ARMED = REC quantifié — la piste attend le prochain début de
  * boucle maître pour passer en REC (un tour exact puis PLAY, couture ≤ 1
  * période). Demande utilisateur 2026-07-10. */
@@ -3274,9 +3290,14 @@ static void handle_cmd(int fd, const char *line)
 			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_input_gain args\"}\n");
 			return;
 		}
-		pthread_mutex_lock(&g_st.target_lock);
-		g_st.input_target[src] = gain;
-		pthread_mutex_unlock(&g_st.target_lock);
+		{
+			const int lp = link_partner(src);   /* V13.3 */
+			pthread_mutex_lock(&g_st.target_lock);
+			g_st.input_target[src] = gain;
+			if (lp >= 0)
+				g_st.input_target[lp] = gain;
+			pthread_mutex_unlock(&g_st.target_lock);
+		}
 		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"op\":\"set_input_gain\",\"src\":%d,\"gain\":%.4f}\n",
@@ -3291,16 +3312,49 @@ static void handle_cmd(int fd, const char *line)
 			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_mute args\"}\n");
 			return;
 		}
-		pthread_mutex_lock(&g_st.target_lock);
-		if (mute)
-			g_st.mute_mask |= (1u << src);
-		else
-			g_st.mute_mask &= ~(1u << src);
-		pthread_mutex_unlock(&g_st.target_lock);
+		{
+			const int lp = link_partner(src);   /* V13.3 */
+			pthread_mutex_lock(&g_st.target_lock);
+			if (mute) {
+				g_st.mute_mask |= (1u << src);
+				if (lp >= 0) g_st.mute_mask |= (1u << lp);
+			} else {
+				g_st.mute_mask &= ~(1u << src);
+				if (lp >= 0) g_st.mute_mask &= ~(1u << lp);
+			}
+			pthread_mutex_unlock(&g_st.target_lock);
+		}
 		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
 		snprintf(reply, sizeof(reply),
 			 "{\"ok\":true,\"op\":\"set_mute\",\"src\":%d,\"mute\":%d}\n",
 			 src, mute);
+		write(fd, reply, strlen(reply));
+
+	} else if (json_has_op(line, "set_link")) {
+		/* V13.3 : {"op":"set_link","pair":0-7,"on":0|1} — lie les
+		 * tranches (2k,2k+1). Ne modifie rien d'autre : le premier
+		 * geste (fader/mute/...) resynchronise la paire. */
+		int pair = -1, on = 0;
+		if (json_get_int(line, "pair", &pair) < 0 ||
+		    json_get_int(line, "on", &on) < 0 ||
+		    pair < 0 || pair >= N_LINK_PAIRS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_link args\"}\n");
+			return;
+		}
+		atomic_store_explicit(&g_link[pair], on ? 1 : 0,
+				      memory_order_relaxed);
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_link\",\"pair\":%d,"
+			    "\"on\":%d}\n", pair, on ? 1 : 0);
+
+	} else if (json_has_op(line, "get_links")) {
+		int n = snprintf(reply, sizeof(reply),
+				 "{\"ok\":true,\"links\":[");
+		for (int i = 0; i < N_LINK_PAIRS; i++)
+			n += snprintf(reply + n, sizeof(reply) - n, "%s%d",
+				      i ? "," : "",
+				      atomic_load(&g_link[i]));
+		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
 		write(fd, reply, strlen(reply));
 
 	} else if (json_has_op(line, "get_strip_routing")) {
@@ -3900,15 +3954,27 @@ static void handle_cmd(int fd, const char *line)
 		 * écraser le poids, et régler le poids ne touche pas l'adhésion */
 		int has_on = json_get_int(line, "on", &on) == 0;
 		int has_w  = json_get_float(line, "weight_db", &wdb) == 0;
-		pthread_mutex_lock(&g_st.target_lock);
-		if (has_on) {
-			g_st.automix_member[src] = on ? 1 : 0;
-			if (!on)
-				g_st.automix_gtarget[src] = 1.0f;
+		{
+			const int lp = link_partner(src);   /* V13.3 */
+			pthread_mutex_lock(&g_st.target_lock);
+			if (has_on) {
+				g_st.automix_member[src] = on ? 1 : 0;
+				if (!on)
+					g_st.automix_gtarget[src] = 1.0f;
+				if (lp >= 0) {
+					g_st.automix_member[lp] = on ? 1 : 0;
+					if (!on)
+						g_st.automix_gtarget[lp] = 1.0f;
+				}
+			}
+			if (has_w && wdb >= -20.0f && wdb <= 20.0f) {
+				g_st.automix_weight[src] = powf(10.0f, wdb / 20.0f);
+				if (lp >= 0)
+					g_st.automix_weight[lp] =
+						g_st.automix_weight[src];
+			}
+			pthread_mutex_unlock(&g_st.target_lock);
 		}
-		if (has_w && wdb >= -20.0f && wdb <= 20.0f)
-			g_st.automix_weight[src] = powf(10.0f, wdb / 20.0f);
-		pthread_mutex_unlock(&g_st.target_lock);
 		atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_automix\",\"src\":%d,"
 			    "\"on\":%d}\n", src, g_st.automix_member[src]);
@@ -3977,9 +4043,15 @@ static void handle_cmd(int fd, const char *line)
 		(void)json_get_float(line, "release_ms", &rel);
 		(void)json_get_float(line, "range_db", &rng);
 		(void)json_get_float(line, "hold_ms", &hold);
-		pthread_mutex_lock(&g_st.target_lock);
-		exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
-		pthread_mutex_unlock(&g_st.target_lock);
+		{
+			const int lp = link_partner(src);   /* V13.3 */
+			pthread_mutex_lock(&g_st.target_lock);
+			exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
+			if (lp >= 0 && lp < N_EXP_CH)
+				exp_configure(lp, on, thr, ratio, atk, rel,
+					      rng, hold);
+			pthread_mutex_unlock(&g_st.target_lock);
+		}
 		atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_expander\",\"src\":%d,"
 			"\"on\":%d}\n", src, g_exp[src].on);
@@ -4207,9 +4279,14 @@ static void handle_cmd(int fd, const char *line)
 		(void)json_get_float(line, "attack_ms", &atk);
 		(void)json_get_float(line, "release_ms", &rel);
 		(void)json_get_float(line, "makeup_db", &mk);
-		pthread_mutex_lock(&g_st.target_lock);
-		cmp_configure(src, on, thr, ratio, atk, rel, mk);
-		pthread_mutex_unlock(&g_st.target_lock);
+		{
+			const int lp = link_partner(src);   /* V13.3 */
+			pthread_mutex_lock(&g_st.target_lock);
+			cmp_configure(src, on, thr, ratio, atk, rel, mk);
+			if (lp >= 0 && lp < N_EXP_CH)
+				cmp_configure(lp, on, thr, ratio, atk, rel, mk);
+			pthread_mutex_unlock(&g_st.target_lock);
+		}
 		atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_comp\",\"src\":%d,"
 			"\"on\":%d}\n", src, g_cmp[src].on);
@@ -5248,6 +5325,11 @@ static void save_state_to(const char *path)
 			fprintf(f, " %.4f", g_st.send_target[s][b]);
 		fprintf(f, "\n");
 	}
+	/* V13.3 : liens stéréo (8 paires) */
+	fprintf(f, "links");
+	for (int i = 0; i < N_LINK_PAIRS; i++)
+		fprintf(f, " %d", atomic_load(&g_link[i]));
+	fprintf(f, "\n");
 	pthread_mutex_unlock(&g_st.target_lock);
 
 	fclose(f);
@@ -5368,6 +5450,7 @@ tail:
 		char bl[160];
 		int src, on, role, live, rv;
 		float thr, ratio, atk, rel, mk, shr, sv[8];
+		int lk[8];
 		while (fgets(bl, sizeof(bl), f)) {
 			if (sscanf(bl, "comp %d %d %f %f %f %f %f",
 				   &src, &on, &thr, &ratio, &atk, &rel,
@@ -5398,6 +5481,12 @@ tail:
 				for (int b = 0; b < N_BUS_FX_CH && b < 8; b++)
 					if (sv[b] >= 0.0f && sv[b] <= 8.0f)
 						g_st.send_target[src][b] = sv[b];
+			} else if (sscanf(bl, "links %d %d %d %d %d %d %d %d",
+					  &lk[0], &lk[1], &lk[2], &lk[3],
+					  &lk[4], &lk[5], &lk[6], &lk[7]) == 8) {
+				/* V13.3 : liens stéréo */
+				for (int i = 0; i < N_LINK_PAIRS; i++)
+					atomic_store(&g_link[i], lk[i] ? 1 : 0);
 			}
 		}
 	}
@@ -5563,6 +5652,7 @@ static void load_mixer_state(void)
 		char bl[160];
 		int src, on, role, live, rv;
 		float thr, ratio, atk, rel, mk, shr, sv[8];
+		int lk[8];
 		while (fgets(bl, sizeof(bl), f)) {
 			if (sscanf(bl, "comp %d %d %f %f %f %f %f",
 				   &src, &on, &thr, &ratio, &atk, &rel,
@@ -5593,6 +5683,12 @@ static void load_mixer_state(void)
 				for (int b = 0; b < N_BUS_FX_CH && b < 8; b++)
 					if (sv[b] >= 0.0f && sv[b] <= 8.0f)
 						g_st.send_target[src][b] = sv[b];
+			} else if (sscanf(bl, "links %d %d %d %d %d %d %d %d",
+					  &lk[0], &lk[1], &lk[2], &lk[3],
+					  &lk[4], &lk[5], &lk[6], &lk[7]) == 8) {
+				/* V13.3 : liens stéréo */
+				for (int i = 0; i < N_LINK_PAIRS; i++)
+					atomic_store(&g_link[i], lk[i] ? 1 : 0);
 			}
 		}
 	}
