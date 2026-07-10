@@ -5,6 +5,20 @@
 #include <QDebug>
 
 static const char *RULE_PATH = "/etc/udev/rules.d/99-goodix-calibration.rules";
+/* V13.2 : confirmation post-restart — .bak = règle précédente (ou marqueur
+ * d'absence), pending = drapeau « nouvelle matrice non confirmée » */
+static const char *BAK_PATH  = "/etc/udev/rules.d/99-goodix-calibration.rules.bak";
+static const char *PENDING_PATH = "/var/lib/ala/calib-pending";
+static const char *BAK_NONE_MARK = "# AUCUNE-REGLE-PRECEDENTE\n";
+
+static void reload_udev_and_restart()
+{
+    QProcess::execute("udevadm", {"control", "--reload-rules"});
+    QProcess::execute("udevadm", {"trigger"});
+    QProcess::startDetached("systemd-run",
+        {"--unit=console-cal-restart", "--collect", "sh", "-c",
+         "sleep 1; systemctl restart console-n0 mixer-console 2>/dev/null; true"});
+}
 
 /* Résout le système 3x3 A·v = b (Cramer). */
 static bool solve3(const double A[3][3], const double b[3], double v[3])
@@ -103,21 +117,85 @@ bool CalibrationHelper::finish(const QVariantList &raw, const QVariantList &targ
         .arg(M[0], 0, 'f', 5).arg(M[1], 0, 'f', 5).arg(M[2], 0, 'f', 5)
         .arg(M[3], 0, 'f', 5).arg(M[4], 0, 'f', 5).arg(M[5], 0, 'f', 5);
 
+    /* V13.2 : sauvegarde de la règle précédente + drapeau de confirmation
+     * AVANT d'écrire — l'overlay demandera 2 mires de vérif au restart ;
+     * échec/timeout → verify_fail() restaure la .bak automatiquement. */
+    {
+        QFile bak(QString::fromLatin1(BAK_PATH));
+        if (bak.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            QFile cur(QString::fromLatin1(RULE_PATH));
+            if (cur.open(QIODevice::ReadOnly)) {
+                bak.write(cur.readAll());
+                cur.close();
+            } else {
+                bak.write(BAK_NONE_MARK);
+            }
+            bak.close();
+        }
+        QFile pend(QString::fromLatin1(PENDING_PATH));
+        if (pend.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            pend.write("1\n");
+            pend.close();
+        }
+    }
+
     QFile out(QString::fromLatin1(RULE_PATH));
     if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         qWarning() << "calibration: écriture règle impossible";
+        QFile::remove(QString::fromLatin1(PENDING_PATH));
         return false;
     }
     out.write(rule.toUtf8());
     out.close();
     qWarning() << "calibration: matrice" << M[0] << M[1] << M[2]
-               << M[3] << M[4] << M[5];
+               << M[3] << M[4] << M[5] << "(en attente de confirmation)";
 
     /* recharge udev puis redémarre l'app (la matrice est lue à l'open) */
-    QProcess::execute("udevadm", {"control", "--reload-rules"});
-    QProcess::execute("udevadm", {"trigger"});
-    QProcess::startDetached("systemd-run",
-        {"--unit=console-cal-restart", "--collect", "sh", "-c",
-         "sleep 1; systemctl restart console-n0 mixer-console 2>/dev/null; true"});
+    reload_udev_and_restart();
     return true;
+}
+
+void CalibrationHelper::checkPending()
+{
+    if (!QFile::exists(QString::fromLatin1(PENDING_PATH)))
+        return;
+    m_verify = true;
+    emit verifyModeChanged();
+    qWarning() << "calibration: nouvelle matrice en attente de confirmation";
+}
+
+void CalibrationHelper::verifyOk()
+{
+    m_verify = false;
+    emit verifyModeChanged();
+    QFile::remove(QString::fromLatin1(PENDING_PATH));
+    QFile::remove(QString::fromLatin1(BAK_PATH));
+    qWarning() << "calibration: CONFIRMÉE";
+}
+
+void CalibrationHelper::verifyFail()
+{
+    m_verify = false;
+    emit verifyModeChanged();
+    QFile::remove(QString::fromLatin1(PENDING_PATH));
+    QFile bak(QString::fromLatin1(BAK_PATH));
+    bool had_prev = false;
+    QByteArray prev;
+    if (bak.open(QIODevice::ReadOnly)) {
+        prev = bak.readAll();
+        bak.close();
+        had_prev = (prev != QByteArray(BAK_NONE_MARK));
+    }
+    if (had_prev) {
+        QFile out(QString::fromLatin1(RULE_PATH));
+        if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            out.write(prev);
+            out.close();
+        }
+    } else {
+        QFile::remove(QString::fromLatin1(RULE_PATH));
+    }
+    QFile::remove(QString::fromLatin1(BAK_PATH));
+    qWarning() << "calibration: NON confirmée — matrice précédente restaurée";
+    reload_udev_and_restart();
 }

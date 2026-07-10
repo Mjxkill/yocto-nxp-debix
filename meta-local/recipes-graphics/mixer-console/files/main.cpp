@@ -147,6 +147,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("fpsMeter", &fps);
     engine.rootContext()->setContextProperty("mixer", &mixer);
     engine.rootContext()->setContextProperty("calib", &calibHelper);
+    calibHelper.checkPending();   /* V13.2 : confirmation post-calibration */
     engine.rootContext()->setContextProperty("boot", &bootStatus);
     engine.load(QUrl(QStringLiteral("qrc:/MixerConsole/main.qml")));
     if (engine.rootObjects().isEmpty())

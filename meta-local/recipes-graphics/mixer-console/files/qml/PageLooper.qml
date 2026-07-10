@@ -300,6 +300,7 @@ Item {
                                        font.pixelSize: 13; font.bold: true }
                                 TapHandler {
                                     enabled: isEmpty
+                                    margin: 8
                                     gesturePolicy: TapHandler.ReleaseWithinBounds
                                     onTapped: page.trackCtl(index, "rec")
                                 }
@@ -315,6 +316,7 @@ Item {
                                        font.pixelSize: 13; font.bold: true }
                                 TapHandler {
                                     enabled: isRec
+                                    margin: 8
                                     gesturePolicy: TapHandler.ReleaseWithinBounds
                                     onTapped: page.trackCtl(index, "play")
                                 }
@@ -331,6 +333,7 @@ Item {
                                        font.pixelSize: 13; font.bold: true }
                                 TapHandler {
                                     enabled: isPlay
+                                    margin: 8
                                     gesturePolicy: TapHandler.ReleaseWithinBounds
                                     onTapped: page.trackCtl(index, muted ? "unmute" : "mute")
                                 }
@@ -345,6 +348,7 @@ Item {
                                        font.pixelSize: 20; font.bold: true }
                                 TapHandler {
                                     enabled: !isEmpty && !isRec
+                                    margin: 8
                                     gesturePolicy: TapHandler.ReleaseWithinBounds
                                     onTapped: page.trackCtl(index, "clear")
                                 }
