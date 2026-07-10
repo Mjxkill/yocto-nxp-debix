@@ -127,6 +127,12 @@ Le **sampleur** : 16 pads. Dépose tes fichiers **WAV 48 kHz** dans
 
 ## 7. Page LOOPER
 
+> **Enregistrement quantifié (V13.2)** : la première piste enregistrée
+> définit la boucle (durée/début/fin). Sur les pistes suivantes, **REC
+> arme la piste (⏳ ARMÉ, ambre clignotant)** : l'enregistrement démarre
+> tout seul au prochain début de boucle et s'arrête exactement un tour
+> plus tard, puis la couche passe en lecture. Re-taper REC désarme.
+
 ![Page LOOPER](img/page_looper.png)
 
 Une **loopstation 6 pistes** (type RC-505). Chaque piste est une

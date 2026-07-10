@@ -345,6 +345,7 @@ body{
 @media (prefers-reduced-motion:reduce){
   .mlstate i{animation:none;}
 }
+@keyframes looparm{from{opacity:1}to{opacity:.55}}
 </style>
 
 <div class="note"><b>BETA</b> · aperçu du nouveau design — données simulées · l'interface actuelle reste sur <a href="/" style="color:var(--accent)">/</a></div>
@@ -3197,11 +3198,13 @@ function loopRender(st){
   mv.style.width=dbw(st.master_peak||0)+"%";
   mv.style.background=(st.master_peak||0)>1932735283?"#e05545":"#4cc470";
   c.innerHTML=st.tracks.map((t,i)=>{
-    const rec=t.state==="rec", play=t.state==="play", empty=t.state==="empty";
+    const rec=t.state==="rec", play=t.state==="play", empty=t.state==="empty",
+          armed=t.state==="armed";
     const mut=t.muted===1, ac=TRCOL[i];
     return `<div style="display:flex;align-items:center;gap:10px;border-radius:8px;padding:8px 10px;
-      background:${rec?"#2a1512":play?"#141b16":"#14181c"};
-      border:${rec?"2px solid #e05545":(play&&!mut)?"2px solid "+ac:"1px solid #22282e"};">
+      background:${rec?"#2a1512":armed?"#241d10":play?"#141b16":"#14181c"};
+      border:${rec?"2px solid #e05545":armed?"2px solid #e8b84b":(play&&!mut)?"2px solid "+ac:"1px solid #22282e"};
+      ${armed?"animation:looparm 0.9s ease-in-out infinite alternate;":""}">
       <div style="width:34px;height:34px;border-radius:17px;display:flex;align-items:center;justify-content:center;
         background:${empty?"#1b2126":ac};color:${empty?"#5c666e":"#0b0e11"};font-weight:700;">${i+1}</div>
       <button class="wbtn" data-t="${i}" data-a="srcdn" ${rec?"disabled":""}>&#8249;</button>
@@ -3209,10 +3212,11 @@ function loopRender(st){
       <button class="wbtn" data-t="${i}" data-a="srcup" ${rec?"disabled":""}>&#8250;</button>
       <div style="width:110px;height:12px;border-radius:6px;background:#0b0e11;overflow:hidden;">
         <div style="height:100%;width:${(rec||(play&&!mut))?dbw(t.peak):0}%;background:${rec?"#e05545":ac};"></div></div>
-      <span style="width:64px;font-family:monospace;font-size:10px;color:${rec?"#e05545":"var(--mut)"};">
-        ${t.len_s>0?t.len_s.toFixed(2)+" s":(rec?"● rec…":"—")}</span>
+      <span style="width:64px;font-family:monospace;font-size:10px;color:${rec?"#e05545":armed?"#e8b84b":"var(--mut)"};">
+        ${t.len_s>0?t.len_s.toFixed(2)+" s":(rec?"● rec…":armed?"⏳ armé":"—")}</span>
       <span style="flex:1"></span>
-      <button class="wbtn warn" data-t="${i}" data-a="rec"  ${empty?"":"disabled"}>&#9679; REC</button>
+      <button class="wbtn warn" data-t="${i}" data-a="rec"  ${(empty||armed)?"":"disabled"}
+        style="${armed?"color:#e8b84b;border-color:#e8b84b;":""}">${armed?"⏳ ARMÉ":"&#9679; REC"}</button>
       <button class="wbtn ok"   data-t="${i}" data-a="play" ${rec?"":"disabled"}>&#9654; PLAY</button>
       <button class="wbtn"      data-t="${i}" data-a="${mut?"unmute":"mute"}" ${play?"":"disabled"}
         style="${mut?"color:#e8b84b;border-color:#e8b84b;":""}">${mut?"MUTED":"ON"}</button>

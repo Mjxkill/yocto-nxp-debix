@@ -1497,8 +1497,11 @@ static void smp_scan(int locked)
  * ARCHI_V12_LOOPER_PRO.md. */
 #define LOOP_TRACKS      6
 #define LOOP_MAX_FRAMES  (40u * 48000u)   /* 40 s/piste — 6×40s stéréo = 88 MiB */
-enum { TR_EMPTY, TR_REC, TR_PLAY };
-static const char *const TR_NAMES[] = { "empty", "rec", "play" };
+/* V13.2 : TR_ARMED = REC quantifié — la piste attend le prochain début de
+ * boucle maître pour passer en REC (un tour exact puis PLAY, couture ≤ 1
+ * période). Demande utilisateur 2026-07-10. */
+enum { TR_EMPTY, TR_REC, TR_PLAY, TR_ARMED };
+static const char *const TR_NAMES[] = { "empty", "rec", "play", "armed" };
 
 struct loop_track {
 	float           *buf;        /* stéréo entrelacé LR, LOOP_MAX_FRAMES*2 */
@@ -1535,9 +1538,20 @@ static void loop_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 	memset(sl, 0, sizeof(sl));
 	memset(sr, 0, sizeof(sr));
 
+	/* V13.2 : premier bloc d'un nouveau tour de boucle (lpos vient de
+	 * wrapper → ∈ [0, PERIOD_FRAMES)) : les pistes ARMÉES démarrent ici. */
+	const int boundary = (run && mlen && lpos < PERIOD_FRAMES);
+
 	for (int t = 0; t < LOOP_TRACKS; t++) {
 		struct loop_track *tr = &g_tr[t];
 		int st = atomic_load_explicit(&tr->state, memory_order_acquire);
+		if (st == TR_ARMED) {
+			if (!boundary)
+				continue;
+			atomic_store_explicit(&tr->state, TR_REC,
+					      memory_order_release);
+			st = TR_REC;   /* rec_start capturé ci-dessous (≈0) */
+		}
 		if (st != TR_REC && st != TR_PLAY)
 			continue;
 		if (!tr->buf)
@@ -3651,12 +3665,20 @@ static void handle_cmd(int fd, const char *line)
 		uint32_t mlen = atomic_load(&g_master_len);
 
 		if (!strcmp(act, "rec")) {
-			/* un seul REC simultané */
+			/* V13.2 : re-tap REC sur une piste ARMÉE = désarme */
+			if (st == TR_ARMED) {
+				atomic_store_explicit(&tr->state, TR_EMPTY,
+						      memory_order_release);
+				dprintf(fd, "{\"ok\":true,\"track\":%d,"
+					    "\"armed\":0}\n", t);
+				return;
+			}
+			/* un seul REC ACTIF simultané (l'armement est libre) */
 			int busy = 0;
 			for (int i = 0; i < LOOP_TRACKS; i++)
 				if (atomic_load(&g_tr[i].state) == TR_REC) busy = 1;
-			if (busy || st != TR_EMPTY) {
-				dprintf(fd, "{\"ok\":false,\"err\":\"busy or not empty\"}\n");
+			if (st != TR_EMPTY) {
+				dprintf(fd, "{\"ok\":false,\"err\":\"not empty\"}\n");
 				return;
 			}
 			/* memset de la piste VIDE (non lue par l'audio) → silence
@@ -3667,8 +3689,20 @@ static void handle_cmd(int fd, const char *line)
 			atomic_store(&tr->rec_start, REC_START_NONE);
 			atomic_store(&tr->len, 0);
 			atomic_store(&tr->muted, 0);
-			if (mlen) atomic_store(&g_loop_run, 1);  /* lpos avance pour l'alignement */
-			atomic_store_explicit(&tr->state, TR_REC, memory_order_release);
+			if (mlen == 0 && !busy) {
+				/* pas encore de boucle maître : REC libre
+				 * immédiat (définit la longueur au PLAY) */
+				atomic_store_explicit(&tr->state, TR_REC,
+						      memory_order_release);
+			} else {
+				/* V13.2 : boucle maître présente (ou en cours
+				 * d'enregistrement) → ARMÉ, départ quantifié
+				 * au prochain début de boucle, un tour exact
+				 * puis PLAY (loop_render). */
+				atomic_store(&g_loop_run, 1);
+				atomic_store_explicit(&tr->state, TR_ARMED,
+						      memory_order_release);
+			}
 		} else if (!strcmp(act, "play")) {
 			if (st == TR_REC) {
 				if (mlen == 0) {
@@ -3714,6 +3748,11 @@ static void handle_cmd(int fd, const char *line)
 				atomic_store(&g_master_len, 0);
 				atomic_store(&g_lpos, 0);
 				atomic_store(&g_loop_run, 0);
+				/* V13.2 : plus de boucle maître → les pistes
+				 * ARMÉES n'ont plus de départ possible */
+				for (int i = 0; i < LOOP_TRACKS; i++)
+					if (atomic_load(&g_tr[i].state) == TR_ARMED)
+						atomic_store(&g_tr[i].state, TR_EMPTY);
 			}
 		} else {
 			dprintf(fd, "{\"ok\":false,\"err\":\"bad action\"}\n");

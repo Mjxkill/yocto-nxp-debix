@@ -162,16 +162,19 @@ Item {
                     property bool isRec: st === "rec"
                     property bool isPlay: st === "play"
                     property bool isEmpty: st === "empty"
+                    property bool isArmed: st === "armed"
                     property bool muted: tr ? (tr.muted === 1) : false
                     property color accent: page.trackColors[index]
 
                     width: parent.width
                     height: 128
                     radius: 8
-                    color: isRec ? "#2a1512" : (isPlay ? "#141b16" : "#14181c")
+                    color: isRec ? "#2a1512"
+                           : (isArmed ? "#241d10" : (isPlay ? "#141b16" : "#14181c"))
                     border.color: isRec ? "#e05545"
-                                  : (isPlay && !muted ? accent : "#22282e")
-                    border.width: (isRec || (isPlay && !muted)) ? 2 : 1
+                                  : (isArmed ? "#e8b84b"
+                                     : (isPlay && !muted ? accent : "#22282e"))
+                    border.width: (isRec || isArmed || (isPlay && !muted)) ? 2 : 1
 
                     Row {
                         anchors.fill: parent
@@ -191,8 +194,11 @@ Item {
                                        font.pixelSize: 18; font.bold: true }
                             }
                             Text {
-                                text: isRec ? "REC" : (isPlay ? (muted ? "MUTE" : "PLAY") : "vide")
+                                text: isRec ? "REC"
+                                      : (isArmed ? "ARMÉ"
+                                         : (isPlay ? (muted ? "MUTE" : "PLAY") : "vide"))
                                 color: isRec ? "#e05545"
+                                       : isArmed ? "#e8b84b"
                                        : (isPlay ? (muted ? "#e8b84b" : trackRow.accent) : "#5c666e")
                                 font.pixelSize: 11; font.bold: true
                                 font.letterSpacing: 1
@@ -276,8 +282,10 @@ Item {
                             Text {
                                 text: (tr && tr.len_s > 0)
                                       ? tr.len_s.toFixed(2) + " s"
-                                      : (isRec ? "● enregistre…" : "—")
-                                color: isRec ? "#e05545" : "#8b959d"
+                                      : (isRec ? "● enregistre…"
+                                         : (isArmed ? "⏳ départ au tour" : "—"))
+                                color: isRec ? "#e05545"
+                                       : (isArmed ? "#e8b84b" : "#8b959d")
                                 font.pixelSize: 12; font.family: "monospace"
                             }
                         }
@@ -292,14 +300,26 @@ Item {
                             // REC (vide → enregistre)
                             Rectangle {
                                 width: 84; height: 56; radius: 6
-                                color: isRec ? "#3a1512" : "#1b2126"
-                                border.color: isRec ? "#e05545" : (isEmpty ? "#7a3b32" : "#39434b")
-                                border.width: isRec ? 2 : 1
-                                Text { anchors.centerIn: parent; text: "● REC"
-                                       color: isRec ? "#ff6a5a" : (isEmpty ? "#e05545" : "#5c666e")
+                                color: isRec ? "#3a1512" : (isArmed ? "#2a2214" : "#1b2126")
+                                border.color: isRec ? "#e05545"
+                                              : (isArmed ? "#e8b84b"
+                                                 : (isEmpty ? "#7a3b32" : "#39434b"))
+                                border.width: (isRec || isArmed) ? 2 : 1
+                                SequentialAnimation on opacity {
+                                    running: isArmed
+                                    loops: Animation.Infinite
+                                    NumberAnimation { to: 0.45; duration: 420 }
+                                    NumberAnimation { to: 1.0;  duration: 420 }
+                                    onRunningChanged: if (!running) parent.opacity = 1
+                                }
+                                Text { anchors.centerIn: parent
+                                       text: isArmed ? "⏳ ARMÉ" : "● REC"
+                                       color: isRec ? "#ff6a5a"
+                                              : (isArmed ? "#e8b84b"
+                                                 : (isEmpty ? "#e05545" : "#5c666e"))
                                        font.pixelSize: 13; font.bold: true }
                                 TapHandler {
-                                    enabled: isEmpty
+                                    enabled: isEmpty || isArmed
                                     margin: 8
                                     gesturePolicy: TapHandler.ReleaseWithinBounds
                                     onTapped: page.trackCtl(index, "rec")

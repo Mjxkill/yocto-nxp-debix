@@ -285,6 +285,10 @@ mots-clés à préfixe commun se parsent en `fgets`+`sscanf` (le littéral
   l'enable global est `set_automix_cfg {"on":1}`.
 - Looper : la fin d'un enregistrement = action **`play`** sur la piste
   (fige la longueur ; piste maîtresse = définit `master_len`).
+  V13.2 : REC alors qu'une boucle maître existe (ou s'enregistre) →
+  état **`armed`** : départ quantifié au prochain début de boucle, un
+  tour exact, puis PLAY automatique. Re-tap REC = désarme. Clear de la
+  dernière piste vivante désarme les pistes en attente.
 - `bandmix_measure` exige `src` et lance une mesure 12 s
   (`src:-1` = annuler).
 - **Numérotation des cartes ALSA instable au boot** (softac5212tdm vue
