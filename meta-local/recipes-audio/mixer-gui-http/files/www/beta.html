@@ -99,7 +99,7 @@ body{
 .strip.hidden{visibility:hidden;}
 
 /* --- banque de tranches --- */
-#bank{
+#bank{position:relative;
   display:grid;grid-template-columns:repeat(8,1fr);
   border-right:1px solid var(--line);
   background:
@@ -942,9 +942,44 @@ function applyBank(bi){
 }
 BANKS.forEach((b,bi)=>{
   const e=document.createElement("button");e.className="bk";e.textContent=b.label;
-  e.addEventListener("click",()=>{saveBank();applyBank(bi);});
+  e.addEventListener("click",()=>{saveBank();applyBank(bi);drawLinkBtns();});
   $("#bankbar").appendChild(e);
 });
+/* V13.3 : liens stéréo (source moteur, partagé toutes GUIs) */
+window.LINKS=[0,0,0,0,0,0,0,0];
+function pollLinks(){
+  fetch("/api/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({op:"get_links"})})
+  .then(r=>r.json()).then(j=>{if(j.ok&&j.links){window.LINKS=j.links;drawLinkBtns();}})
+  .catch(()=>{});
+}
+function drawLinkBtns(){
+  document.querySelectorAll(".lnkbtn").forEach(b=>b.remove());
+  const sd0=BANKS[curBank].strips[0];
+  if(!sd0||sd0.t!=="in"||sd0.idx>=16)return;
+  const base=sd0.idx;                     /* 0 (IN DSP) ou 8 (IN USB) */
+  for(let k=0;k<4;k++){
+    const pair=(base>>1)+k;
+    const b=document.createElement("button");
+    b.className="lnkbtn";
+    b.textContent="⛓";
+    const on=window.LINKS[pair]===1;
+    b.style.cssText="position:absolute;z-index:5;top:4px;width:28px;height:28px;"
+      +"border-radius:14px;font-size:13px;cursor:pointer;"
+      +`left:calc(${(k*2+1)*12.5}% - 14px);`
+      +(on?"background:#2a2214;border:2px solid #e5a13c;color:#e5a13c;"
+          :"background:#14181c;border:1px solid #39434b;color:#5c666e;");
+    b.addEventListener("click",()=>{
+      fetch("/api/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({op:"set_link",pair:pair,on:on?0:1})})
+      .then(()=>pollLinks());
+    });
+    bank.appendChild(b);
+  }
+}
+pollLinks();
+setInterval(pollLinks,5000);
+
 /* sends FX1-4 par entrée (paire stéréo bus 2b/2b+1, toggle 1.0/0.0) */
 document.querySelectorAll(".send4 button").forEach(b=>{
   b.addEventListener("click",()=>{
@@ -954,8 +989,16 @@ document.querySelectorAll(".send4 button").forEach(b=>{
     b.classList.toggle("on",!!st[i].sends[k]);
     if(window.LIVE&&window.MXPOST){
       const g=st[i].sends[k]?1.0:0.0;
-      MXPOST({op:"set_send",in:mp.idx,bus:k*2,  gain:g});
-      MXPOST({op:"set_send",in:mp.idx,bus:k*2+1,gain:g});
+      /* V13.3 : paire liée = send STÉRÉO (impaire→L, paire→R) */
+      const linked=mp.idx<16&&window.LINKS[mp.idx>>1]===1;
+      if(linked){
+        const left=(mp.idx&1)===0;
+        MXPOST({op:"set_send",in:mp.idx,bus:k*2,  gain:left?g:0.0});
+        MXPOST({op:"set_send",in:mp.idx,bus:k*2+1,gain:left?0.0:g});
+      }else{
+        MXPOST({op:"set_send",in:mp.idx,bus:k*2,  gain:g});
+        MXPOST({op:"set_send",in:mp.idx,bus:k*2+1,gain:g});
+      }
     }
   });
 });
@@ -1540,6 +1583,16 @@ document.querySelectorAll(".ftrack[data-i]").forEach(tr=>{
     if(mp.t==="in"){
       const db=st[i].fader*66-60;
       postT("f"+i,{op:"set_input_gain",src:mp.idx,gain:Math.pow(10,db/20)});
+      /* V13.3 : paire liée → le fader jumeau suit à la frame */
+      if(mp.idx<16&&window.LINKS[mp.idx>>1]===1){
+        const pidx=mp.idx^1;
+        st.forEach((sp,j)=>{
+          if(j!==i&&sp.map&&sp.map.t==="in"&&sp.map.idx===pidx){
+            sp.fader=st[i].fader;
+            placeCap(bank.children[j].querySelector(".ftrack"),sp.fader);
+          }
+        });
+      }
     }else{
       const db=st[i].fader*84-72;
       postT("f"+i,{op:"set_output_gain",out:mp.idx,db:db});
@@ -2273,10 +2326,23 @@ function initBq(){
     for(const n of names)if(st[n])Object.assign(fresh[n],st[n]);}catch(e){}
   A.bq=fresh;
 }
-function setBq(name,partial){
+function setBq(name,partial,noMirror){
   const c=A.controls[name];if(!c)return;
   const cur={...(A.bq[name]||bqDefault()),...partial};
   A.bq[name]=cur;
+  /* V13.3 : paire mic liée → la bande jumelle (CH1↔CH2, même TAC)
+   * reçoit les mêmes paramètres */
+  if(!noMirror&&!A.isOut&&A.idx<8&&window.LINKS&&window.LINKS[A.idx>>1]===1){
+    const m=parseBqName(name);
+    if(m&&m.chain==="ADC"){
+      const mine=[1,5,9,2,6,10],twin=[2,6,10,1,5,9];
+      const pos=mine.indexOf(m.idx);
+      if(pos>=0){
+        const tn=`${m.tac} ADC BQ${twin[pos]} Coefs`;
+        if(A.controls[tn])setBq(tn,partial,true);
+      }
+    }
+  }
   try{localStorage.setItem("biquadParams",JSON.stringify(A.bq));}catch(e){}
   clearTimeout(thA["bq"+c.numid]);
   thA["bq"+c.numid]=setTimeout(()=>{
@@ -2481,6 +2547,20 @@ function blobParams(numid){
 function applyBlob(numid,btn){
   const b=A.blobs[numid];if(!b||!b.parsed||b.applying)return;
   b.applying=true;if(btn)btn.disabled=true;
+  /* V13.3 : paire liée → le canal édité est recopié sur le jumeau */
+  if(!A.isOut&&A.idx<16&&window.LINKS&&window.LINKS[A.idx>>1]===1){
+    const ch=A.idx%8,pc=(A.idx^1)%8,pr=b.parsed;
+    if(b.kind==="multiband"&&pr.drc){
+      pr.drc.forEach(row=>{
+        if(ch<row.length&&pc<row.length)
+          row[pc]={...row[ch],_raw:row[ch]._raw?new Uint8Array(row[ch]._raw):row[pc]._raw};
+      });
+      if(pr.crossover_fcs_ch&&pr.crossover_fcs_ch[ch])
+        pr.crossover_fcs_ch[pc]={...pr.crossover_fcs_ch[ch]};
+    }else if(pr.params&&ch<pr.params.length&&pc<pr.params.length){
+      pr.params[pc]={...pr.params[ch],_raw:pr.params[ch]._raw?new Uint8Array(pr.params[ch]._raw):pr.params[pc]._raw};
+    }
+  }
   const cfg=b.kind==="multiband"?packMbCfg(b.parsed):packDrcCfg(b.parsed);
   const full=new Uint8Array(b.abiHdr.length+cfg.length);
   full.set(b.abiHdr,0);full.set(cfg,b.abiHdr.length);
