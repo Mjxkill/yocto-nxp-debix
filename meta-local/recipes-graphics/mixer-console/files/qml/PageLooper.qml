@@ -106,31 +106,35 @@ Item {
             Row {
                 anchors.fill: parent; anchors.margins: 12; spacing: 14
 
-                Column {
+                Text {
+                    text: "LOOPER"; color: "#e5a13c"; font.pixelSize: 13
+                    font.bold: true; font.letterSpacing: 3
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: 3
-                    Text { text: "LOOPER"; color: "#e5a13c"; font.pixelSize: 13
-                           font.bold: true; font.letterSpacing: 3 }
-                    Text {
-                        text: page.status.master_len_s > 0
-                              ? "boucle " + page.status.master_len_s.toFixed(2) + " s   "
-                                + page.posDisp.toFixed(1) + " s"
-                              : "aucune boucle — enregistrez une 1re piste"
-                        color: "#8b959d"; font.pixelSize: 11; font.family: "monospace"
-                    }
                 }
 
-                // barre de position maître (extrapolée à la frame)
-                Rectangle {
-                    width: 200; height: 26; radius: 13
+                // position maître : étiquette AU-DESSUS + barre 26 px
+                // (même gabarit que NIVEAU/VOLUME/MASTER)
+                Column {
+                    spacing: 6
                     anchors.verticalCenter: parent.verticalCenter
-                    color: "#0b0e11"
+                    Text {
+                        text: page.status.master_len_s > 0
+                              ? "BOUCLE " + page.status.master_len_s.toFixed(2)
+                                + " S  ·  " + page.posDisp.toFixed(1) + " S"
+                              : "BOUCLE  — enregistrez une 1re piste"
+                        color: "#5c666e"; font.pixelSize: 9
+                        font.letterSpacing: 2
+                    }
                     Rectangle {
-                        height: parent.height; radius: 13
-                        width: page.status.master_len_s > 0
-                               ? parent.width * Math.min(1,
-                                     page.posDisp / page.status.master_len_s) : 0
-                        color: page.status.run ? "#4cc470" : "#5c666e"
+                        width: 200; height: 26; radius: 13
+                        color: "#0b0e11"
+                        Rectangle {
+                            height: parent.height; radius: 13
+                            width: page.status.master_len_s > 0
+                                   ? parent.width * Math.min(1,
+                                         page.posDisp / page.status.master_len_s) : 0
+                            color: page.status.run ? "#4cc470" : "#5c666e"
+                        }
                     }
                 }
 
