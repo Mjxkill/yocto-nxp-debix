@@ -40,7 +40,8 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
      * V13.2 : + page LOOPER (4) — VU d'entrée des pistes vides/armées. */
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, [this] {
-        if ((m_activePage == 0 || m_activePage == 4 || m_activePage == 7) &&
+        if ((m_activePage == 0 || m_activePage == 1 ||
+             m_activePage == 4 || m_activePage == 7) &&
             m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_meters_lite\"}\n", TagMeters);
     });
@@ -153,6 +154,7 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
          * en phase avec le vsync 22.7 ms → battement 2/3 vsync = saccades. */
         const QJsonArray in = o.value(QLatin1String("in")).toArray();
         const QJsonArray out = o.value(QLatin1String("out")).toArray();
+        const QJsonArray fx = o.value(QLatin1String("fx")).toArray();
         auto fill = [](QVariantList &cur, const QJsonArray &raw) {
             if (cur.size() != raw.size()) {
                 cur.clear();
@@ -164,6 +166,7 @@ void MixerClient::handleLine(const QByteArray &line, Tag tag)
         };
         fill(m_in, in);
         fill(m_out, out);
+        fill(m_fx, fx);
         m_dirty = true;
         emit metersChanged();
     } else if (tag == TagAnalyzer) {

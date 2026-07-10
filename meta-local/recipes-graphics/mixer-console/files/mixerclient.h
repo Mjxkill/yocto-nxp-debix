@@ -17,6 +17,7 @@ class MixerClient : public QObject {
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
     Q_PROPERTY(QVariantList inLevels READ inLevels NOTIFY metersChanged)
     Q_PROPERTY(QVariantList outLevels READ outLevels NOTIFY metersChanged)
+    Q_PROPERTY(QVariantList fxLevels READ fxLevels NOTIFY metersChanged)
     Q_PROPERTY(int xrun READ xrun NOTIFY statChanged)
     Q_PROPERTY(double latencyMs READ latencyMs NOTIFY statChanged)
     Q_PROPERTY(QString version READ version NOTIFY statChanged)
@@ -50,6 +51,7 @@ public:
     bool connected() const { return m_connected; }
     QVariantList inLevels() const { return m_in; }
     QVariantList outLevels() const { return m_out; }
+    QVariantList fxLevels() const { return m_fx; }
     int xrun() const { return m_xrun; }
     double latencyMs() const { return m_latencyMs; }
     QString version() const { return m_version; }
@@ -113,7 +115,7 @@ private:
     QTimer m_reconnect;
 
     bool m_connected = false;
-    QVariantList m_in, m_out;
+    QVariantList m_in, m_out, m_fx;
     int m_activePage = 0;
     int m_xrun = 0;
     double m_latencyMs = 0;
