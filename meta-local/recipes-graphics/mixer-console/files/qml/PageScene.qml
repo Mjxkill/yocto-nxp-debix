@@ -51,11 +51,9 @@ Item {
         return lvl(m);
     }
 
-    // V13-E2 : confirmation RAPPEL (anti-fausse-manip live) + nommage
-    property int armedRecall: -1
+    // V13.2 : RAPPEL/écrasement = appui long (HoldButton) ; nommage
     property int nameSlot: -1
     property string nameEdit: ""
-    Timer { id: disarm; interval: 3000; onTriggered: page.armedRecall = -1 }
 
     onVisibleChanged: if (visible) { poll(); pollLarsen(); loadScenes(); }
     Timer { interval: 400; running: page.visible; repeat: true
@@ -360,52 +358,31 @@ Item {
                                 font.pixelSize: 15; font.bold: true
                                 elide: Text.ElideRight
                             }
-                            Rectangle {
-                                property bool armed: page.armedRecall === index
-                                width: 150; height: 44; radius: 6
+                            // V13.2 : appui long avec anneau (remplace le 2-tap)
+                            HoldButton {
+                                width: 150; height: 44
                                 anchors.verticalCenter: parent.verticalCenter
-                                color: armed ? "#3a1512" : (used ? "#2a2214" : "#181b1e")
-                                border.color: armed ? "#e05545"
-                                              : (used ? "#e5a13c" : "#22282e")
-                                border.width: armed ? 2 : 1
-                                Text { anchors.centerIn: parent
-                                       text: parent.armed ? "CONFIRMER ?" : "RAPPEL"
-                                       color: parent.armed ? "#ff6a5a"
-                                              : (used ? "#e5a13c" : "#3a434b")
-                                       font.pixelSize: 12; font.bold: true }
-                                TapHandler {
-                                    enabled: used
-                                    gesturePolicy: TapHandler.ReleaseWithinBounds
-                                    onTapped: {
-                                        // V13-E2 : 2 taps (anti-fausse-manip)
-                                        if (page.armedRecall !== index) {
-                                            page.armedRecall = index;
-                                            disarm.restart();
-                                            return;
-                                        }
-                                        page.armedRecall = -1;
-                                        disarm.stop();
-                                        page.xhr("POST", "/api/scene/recall",
-                                            JSON.stringify({ slot: index }),
-                                            function() { page.poll(); page.loadScenes(); });
-                                    }
-                                }
+                                label: "RAPPEL"
+                                accent: "#e5a13c"
+                                bg: used ? "#2a2214" : "#181b1e"
+                                enabled: used
+                                onTriggered: page.xhr("POST", "/api/scene/recall",
+                                    JSON.stringify({ slot: index }),
+                                    function() { page.poll(); page.loadScenes(); })
                             }
-                            Rectangle {
-                                width: 150; height: 44; radius: 6
+                            // V13.2 : slot occupé = appui long (écrasement),
+                            // slot vide = tap simple → clavier de nommage
+                            HoldButton {
+                                width: 150; height: 44
                                 anchors.verticalCenter: parent.verticalCenter
-                                color: "#142a19"; border.color: "#2c5c3c"
-                                Text { anchors.centerIn: parent; text: "SAUVER"
-                                       color: "#4cc470"; font.pixelSize: 12
-                                       font.bold: true }
-                                TapHandler {
-                                    gesturePolicy: TapHandler.ReleaseWithinBounds
-                                    onTapped: {
-                                        // V13-E2 : nommage avant sauvegarde
-                                        page.nameSlot = index;
-                                        page.nameEdit = sc && sc.used === 1
-                                                        ? sc.name : "";
-                                    }
+                                label: "SAUVER"
+                                accent: "#4cc470"
+                                bg: "#142a19"
+                                holdMs: used ? 900 : 0
+                                onTriggered: {
+                                    page.nameSlot = index;
+                                    page.nameEdit = sc && sc.used === 1
+                                                    ? sc.name : "";
                                 }
                             }
                         }

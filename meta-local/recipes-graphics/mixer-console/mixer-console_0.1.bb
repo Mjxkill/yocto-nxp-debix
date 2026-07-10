@@ -17,6 +17,7 @@ SRC_URI = " \
     file://qml/Strip.qml \
     file://qml/Fader.qml \
     file://qml/Knob.qml \
+    file://qml/HoldButton.qml \
     file://qml/MeterBar.qml \
     file://qml/VUNeedle.qml \
     file://qml/SpectrumView.qml \

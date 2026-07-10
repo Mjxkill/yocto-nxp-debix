@@ -16,6 +16,7 @@ qt_add_qml_module(mixer-console
         qml/Strip.qml
         qml/Fader.qml
         qml/Knob.qml
+        qml/HoldButton.qml
         qml/MeterBar.qml
         qml/VUNeedle.qml
         qml/SpectrumView.qml

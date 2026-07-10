@@ -217,6 +217,40 @@ body{
 }
 .tab:focus-visible{outline:2px solid var(--accent);}
 .tab.on{color:var(--accent);background:rgba(229,161,60,.08);border-color:rgba(229,161,60,.25);}
+/* V13.2 : appui long avec anneau de progression (parité LCD HoldButton).
+ * Presse 900 ms → cb() ; relâcher/le pointeur sort = annulé.
+ * opts.freeze/unfreeze : gel du re-render pendant l'appui (pages pollées). */
+function holdify(btn,cb,opts={}){
+  const ms=opts.ms||900;
+  let t0=0,raf=0,ring=null;
+  const stop=()=>{cancelAnimationFrame(raf);
+    if(ring){ring.remove();ring=null;}
+    if(opts.unfreeze)opts.unfreeze();};
+  btn.addEventListener("pointerdown",e=>{
+    if(btn.disabled)return;
+    e.preventDefault();
+    if(opts.freeze)opts.freeze();
+    t0=performance.now();
+    ring=document.createElement("div");
+    ring.style.cssText="position:absolute;inset:-3px;border-radius:inherit;pointer-events:none;";
+    const mask="radial-gradient(closest-side, transparent 60%, black 62%)";
+    ring.style.webkitMask=mask;ring.style.mask=mask;
+    if(getComputedStyle(btn).position==="static")btn.style.position="relative";
+    btn.appendChild(ring);
+    const step=()=>{
+      const pct=Math.min(1,(performance.now()-t0)/ms);
+      ring.style.background=
+        `conic-gradient(${opts.color||"#f2796a"} ${pct*360}deg, transparent 0)`;
+      if(pct>=1){stop();cb();return;}
+      raf=requestAnimationFrame(step);
+    };
+    raf=requestAnimationFrame(step);
+  });
+  ["pointerup","pointerleave","pointercancel"].forEach(ev=>
+    btn.addEventListener(ev,stop));
+  btn.addEventListener("click",e=>{e.preventDefault();e.stopImmediatePropagation();},true);
+}
+
 /* V12 web : boutons des pages PADS/LOOPER/EXPANDEUR */
 .wbtn{background:#1b2126;border:1px solid #39434b;border-radius:5px;color:#c9c4b8;
   font-size:11px;font-weight:700;padding:8px 12px;cursor:pointer;font-family:inherit;}
@@ -3238,8 +3272,14 @@ function loopRender(st){
     sl.addEventListener("pointerup",()=>{window._loopVolDrag=false;});
     sl.addEventListener("pointercancel",()=>{window._loopVolDrag=false;});
   });
+  c.querySelectorAll("button[data-a=clear]").forEach(b=>holdify(b,()=>{
+    window._loopVolDrag=false;
+    cmd({op:"looper_track_ctl",track:+b.dataset.t,action:"clear"}).then(loopPoll);
+  },{freeze:()=>{window._loopVolDrag=true;},
+     unfreeze:()=>{window._loopVolDrag=false;}}));
   c.querySelectorAll("button[data-a]").forEach(b=>b.addEventListener("click",()=>{
     const t=+b.dataset.t, a=b.dataset.a, tr=loopSt.tracks[t];
+    if(a==="clear")return;   /* géré par holdify ci-dessus */
     if(a==="srcdn"||a==="srcup"){
       let s=tr.src_a+(a==="srcup"?1:-1); s=Math.max(0,Math.min(15,s));
       cmd({op:"looper_track_cfg",track:t,src_a:s,src_b:-1}).then(loopPoll);
@@ -3485,22 +3525,16 @@ function scnSlots(list){
     <button class="wbtn" data-sr="${sc.slot}" ${sc.used?"":"disabled"}>RAPPEL</button>
     <button class="wbtn ok" data-ss="${sc.slot}">SAUVER</button>
   </div>`).join("");
-  /* V13-E2 : RAPPEL = double clic de confirmation ; SAUVER = nommage ;
+  /* V13.2 : RAPPEL = appui long avec anneau (parité LCD) ; SAUVER sur
+   * slot OCCUPÉ = appui long (écrasement), slot vide = clic simple ;
    * endpoints /api/scene/* = scène COMPLÈTE (mixer + TAC/DSP + synthé) */
-  c.querySelectorAll("[data-sr]").forEach(bt=>bt.addEventListener("click",()=>{
-    if(bt.dataset.armed!=="1"){
-      bt.dataset.armed="1";bt.textContent="CONFIRMER ?";
-      bt.style.color="#ff6a5a";bt.style.borderColor="#e05545";
-      setTimeout(()=>{bt.dataset.armed="0";bt.textContent="RAPPEL";
-        bt.style.color="";bt.style.borderColor="";},3000);
-      return;
-    }
+  c.querySelectorAll("[data-sr]").forEach(bt=>holdify(bt,()=>{
     fetch("/api/scene/recall",{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({slot:+bt.dataset.sr})})
       .then(()=>{scnPoll();scnList();});
-  }));
-  c.querySelectorAll("[data-ss]").forEach(bt=>bt.addEventListener("click",()=>{
+  },{color:"#e5a13c"}));
+  const doSave=bt=>{
     const cur=(list.find(s=>s.slot===+bt.dataset.ss)||{}).name||"";
     const nm=prompt("Nom de la scène "+(+bt.dataset.ss+1)+" :",cur);
     if(nm===null)return;
@@ -3509,7 +3543,12 @@ function scnSlots(list){
       body:JSON.stringify({slot:+bt.dataset.ss,
                            name:nm.trim()||("Scène "+(+bt.dataset.ss+1))})})
       .then(scnList);
-  }));
+  };
+  c.querySelectorAll("[data-ss]").forEach(bt=>{
+    const used=(list.find(s=>s.slot===+bt.dataset.ss)||{}).used===1;
+    if(used)holdify(bt,()=>doSave(bt),{color:"#4cc470"});
+    else bt.addEventListener("click",()=>doSave(bt));
+  });
 }
 function scnList(){cmd({op:"scene_list"}).then(r=>{if(r.ok)scnSlots(r.scenes);});}
 function scnPoll(){

@@ -186,62 +186,11 @@ Item {
                         }
                     }
 
-                    // CLEAR ALL : APPUI LONG (900 ms) avec anneau de
-                    // progression — impossible à déclencher par accident.
-                    // Canvas repeint uniquement pendant l'appui (transitoire).
-                    Rectangle {
-                        id: clearBtn
-                        width: 120; height: 44; radius: 6
+                    // CLEAR ALL : appui long avec anneau (HoldButton)
+                    HoldButton {
                         anchors.verticalCenter: parent.verticalCenter
-                        color: "#2a1512"; border.color: "#f2796a"; border.width: 1
-                        property real hold: 0
-                        scale: holdArea.pressed ? 0.96 : 1.0
-                        Behavior on scale { NumberAnimation { duration: 80 } }
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: "✕ CLEAR ALL"
-                            color: "#f2796a"; font.pixelSize: 12; font.bold: true
-                            opacity: holdArea.pressed ? 0.35 : 1.0
-                        }
-                        Canvas {
-                            id: holdRing
-                            anchors.centerIn: parent
-                            width: 40; height: 40
-                            visible: clearBtn.hold > 0
-                            onPaint: {
-                                const ctx = getContext("2d");
-                                ctx.reset();
-                                ctx.beginPath();
-                                ctx.arc(20, 20, 16, -Math.PI / 2,
-                                        -Math.PI / 2 + clearBtn.hold * 2 * Math.PI);
-                                ctx.lineWidth = 4;
-                                ctx.lineCap = "round";
-                                ctx.strokeStyle = "#f2796a";
-                                ctx.stroke();
-                            }
-                        }
-                        onHoldChanged: {
-                            holdRing.requestPaint();
-                            if (hold >= 1) {
-                                holdAnim.stop();
-                                hold = 0;
-                                page.globalCtl("clear_all");
-                            }
-                        }
-                        NumberAnimation {
-                            id: holdAnim
-                            target: clearBtn; property: "hold"
-                            from: 0; to: 1; duration: 900
-                        }
-                        MouseArea {
-                            id: holdArea
-                            anchors.fill: parent
-                            anchors.margins: -8
-                            onPressed: holdAnim.start()
-                            onReleased: { holdAnim.stop(); clearBtn.hold = 0; holdRing.requestPaint(); }
-                            onCanceled: { holdAnim.stop(); clearBtn.hold = 0; holdRing.requestPaint(); }
-                        }
+                        label: "✕ CLEAR ALL"
+                        onTriggered: page.globalCtl("clear_all")
                     }
                 }
             }
@@ -536,20 +485,15 @@ Item {
                                     onTapped: page.trackCtl(index, muted ? "unmute" : "mute")
                                 }
                             }
-                            // CLEAR
-                            Rectangle {
-                                width: 72; height: 56; radius: 6
-                                color: "#1b2126"
-                                border.color: isEmpty ? "#22282e" : "#7a3b32"
-                                Text { anchors.centerIn: parent; text: "✕"
-                                       color: isEmpty ? "#3a434b" : "#f2796a"
-                                       font.pixelSize: 20; font.bold: true }
-                                TapHandler {
-                                    enabled: !isEmpty && !isRec
-                                    margin: 8
-                                    gesturePolicy: TapHandler.ReleaseWithinBounds
-                                    onTapped: page.trackCtl(index, "clear")
-                                }
+                            // CLEAR piste : appui long avec anneau
+                            HoldButton {
+                                width: 72; height: 56
+                                label: "✕"
+                                fontSize: 20
+                                bg: "#1b2126"
+                                accent: "#f2796a"
+                                enabled: !isEmpty && !isRec
+                                onTriggered: page.trackCtl(index, "clear")
                             }
                         }
                     }
