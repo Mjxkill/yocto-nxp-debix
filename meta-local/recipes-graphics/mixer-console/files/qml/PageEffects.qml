@@ -86,8 +86,11 @@ Item {
                 id: fxVu
                 width: parent.width
                 spacing: 6
-                property real vin: 0
-                property real vout: 0
+                // effets STÉRÉO : L et R séparés, en entrée et en sortie
+                property real vinL: 0
+                property real vinR: 0
+                property real voutL: 0
+                property real voutR: 0
                 FrameAnimation {
                     running: page.visible
                     onTriggered: {
@@ -96,28 +99,44 @@ Item {
                         const kR = 1 - Math.exp(-dt / 0.120);
                         const fxl = mixer.fxLevels, inl = mixer.inLevels;
                         const b = page.bus * 2;
-                        var ti = 0, to = 0;
-                        if (fxl.length > b + 1)
-                            ti = Math.max(fxl[b], fxl[b + 1]);
-                        if (inl.length > 19 + b)
-                            to = Math.max(inl[18 + b], inl[19 + b]);
-                        fxVu.vin  += (ti - fxVu.vin)  * (ti > fxVu.vin  ? kA : kR);
-                        fxVu.vout += (to - fxVu.vout) * (to > fxVu.vout ? kA : kR);
+                        const st = (v, t) => v + (t - v) * (t > v ? kA : kR);
+                        fxVu.vinL  = st(fxVu.vinL,  fxl.length > b     ? fxl[b]     : 0);
+                        fxVu.vinR  = st(fxVu.vinR,  fxl.length > b + 1 ? fxl[b + 1] : 0);
+                        fxVu.voutL = st(fxVu.voutL, inl.length > 18 + b ? inl[18 + b] : 0);
+                        fxVu.voutR = st(fxVu.voutR, inl.length > 19 + b ? inl[19 + b] : 0);
                     }
                 }
-                Text { text: "ENTRÉE (SENDS)"; color: "#5c666e"
+                Text { text: "ENTRÉE (SENDS)  L / R"; color: "#5c666e"
                        font.pixelSize: 9; font.letterSpacing: 2 }
-                Rectangle {
-                    width: parent.width; height: 26; radius: 13; color: "#0b0e11"
-                    Rectangle { height: parent.height; radius: 13
-                                width: parent.width * fxVu.vin; color: "#4cc470" }
+                Column {
+                    width: parent.width
+                    spacing: 2
+                    Rectangle {
+                        width: parent.width; height: 12; radius: 6; color: "#0b0e11"
+                        Rectangle { height: parent.height; radius: 6
+                                    width: parent.width * fxVu.vinL; color: "#4cc470" }
+                    }
+                    Rectangle {
+                        width: parent.width; height: 12; radius: 6; color: "#0b0e11"
+                        Rectangle { height: parent.height; radius: 6
+                                    width: parent.width * fxVu.vinR; color: "#4cc470" }
+                    }
                 }
-                Text { text: "SORTIE (RETOUR)"; color: "#5c666e"
+                Text { text: "SORTIE (RETOUR)  L / R"; color: "#5c666e"
                        font.pixelSize: 9; font.letterSpacing: 2 }
-                Rectangle {
-                    width: parent.width; height: 26; radius: 13; color: "#0b0e11"
-                    Rectangle { height: parent.height; radius: 13
-                                width: parent.width * fxVu.vout; color: "#e5a13c" }
+                Column {
+                    width: parent.width
+                    spacing: 2
+                    Rectangle {
+                        width: parent.width; height: 12; radius: 6; color: "#0b0e11"
+                        Rectangle { height: parent.height; radius: 6
+                                    width: parent.width * fxVu.voutL; color: "#e5a13c" }
+                    }
+                    Rectangle {
+                        width: parent.width; height: 12; radius: 6; color: "#0b0e11"
+                        Rectangle { height: parent.height; radius: 6
+                                    width: parent.width * fxVu.voutR; color: "#e5a13c" }
+                    }
                 }
             }
 
