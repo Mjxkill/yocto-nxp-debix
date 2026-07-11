@@ -283,13 +283,15 @@ Item {
                         property bool active: ch !== null && ch.role !== "off"
                         property bool measuring: page.st !== null
                                                  && page.st.measuring === index
-                        width: parent.width; height: 52; radius: 6
+                        width: parent.width; height: 66; radius: 6
                         color: measuring ? "#2a1512" : (active ? "#171c21" : "#14181c")
                         border.color: measuring ? "#e05545"
                                       : (active ? "#39434b" : "#22282e")
 
                         Row {
-                            anchors.fill: parent; anchors.margins: 7; spacing: 8
+                            anchors.left: parent.left; anchors.leftMargin: 7
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 8
                             Rectangle {
                                 width: 52; height: 38; radius: 5
                                 anchors.verticalCenter: parent.verticalCenter
@@ -366,11 +368,35 @@ Item {
                                                          function() { page.refresh(); })
                                 }
                             }
-                            // keeper ±3 dB (centre = 0)
-                            Column {
+                        }
+                        // bloc VU + KEEPER ancré À DROITE (aligné sur toutes
+                        // les lignes ; mêmes largeurs 168, barres 13,
+                        // étiquettes au-dessus, hauteurs identiques)
+                        Column {
                                 visible: active
-                                spacing: 2
+                                width: 168
+                                spacing: 6
+                                anchors.right: parent.right
+                                anchors.rightMargin: 10
                                 anchors.verticalCenter: parent.verticalCenter
+
+                                // --- VU d'entrée de la piste ---
+                                Text { text: "NIVEAU"; color: "#5c666e"
+                                       font.pixelSize: 9; font.letterSpacing: 2 }
+                                Rectangle {
+                                    width: 168; height: 13; radius: 6
+                                    color: "#0b0e11"
+                                    Rectangle {
+                                        height: parent.height; radius: 6
+                                        width: parent.width * Math.max(0, Math.min(1,
+                                            index < mixer.inLevels.length
+                                            ? mixer.inLevels[index] : 0))
+                                        color: "#3d8a54"
+                                        Behavior on width { NumberAnimation { duration: 90 } }
+                                    }
+                                }
+
+                                // --- KEEPER bipolaire (centre = 0, ±24 dB) BORNÉ ---
                                 Text { text: "KEEPER "
                                              + (ch ? (ch.keeper_db >= 0 ? "+" : "")
                                                + ch.keeper_db.toFixed(1) : "0")
@@ -378,23 +404,25 @@ Item {
                                        color: "#5c666e"; font.pixelSize: 9
                                        font.letterSpacing: 2 }
                                 Rectangle {
-                                    width: 150; height: 10; radius: 5
+                                    width: 168; height: 13; radius: 6
                                     color: "#0b0e11"
-                                    Rectangle {   /* repère central */
+                                    clip: true                 // ne déborde JAMAIS
+                                    Rectangle {                // repère central
                                         x: parent.width / 2 - 1; width: 2
                                         height: parent.height; color: "#39434b"
                                     }
                                     Rectangle {
-                                        property real k: ch ? ch.keeper_db : 0
-                                        x: k >= 0 ? parent.width / 2
-                                           : parent.width / 2 + k / 3 * (parent.width / 2)
-                                        width: Math.abs(k) / 3 * (parent.width / 2)
-                                        height: parent.height; radius: 5
+                                        // échelle ±24 dB, remplissage borné à la
+                                        // demi-largeur (clip en secours)
+                                        property real k: ch
+                                            ? Math.max(-24, Math.min(24, ch.keeper_db)) : 0
+                                        property real half: parent.width / 2
+                                        x: k >= 0 ? half : half + k / 24 * half
+                                        width: Math.abs(k) / 24 * half
+                                        height: parent.height; radius: 6
                                         color: k >= 0 ? "#4cc470" : "#e8b84b"
-                                        // le keeper corrige par pas (1 Hz) :
-                                        // glissement doux entre deux pas
-                                        Behavior on x { NumberAnimation { duration: 350; easing.type: Easing.OutCubic } }
-                                        Behavior on width { NumberAnimation { duration: 350; easing.type: Easing.OutCubic } }
+                                        Behavior on x { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+                                        Behavior on width { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
                                     }
                                 }
                             }
@@ -402,10 +430,9 @@ Item {
                     }
                 }
             }
-        }
 
         Text {
-            text: "1· rôle par tranche  2· MESURER chaque source seule (12 s)  3· CALCULER  4· le groupe joue, ajuste si besoin, VERROUILLER  5· LIVE ON — la console tient l'équilibre (±3 dB, priorité voix)"
+            text: "AUTOMIX LIVE : un tap, la console équilibre en continu (référence voix). Ou manuel : rôle · MESURER · CALCULER · VERROUILLER · LIVE."
             color: "#5c666e"; font.pixelSize: 10; font.letterSpacing: 1
             width: parent.width; wrapMode: Text.WordWrap
         }

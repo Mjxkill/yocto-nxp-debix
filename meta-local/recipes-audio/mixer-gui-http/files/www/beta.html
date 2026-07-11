@@ -3569,9 +3569,19 @@ function bmxRender(){
       ${active?`<button class="wbtn ${ch.done?"ok":""}" data-bm="${i}" ${meas?"disabled":""}
         style="width:120px;">${meas?("● "+st.meas_elapsed+"/12 s")
           :(ch.done?("✓ "+ch.rms_db.toFixed(1)+" dB"):"MESURER")}</button>`:""}
-      ${active?`<span style="font-size:9px;color:var(--mut);font-family:monospace;">
-        KEEPER ${(ch.keeper_db>=0?"+":"")+ch.keeper_db.toFixed(1)} dB</span>`:""}
       <span style="flex:1"></span>
+      ${active?`<div style="width:168px;display:flex;flex-direction:column;gap:5px;">
+        <div style="font-size:9px;letter-spacing:.2em;color:var(--mut);">NIVEAU</div>
+        <div style="height:13px;border-radius:6px;background:#0b0e11;overflow:hidden;">
+          <div data-vu="${i}" style="height:100%;width:0;background:#3d8a54;border-radius:6px;transition:width .09s;"></div></div>
+        <div style="font-size:9px;letter-spacing:.2em;color:var(--mut);">KEEPER ${(ch.keeper_db>=0?"+":"")+ch.keeper_db.toFixed(1)} dB</div>
+        <div style="height:13px;border-radius:6px;background:#0b0e11;position:relative;overflow:hidden;">
+          <div style="position:absolute;left:calc(50% - 1px);top:0;width:2px;height:100%;background:#39434b;"></div>
+          <div style="position:absolute;top:0;height:100%;border-radius:6px;transition:all .3s ease;
+            ${(()=>{const k=Math.max(-24,Math.min(24,ch.keeper_db));const half=50;
+              return k>=0?`left:50%;width:${k/24*half}%;background:#4cc470;`
+                        :`left:${50+k/24*half}%;width:${-k/24*half}%;background:#e8b84b;`;})()}"></div></div>
+      </div>`:""}
     </div>`;}).join("");
   c.querySelectorAll("[data-br]").forEach(bt=>bt.addEventListener("click",()=>{
     const i=+bt.dataset.br,cur=BMXROLES.indexOf(bmxSt.chans[i].role);
@@ -3594,6 +3604,11 @@ function bmxVfRender(){
 function bmxPoll(){
   if(window.CURPAGE!=="BANDMIX")return;
   cmd({op:"bandmix_status"}).then(r=>{if(r.ok){bmxSt=r;bmxRender();}});
+  cmd({op:"get_meters"}).then(r=>{if(!r||!r.in)return;
+    document.querySelectorAll("#bmxchans [data-vu]").forEach(v=>{
+      const lv=r.in[+v.dataset.vu]||0;
+      const db=lv>0?20*Math.log10(lv/2147483647):-60;
+      v.style.width=Math.max(0,Math.min(100,(db+60)/60*100))+"%";});});
   cmd({op:"get_vfocus"}).then(r=>{if(r.ok){bmxVf=r;bmxVfRender();}});
   cmd({op:"get_automix"}).then(r=>{if(r.ok){bmxDugan=r.on===1;}});
 }

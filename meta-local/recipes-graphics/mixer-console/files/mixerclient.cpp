@@ -41,7 +41,7 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
     m_meterTimer.setInterval(33);
     connect(&m_meterTimer, &QTimer::timeout, this, [this] {
         if ((m_activePage == 0 || m_activePage == 1 ||
-             m_activePage == 4 || m_activePage == 7) &&
+             m_activePage == 4 || m_activePage == 6 || m_activePage == 7) &&
             m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_meters_lite\"}\n", TagMeters);
     });
