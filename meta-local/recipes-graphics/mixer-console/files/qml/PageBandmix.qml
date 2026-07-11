@@ -100,8 +100,28 @@ Item {
                                              function() { page.refresh(); })
                     }
                 }
+                // V13.5 : AUTOMIX LIVE — un seul bouton, aucun réglage,
+                // continu. Équilibre auto référencé sur la voix.
                 Rectangle {
-                    width: 100; height: 46; radius: 6
+                    width: 150; height: 46; radius: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    property bool on: page.st !== null && page.st.autolive === 1
+                    color: on ? "#142a19" : "#1b2126"
+                    border.color: on ? "#4cc470" : "#4cc470"
+                    border.width: on ? 2 : 1
+                    Text { anchors.centerIn: parent
+                           text: parent.on ? "● AUTOMIX LIVE" : "AUTOMIX LIVE"
+                           color: parent.on ? "#4cc470" : "#8b959d"
+                           font.pixelSize: 12; font.bold: true }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: mixer.call({ op: "bandmix_autolive",
+                                               on: parent.on ? 0 : 1 },
+                                             function() { page.refresh(); })
+                    }
+                }
+                Rectangle {
+                    width: 96; height: 46; radius: 6
                     anchors.verticalCenter: parent.verticalCenter
                     property bool on: page.st !== null && page.st.live === 1
                     color: on ? "#142a19" : "#1b2126"
@@ -110,7 +130,7 @@ Item {
                     Text { anchors.centerIn: parent
                            text: parent.on ? "LIVE ON" : "LIVE OFF"
                            color: parent.on ? "#4cc470" : "#8b959d"
-                           font.pixelSize: 12; font.bold: true }
+                           font.pixelSize: 11; font.bold: true }
                     TapHandler {
                         gesturePolicy: TapHandler.ReleaseWithinBounds
                         onTapped: mixer.call({ op: "bandmix_live",

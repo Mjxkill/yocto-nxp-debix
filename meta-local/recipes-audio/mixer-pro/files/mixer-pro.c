@@ -2026,11 +2026,15 @@ static struct {
 	/* keeper live */
 	int    live;
 	int    ref_valid;
+	int    autolive;                  /* V13.5 : automix continu */
+	float  al_anchor;                 /* V13.5 : ancre loudness (voix), gelée */
+	float  al_ref[N_EXP_CH];          /* V13.5 : peak-hold loudness pré-fader
+					   * (détection silence sans soundcheck) */
 	float  ref_share[N_EXP_CH];       /* parts de puissance verrouillées */
 	float  lt_ms[N_EXP_CH];           /* loudness long terme POST-fader (τ 10 s) */
 	float  lt_pre[N_EXP_CH];          /* idem PRÉ-fader (détection silence,
 					   * même référentiel que floor_db) */
-	float  kdb[N_EXP_CH];             /* correction courante dB (±3) */
+	float  kdb[N_EXP_CH];             /* correction courante dB (±3 keeper / ±24 auto) */
 	int    locking;                    /* capture de référence en cours */
 	int    lock_ticks;
 	double lock_acc[N_EXP_CH];
@@ -2099,8 +2103,61 @@ static void bmx_tick(void)
 		}
 	}
 
-	/* 4. keeper live : parts courantes vs référence, ±3 dB, zone morte
-	 * 1 dB, tranches silencieuses ignorées, priorité voix lead */
+	/* 4a. AUTOMIX LIVE (V13.5) : nivellement ANCRÉ SUR LA VOIX, sans saut.
+	 * Une ancre suit le loudness de la voix lead quand elle chante et se
+	 * GÈLE pendant les breaks (pas de saut de balance). Chaque source
+	 * active est amenée à (ancre + offset de rôle) d'après son loudness
+	 * intrinsèque pré-fader → balance exacte relative à la voix, gains
+	 * modérés (la voix reste ≈ à l'unité, elle EST la référence). Le fader
+	 * reste un biais utilisateur. Silence auto par peak-hold. */
+	if (g_bmx.autolive) {
+		/* ancre = loudness voix lissé ; sinon max des sources actives */
+		float Llead = -120.0f, Lmax = -120.0f;
+		int   have_lead = 0, any = 0;
+		float pre_db[N_EXP_CH];
+		int   act[N_EXP_CH];
+		for (int i = 0; i < N_EXP_CH; i++) {
+			act[i] = 0;
+			if (g_bmx.role[i] == BR_OFF) continue;
+			float pre = 10.0f * log10f(g_bmx.lt_pre[i] + 1e-12f);
+			pre_db[i] = pre;
+			if (pre > g_bmx.al_ref[i]) g_bmx.al_ref[i] = pre;
+			else g_bmx.al_ref[i] -= 0.5f;
+			if (pre < -60.0f || pre < g_bmx.al_ref[i] - 22.0f)
+				continue;         /* source en pause : figée */
+			act[i] = 1; any = 1;
+			if (pre > Lmax) Lmax = pre;
+			if (g_bmx.role[i] == BR_LEAD && pre > Llead) {
+				Llead = pre; have_lead = 1;
+			}
+		}
+		if (!any) return;
+		float anchor_now = have_lead ? Llead : Lmax;
+		/* ancre lissée ; gelée si pas de voix (have_lead=0 → on garde) */
+		if (g_bmx.al_anchor < -110.0f) g_bmx.al_anchor = anchor_now;
+		else if (have_lead)
+			g_bmx.al_anchor += 0.30f * (anchor_now - g_bmx.al_anchor);
+		else if (g_bmx.al_anchor < -110.0f)   /* jamais de voix : suit max */
+			g_bmx.al_anchor += 0.10f * (anchor_now - g_bmx.al_anchor);
+		for (int i = 0; i < N_EXP_CH; i++) {
+			if (!act[i]) continue;
+			float tgt = (g_bmx.al_anchor + BMX_P[g_bmx.role[i]].mix_db)
+				    - pre_db[i];
+			if (tgt >  18.0f) tgt =  18.0f;
+			if (tgt < -24.0f) tgt = -24.0f;
+			float d = tgt - g_bmx.kdb[i];   /* slew ≤1 dB/tick, zm 0,5 */
+			if (d > 0.5f)  g_bmx.kdb[i] += (d > 1.0f ? 1.0f : d);
+			if (d < -0.5f) g_bmx.kdb[i] += (d < -1.0f ? -1.0f : d);
+		}
+		pthread_mutex_lock(&g_st.target_lock);
+		for (int i = 0; i < N_EXP_CH; i++)
+			g_st.keeper_target[i] = powf(10.0f, g_bmx.kdb[i] / 20.0f);
+		pthread_mutex_unlock(&g_st.target_lock);
+		return;
+	}
+
+	/* 4b. keeper verrouillé : parts courantes vs référence lockée, ±3 dB,
+	 * zone morte 1 dB, tranches silencieuses ignorées, priorité voix */
 	if (!g_bmx.live || !g_bmx.ref_valid)
 		return;
 	double tot = 1e-12;
@@ -2116,25 +2173,23 @@ static void bmx_tick(void)
 	for (int i = 0; i < N_EXP_CH; i++) {
 		if (g_bmx.role[i] == BR_OFF || g_bmx.ref_share[i] < 1e-9f)
 			continue;
-		/* silence : PRÉ-fader vs floor mesuré (même référentiel).
-		 * Sources continues (floor≈rms) : repli sur rms−15. */
 		float pre_db = 10.0f * log10f(g_bmx.lt_pre[i] + 1e-12f);
 		float thr_sil = g_bmx.m[i].done
 			? fminf(g_bmx.m[i].floor_db + 6.0f,
 				g_bmx.m[i].rms_avg_db - 15.0f)
 			: -70.0f;
 		if (pre_db < thr_sil)
-			continue;   /* instrument en pause : on ne touche pas */
+			continue;
 		float err = 10.0f * log10f(
 			(float)(g_bmx.lt_ms[i] / tot) / g_bmx.ref_share[i]
 			+ 1e-12f);
 		if (err > -1.0f && err < 1.0f)
-			continue;   /* zone morte */
+			continue;
 		float step = 0.5f;
 		if (g_bmx.role[i] == BR_LEAD && lead_err < -2.0f)
-			step = 1.0f;                 /* priorité voix */
+			step = 1.0f;
 		else if (lead_err < -2.0f && err > 0.0f)
-			step = 0.25f;                /* les autres cèdent */
+			step = 0.25f;
 		g_bmx.kdb[i] += (err > 0 ? -step : step);
 		if (g_bmx.kdb[i] > 3.0f)  g_bmx.kdb[i] = 3.0f;
 		if (g_bmx.kdb[i] < -3.0f) g_bmx.kdb[i] = -3.0f;
@@ -4121,6 +4176,26 @@ static void handle_cmd(int fd, const char *line)
 		atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"live\":%d}\n", g_bmx.live);
 
+	} else if (json_has_op(line, "bandmix_autolive")) {
+		/* V13.5 : automix continu — un seul interrupteur, aucun
+		 * soundcheck/verrouillage. {"op":"bandmix_autolive","on":0|1} */
+		int on = 0;
+		(void)json_get_int(line, "on", &on);
+		g_bmx.autolive = on ? 1 : 0;
+		if (g_bmx.autolive) {
+			for (int i = 0; i < N_EXP_CH; i++)
+				g_bmx.al_ref[i] = -120.0f;   /* recale le peak-hold */
+			g_bmx.al_anchor = -120.0f;           /* ré-init de l'ancre */
+		} else {
+			memset(g_bmx.kdb, 0, sizeof(g_bmx.kdb));
+			pthread_mutex_lock(&g_st.target_lock);
+			for (int i = 0; i < N_INPUT_TOTAL; i++)
+				g_st.keeper_target[i] = 1.0f;
+			pthread_mutex_unlock(&g_st.target_lock);
+		}
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"autolive\":%d}\n", g_bmx.autolive);
+
 	} else if (json_has_op(line, "bandmix_status")) {
 		int ms = atomic_load(&g_bmx.meas_src);
 		int elapsed = 0;
@@ -4131,10 +4206,11 @@ static void handle_cmd(int fd, const char *line)
 		}
 		int n = snprintf(reply, sizeof(reply),
 			"{\"ok\":true,\"live\":%d,\"ref_valid\":%d,"
+			"\"autolive\":%d,"
 			"\"locking\":%d,\"measuring\":%d,\"meas_elapsed\":%d,"
 			"\"chans\":[",
-			g_bmx.live, g_bmx.ref_valid, g_bmx.locking,
-			ms, elapsed);
+			g_bmx.live, g_bmx.ref_valid, g_bmx.autolive,
+			g_bmx.locking, ms, elapsed);
 		for (int i = 0; i < N_EXP_CH; i++) {
 			n += snprintf(reply + n, sizeof(reply) - n,
 				"%s{\"src\":%d,\"role\":\"%s\",\"done\":%d,"
@@ -5312,7 +5388,8 @@ static void save_state_to(const char *path)
 	for (int i = 0; i < N_EXP_CH; i++)
 		fprintf(f, "bandmix %d %d %.6e\n", i, g_bmx.role[i],
 			g_bmx.ref_valid ? g_bmx.ref_share[i] : 0.0f);
-	fprintf(f, "bandmix_live %d %d\n", g_bmx.live, g_bmx.ref_valid);
+	fprintf(f, "bandmix_live %d %d %d\n", g_bmx.live, g_bmx.ref_valid,
+		g_bmx.autolive);   /* V13.5 : 3e champ autolive (rétro-compat) */
 	fprintf(f, "vfocus %d %.0f %.1f\n", g_vf.on,
 		g_vf.amount * 100.0f, g_vf.max_cut_db);
 	/* V13.1 : matrice des sends par tranche (départs FX) — trouvé absent
@@ -5448,7 +5525,7 @@ tail:
 	}
 	{
 		char bl[160];
-		int src, on, role, live, rv;
+		int src, on, role, live, rv, al = 0;
 		float thr, ratio, atk, rel, mk, shr, sv[8];
 		int lk[8];
 		while (fgets(bl, sizeof(bl), f)) {
@@ -5456,10 +5533,11 @@ tail:
 				   &src, &on, &thr, &ratio, &atk, &rel,
 				   &mk) == 7)
 				cmp_configure(src, on, thr, ratio, atk, rel, mk);
-			else if (sscanf(bl, "bandmix_live %d %d",
-					&live, &rv) == 2) {
+			else if (sscanf(bl, "bandmix_live %d %d %d",
+					&live, &rv, &al) >= 2) {
 				g_bmx.ref_valid = rv ? 1 : 0;
 				g_bmx.live = (live && rv) ? 1 : 0;
+				g_bmx.autolive = al ? 1 : 0;   /* V13.5 */
 			} else if (sscanf(bl, "bandmix %d %d %f",
 					  &src, &role, &shr) == 3 &&
 				   src >= 0 && src < N_EXP_CH &&
@@ -5650,7 +5728,7 @@ static void load_mixer_state(void)
 	 * désynchronisent le flux. Tester le mot-clé long AVANT le court. */
 	{
 		char bl[160];
-		int src, on, role, live, rv;
+		int src, on, role, live, rv, al = 0;
 		float thr, ratio, atk, rel, mk, shr, sv[8];
 		int lk[8];
 		while (fgets(bl, sizeof(bl), f)) {
@@ -5658,10 +5736,11 @@ static void load_mixer_state(void)
 				   &src, &on, &thr, &ratio, &atk, &rel,
 				   &mk) == 7)
 				cmp_configure(src, on, thr, ratio, atk, rel, mk);
-			else if (sscanf(bl, "bandmix_live %d %d",
-					&live, &rv) == 2) {
+			else if (sscanf(bl, "bandmix_live %d %d %d",
+					&live, &rv, &al) >= 2) {
 				g_bmx.ref_valid = rv ? 1 : 0;
 				g_bmx.live = (live && rv) ? 1 : 0;
+				g_bmx.autolive = al ? 1 : 0;   /* V13.5 */
 			} else if (sscanf(bl, "bandmix %d %d %f",
 					  &src, &role, &shr) == 3 &&
 				   src >= 0 && src < N_EXP_CH &&

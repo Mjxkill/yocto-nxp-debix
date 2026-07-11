@@ -665,6 +665,7 @@ function holdify(btn,cb,opts={}){
         <div id="bmxstat" style="font-size:10px;color:var(--mut);">…</div>
       </div>
       <span style="flex:1"></span>
+      <button class="wbtn ok" id="bmxauto" style="border-color:#4cc470;">AUTOMIX LIVE</button>
       <button class="wbtn" id="bmxcalc">CALCULER LE MIX</button>
       <button class="wbtn" id="bmxlock">VERROUILLER</button>
       <button class="wbtn ok" id="bmxlive">LIVE —</button>
@@ -3543,6 +3544,10 @@ function bmxRender(){
     :st.locking?"capture de l'équilibre… (30 s)"
     :st.live?"LIVE — équilibre tenu"
     :(st.ref_valid?"équilibre verrouillé, LIVE prêt":"assigne les rôles puis mesure");
+  const av=document.getElementById("bmxauto");
+  av.textContent=st.autolive?"● AUTOMIX LIVE":"AUTOMIX LIVE";
+  av.style.background=st.autolive?"#142a19":"";
+  av.style.color=st.autolive?"#4cc470":"";
   const lv=document.getElementById("bmxlive");
   lv.textContent=st.live?"LIVE ON":"LIVE OFF";
   lv.style.color=st.live?"#4cc470":"";
@@ -3595,6 +3600,8 @@ function bmxPoll(){
 setInterval(bmxPoll,500);
 document.getElementById("bmxcalc").addEventListener("click",()=>cmd({op:"bandmix_calc"}).then(bmxPoll));
 document.getElementById("bmxlock").addEventListener("click",()=>cmd({op:"bandmix_lock"}).then(bmxPoll));
+document.getElementById("bmxauto").addEventListener("click",()=>
+  cmd({op:"bandmix_autolive",on:bmxSt&&bmxSt.autolive?0:1}).then(bmxPoll));
 document.getElementById("bmxlive").addEventListener("click",()=>
   cmd({op:"bandmix_live",on:bmxSt&&bmxSt.live?0:1}).then(bmxPoll));
 document.getElementById("bmxdugan").addEventListener("click",()=>
