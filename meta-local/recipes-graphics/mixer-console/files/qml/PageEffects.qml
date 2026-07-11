@@ -53,8 +53,13 @@ Item {
         _pv = {};
     }
     function grpOf(key) {
-        const m = String(key).match(/(?:^|[ _])(\d+)(?:[ _]|$)/);
-        return m ? "BANDE " + m[1] : "GÉNÉRAL";
+        // parité web inferGroup : groupe de ports LV2 (meta.grp) d'abord,
+        // sinon numéro dans le LIBELLÉ ou la clé, sinon GÉNÉRAL
+        const m = (page.fx.meta && page.fx.meta[key]) ? page.fx.meta[key] : {};
+        if (m.grp) return m.grp;
+        const s = m.label || String(key);
+        const mb = String(s).match(/(?:^|[ _])(\d+)(?:[ _]|$)/);
+        return mb ? "BANDE " + mb[1] : "GÉNÉRAL";
     }
 
     Row {
