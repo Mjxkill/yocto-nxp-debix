@@ -2010,6 +2010,75 @@ static const struct bmx_preset {
 	[BR_LINE]   = { -5.0f, 0,  0,      0, 0, 0, 0, 0, 0 },
 };
 
+/* V13.6 : décalage de seuil comp (dB au-dessus du loudness courant de la
+ * source) pour l'AUTOMIX LIVE — seuil = al_ref[role] + offset. Négatif =
+ * plus serré (tient la source), positif = ne prend que les crêtes. */
+static const float COMP_OFF[BR_NROLES] = {
+	[BR_OFF] = 0, [BR_LEAD] = -2, [BR_CHOIR] = -2, [BR_KICK] = +2,
+	[BR_SNARE] = +2, [BR_DRUMS] = +2, [BR_BASS] = -3, [BR_GUITAR] = -1,
+	[BR_KEYS] = -1, [BR_LINE] = 0,
+};
+
+/* ===== V13.6 : EQ logiciel de PLACEMENT par voix (autolive) =====
+ * Cascade de 2 biquads RBJ par tranche (HPF + 1 cloche), coefs par RÔLE,
+ * états par tranche. Entre gate et comp. Coefs recalculés au changement
+ * de rôle seulement. Statique (place les instruments) ; complète le
+ * vfocus dynamique. ARCHI_V13.6_AUTOMIX_COMP_EQ.md — g_eqx défini ici,
+ * eqx_render (qui lit g_bmx.role) plus bas, APRÈS la struct g_bmx. */
+#define EQX_BQ 2
+struct eqx_bq { float b0, b1, b2, a1, a2; };
+static struct {
+	struct eqx_bq bq[N_EXP_CH][EQX_BQ];
+	float st[N_EXP_CH][EQX_BQ][2];
+	int   role_of[N_EXP_CH];      /* rôle pour lequel les coefs sont calculés */
+	_Atomic int on;
+} g_eqx;
+
+/* presets : HPF Hz (0 = off) ; cloche freq/gain dB/Q (gain 0 = neutre) */
+static const struct { float hpf, pk_f, pk_g, pk_q; } EQX_P[BR_NROLES] = {
+	[BR_OFF]    = { 0, 0, 0, 0 },
+	[BR_LEAD]   = { 90,  3500, +3.0f, 0.9f },   /* présence : la voix ressort */
+	[BR_CHOIR]  = { 120, 4000, +1.5f, 0.9f },
+	[BR_KICK]   = { 0,   70,   +2.0f, 0.9f },   /* poids */
+	[BR_SNARE]  = { 120, 4000, +2.0f, 0.9f },   /* claquant */
+	[BR_DRUMS]  = { 200, 6000, +1.0f, 0.9f },   /* air */
+	[BR_BASS]   = { 30,  3500, -2.0f, 1.0f },   /* dégage la voix */
+	[BR_GUITAR] = { 120, 3000, -3.0f, 1.0f },   /* creuse pour la voix */
+	[BR_KEYS]   = { 120, 3000, -3.0f, 1.0f },   /* creuse pour la voix */
+	[BR_LINE]   = { 80,  0,    0,     0 },
+};
+
+static void eqx_hpf(struct eqx_bq *q, float fc)
+{
+	if (fc <= 0.0f) { *q = (struct eqx_bq){ 1, 0, 0, 0, 0 }; return; }
+	float w = 2.0f * (float)M_PI * fc / (float)SAMPLE_RATE;
+	float cw = cosf(w), sw = sinf(w), al = sw / (2.0f * 0.707f);
+	float a0 = 1.0f + al;
+	q->b0 = (1.0f + cw) / 2.0f / a0;  q->b1 = -(1.0f + cw) / a0;
+	q->b2 = (1.0f + cw) / 2.0f / a0;
+	q->a1 = -2.0f * cw / a0;          q->a2 = (1.0f - al) / a0;
+}
+static void eqx_peak(struct eqx_bq *q, float fc, float gdb, float Q)
+{
+	if (fc <= 0.0f || gdb == 0.0f) { *q = (struct eqx_bq){ 1, 0, 0, 0, 0 }; return; }
+	float A = powf(10.0f, gdb / 40.0f);
+	float w = 2.0f * (float)M_PI * fc / (float)SAMPLE_RATE;
+	float cw = cosf(w), sw = sinf(w), al = sw / (2.0f * Q);
+	float a0 = 1.0f + al / A;
+	q->b0 = (1.0f + al * A) / a0;  q->b1 = -2.0f * cw / a0;
+	q->b2 = (1.0f - al * A) / a0;
+	q->a1 = -2.0f * cw / a0;        q->a2 = (1.0f - al / A) / a0;
+}
+static void eqx_config(int i, int role)   /* control thread (rare) */
+{
+	eqx_hpf(&g_eqx.bq[i][0], EQX_P[role].hpf);
+	eqx_peak(&g_eqx.bq[i][1], EQX_P[role].pk_f, EQX_P[role].pk_g,
+		 EQX_P[role].pk_q);
+	g_eqx.st[i][0][0] = g_eqx.st[i][0][1] = 0.0f;
+	g_eqx.st[i][1][0] = g_eqx.st[i][1][1] = 0.0f;
+	g_eqx.role_of[i] = role;
+}
+
 struct bmx_meas {
 	int    done;
 	float  rms_avg_db, peak_db, floor_db;
@@ -2039,6 +2108,35 @@ static struct {
 	int    lock_ticks;
 	double lock_acc[N_EXP_CH];
 } g_bmx = { .meas_src = -1 };
+
+/* V13.6 : EQ de placement (audio_thread, entre gate et comp) — lit
+ * g_bmx.role donc défini APRÈS g_bmx. Biquads forme II transposée. */
+static void eqx_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
+{
+	if (!atomic_load_explicit(&g_eqx.on, memory_order_relaxed))
+		return;
+	for (int i = 0; i < N_EXP_CH; i++) {
+		int role = g_bmx.role[i];
+		if (role == BR_OFF)
+			continue;
+		if (g_eqx.role_of[i] != role)   /* rôle changé : recalcule */
+			eqx_config(i, role);
+		for (int b = 0; b < EQX_BQ; b++) {
+			struct eqx_bq *q = &g_eqx.bq[i][b];
+			float z1 = g_eqx.st[i][b][0], z2 = g_eqx.st[i][b][1];
+			float *x = in_block[i];
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float in = x[f];
+				float y = q->b0 * in + z1;
+				z1 = q->b1 * in - q->a1 * y + z2;
+				z2 = q->b2 * in - q->a2 * y;
+				x[f] = y;
+			}
+			g_eqx.st[i][b][0] = z1;
+			g_eqx.st[i][b][1] = z2;
+		}
+	}
+}
 
 /* --- tick 1 Hz (persistence_thread) : soundcheck + lock + keeper --- */
 static void bmx_tick(void)
@@ -2149,9 +2247,25 @@ static void bmx_tick(void)
 			if (d > 0.5f)  g_bmx.kdb[i] += (d > 1.0f ? 1.0f : d);
 			if (d < -0.5f) g_bmx.kdb[i] += (d < -1.0f ? -1.0f : d);
 		}
+		/* V13.6 : compresseur auto par rôle, seuil ADAPTATIF (al_ref =
+		 * mémoire de crête → tient le trop-fort, agit au sample). */
 		pthread_mutex_lock(&g_st.target_lock);
-		for (int i = 0; i < N_EXP_CH; i++)
+		for (int i = 0; i < N_EXP_CH; i++) {
 			g_st.keeper_target[i] = powf(10.0f, g_bmx.kdb[i] / 20.0f);
+			int r = g_bmx.role[i];
+			if (r == BR_OFF || !BMX_P[r].comp_on) {
+				if (g_cmp[i].on)
+					cmp_configure(i, 0, g_cmp[i].thr_db,
+						g_cmp[i].ratio, g_cmp[i].atk_ms,
+						g_cmp[i].rel_ms, g_cmp[i].makeup_db);
+				continue;
+			}
+			float thr = g_bmx.al_ref[i] + COMP_OFF[r];
+			if (thr < -50.0f) thr = -50.0f;
+			if (thr >  -3.0f) thr =  -3.0f;
+			cmp_configure(i, 1, thr, BMX_P[r].c_ratio,
+				      BMX_P[r].c_atk, BMX_P[r].c_rel, 0.0f);
+		}
 		pthread_mutex_unlock(&g_st.target_lock);
 		return;
 	}
@@ -2888,6 +3002,8 @@ static void *audio_thread(void *arg)
 		/* V12-EXP : gate/expandeur par tranche, in-place AVANT tout
 		 * consommateur (sends/master/looper/automix/tap) */
 		exp_render(in_block);
+		/* V13.6 : EQ de placement par rôle (autolive), entre gate et comp */
+		eqx_render(in_block);
 		/* V13-COMP : compresseur par tranche, APRÈS le gate */
 		cmp_render(in_block);
 		/* V13-VFOCUS : la musique s'écarte des bandes de la voix */
@@ -4186,11 +4302,28 @@ static void handle_cmd(int fd, const char *line)
 			for (int i = 0; i < N_EXP_CH; i++)
 				g_bmx.al_ref[i] = -120.0f;   /* recale le peak-hold */
 			g_bmx.al_anchor = -120.0f;           /* ré-init de l'ancre */
+			/* V13.6 : EQ de placement + vfocus renforcé (place voix) */
+			for (int i = 0; i < N_EXP_CH; i++)
+				g_eqx.role_of[i] = -1;       /* force le recalcul coefs */
+			atomic_store(&g_eqx.on, 1);
+			pthread_mutex_lock(&g_st.target_lock);
+			g_vf.on = 1;
+			if (g_vf.amount < 0.7f) g_vf.amount = 0.7f;
+			if (g_vf.max_cut_db < 6.0f) g_vf.max_cut_db = 6.0f;
+			pthread_mutex_unlock(&g_st.target_lock);
 		} else {
 			memset(g_bmx.kdb, 0, sizeof(g_bmx.kdb));
+			atomic_store(&g_eqx.on, 0);
 			pthread_mutex_lock(&g_st.target_lock);
 			for (int i = 0; i < N_INPUT_TOTAL; i++)
 				g_st.keeper_target[i] = 1.0f;
+			/* V13.6 : coupe les comps auto (rôle ≠ off) posés par l'automix */
+			for (int i = 0; i < N_EXP_CH; i++)
+				if (g_bmx.role[i] != BR_OFF && g_cmp[i].on &&
+				    BMX_P[g_bmx.role[i]].comp_on)
+					cmp_configure(i, 0, g_cmp[i].thr_db,
+						g_cmp[i].ratio, g_cmp[i].atk_ms,
+						g_cmp[i].rel_ms, g_cmp[i].makeup_db);
 			pthread_mutex_unlock(&g_st.target_lock);
 		}
 		atomic_store(&g_presets_dirty, 1);
