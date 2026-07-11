@@ -220,7 +220,12 @@ Item {
                         }
                     }
 
-                    // cartes par groupe (BANDE 1/2/… ou GÉNÉRAL)
+                    // cartes par groupe en GRILLE 3 colonnes (parité web
+                    // .fxgrid) : les cartes se posent côte à côte et
+                    // s'élargissent par pas de colonne selon leur contenu
+                    Flow {
+                        width: parent.width
+                        spacing: 9
                     Repeater {
                         model: {
                             const keys = page.fx.params
@@ -236,7 +241,15 @@ Item {
                             return order.map(g => ({ name: g, keys: gs[g] }));
                         }
                         Rectangle {
-                            width: rackCol.width
+                            // largeur en pas de colonne (1/3, 2/3, plein)
+                            // selon le nombre de knobs (98 px chacun)
+                            property real col: (rackCol.width - 18) / 3
+                            width: {
+                                const need = modelData.keys.length * 98 + 24;
+                                if (need <= col) return col;
+                                if (need <= col * 2 + 9) return col * 2 + 9;
+                                return rackCol.width;
+                            }
                             height: grpFlow.height + 46
                             radius: 8
                             color: "#1b2126"; border.color: "#060809"
@@ -278,6 +291,7 @@ Item {
                                 }
                             }
                         }
+                    }
                     }
 
                     Text {
