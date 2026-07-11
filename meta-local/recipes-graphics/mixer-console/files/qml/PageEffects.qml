@@ -62,6 +62,82 @@ Item {
         return mb ? "BANDE " + mb[1] : "GÉNÉRAL";
     }
 
+    // ---- composants de paramètre du rack (parité types web) ----
+    Component {
+        id: fxToggle
+        Rectangle {
+            property bool on: (page.fx.params[pkey] || 0) > 0.5
+            width: 74; height: 30; radius: 15
+            color: on ? "#2a2214" : "#1b2126"
+            border.color: on ? "#e5a13c" : "#39434b"
+            Text { anchors.centerIn: parent; text: parent.on ? "ON" : "OFF"
+                   color: parent.on ? "#e5a13c" : "#5c666e"
+                   font.pixelSize: 11; font.bold: true }
+            TapHandler {
+                margin: 6
+                gesturePolicy: TapHandler.ReleaseWithinBounds
+                onTapped: { parent.on = !parent.on;
+                            page.sendParam(pkey, parent.on ? 1 : 0); }
+            }
+        }
+    }
+    Component {
+        id: fxEnum
+        Rectangle {
+            property var opts: {
+                const o = [];
+                String(pmeta.sp || "").split(";").forEach(t => {
+                    const i = t.indexOf("=");
+                    if (i > 0) o.push({ v: parseFloat(t.slice(0, i)),
+                                        l: t.slice(i + 1) });
+                });
+                o.sort((a, b) => a.v - b.v);
+                return o;
+            }
+            property int cur: {
+                const v = Math.round(page.fx.params[pkey] || 0);
+                for (let i = 0; i < opts.length; i++)
+                    if (Math.round(opts[i].v) === v) return i;
+                return 0;
+            }
+            width: 116; height: 30; radius: 4
+            color: "#12171b"; border.color: "#39434b"
+            Text { anchors.centerIn: parent
+                   width: parent.width - 10; elide: Text.ElideRight
+                   horizontalAlignment: Text.AlignHCenter
+                   text: parent.opts.length ? parent.opts[parent.cur].l : "—"
+                   color: "#e9e5da"; font.pixelSize: 10 }
+            TapHandler {
+                margin: 6
+                gesturePolicy: TapHandler.ReleaseWithinBounds
+                onTapped: {
+                    if (!parent.opts.length) return;
+                    parent.cur = (parent.cur + 1) % parent.opts.length;
+                    page.sendParam(pkey, parent.opts[parent.cur].v);
+                }
+            }
+        }
+    }
+    Component {
+        id: fxKnob
+        Knob {
+            property real mn: (prng.min !== undefined && isFinite(prng.min))
+                              ? prng.min : (pmeta.min !== undefined ? pmeta.min : 0)
+            property real mx: {
+                const m = (prng.max !== undefined && isFinite(prng.max))
+                          ? prng.max : (pmeta.max !== undefined ? pmeta.max : 1);
+                return m > mn ? m : mn + 1;
+            }
+            from: plog ? Math.max(mn, 1e-6) : mn
+            to: mx
+            unit: pmeta.unit || ""
+            logScale: plog
+            Component.onCompleted:
+                value = Math.max(from, Math.min(to, page.fx.params[pkey] || 0))
+            onMoved: (v) => page.sendParam(pkey, pkind === 3 ? Math.round(v) : v)
+        }
+    }
+
     Row {
         anchors.fill: parent
         anchors.margins: 14
@@ -267,9 +343,14 @@ Item {
                                 Repeater {
                                     model: modelData.keys
                                     Column {
-                                        width: 84
+                                        width: kind === 2 ? 120 : 84
                                         spacing: 4
                                         property var meta: (page.fx.meta && page.fx.meta[modelData]) ? page.fx.meta[modelData] : {}
+                                        property var rng: (page.fx.ranges && page.fx.ranges[modelData]) ? page.fx.ranges[modelData] : {}
+                                        // parité web : 1=toggle, 2=enum (sp),
+                                        // 3=entier, bit 0x10 = échelle log
+                                        property int kind: (meta.kind || 0) & 0x0f
+                                        property bool isLog: ((meta.kind || 0) & 0x10) !== 0
                                         Text {
                                             anchors.horizontalCenter: parent.horizontalCenter
                                             width: parent.width
@@ -279,13 +360,16 @@ Item {
                                             color: "#5c666e"; font.pixelSize: 9
                                             font.letterSpacing: 2
                                         }
-                                        Knob {
+                                        Loader {
                                             anchors.horizontalCenter: parent.horizontalCenter
-                                            from: meta.min !== undefined ? meta.min : 0
-                                            to: meta.max !== undefined ? meta.max : 1
-                                            unit: meta.unit || ""
-                                            Component.onCompleted: value = page.fx.params[modelData]
-                                            onMoved: (v) => page.sendParam(modelData, v)
+                                            property var pkey: modelData
+                                            property var pmeta: meta
+                                            property var prng: rng
+                                            property bool plog: isLog
+                                            property int pkind: kind
+                                            sourceComponent: kind === 1 ? fxToggle
+                                                : (kind === 2 && meta.sp) ? fxEnum
+                                                : fxKnob
                                         }
                                     }
                                 }
