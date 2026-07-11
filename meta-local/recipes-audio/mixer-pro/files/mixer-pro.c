@@ -2025,7 +2025,9 @@ static const float COMP_OFF[BR_NROLES] = {
  * de rôle seulement. Statique (place les instruments) ; complète le
  * vfocus dynamique. ARCHI_V13.6_AUTOMIX_COMP_EQ.md — g_eqx défini ici,
  * eqx_render (qui lit g_bmx.role) plus bas, APRÈS la struct g_bmx. */
-#define EQX_BQ 2
+/* 3 biquads par voix = parité avec les mics TAC (mode 3 Biquads/Ch) :
+ * HPF + 2 cloches (présence/creusement + modelage). */
+#define EQX_BQ 3
 struct eqx_bq { float b0, b1, b2, a1, a2; };
 static struct {
 	struct eqx_bq bq[N_EXP_CH][EQX_BQ];
@@ -2034,18 +2036,22 @@ static struct {
 	_Atomic int on;
 } g_eqx;
 
-/* presets : HPF Hz (0 = off) ; cloche freq/gain dB/Q (gain 0 = neutre) */
-static const struct { float hpf, pk_f, pk_g, pk_q; } EQX_P[BR_NROLES] = {
-	[BR_OFF]    = { 0, 0, 0, 0 },
-	[BR_LEAD]   = { 90,  3500, +3.0f, 0.9f },   /* présence : la voix ressort */
-	[BR_CHOIR]  = { 120, 4000, +1.5f, 0.9f },
-	[BR_KICK]   = { 0,   70,   +2.0f, 0.9f },   /* poids */
-	[BR_SNARE]  = { 120, 4000, +2.0f, 0.9f },   /* claquant */
-	[BR_DRUMS]  = { 200, 6000, +1.0f, 0.9f },   /* air */
-	[BR_BASS]   = { 30,  3500, -2.0f, 1.0f },   /* dégage la voix */
-	[BR_GUITAR] = { 120, 3000, -3.0f, 1.0f },   /* creuse pour la voix */
-	[BR_KEYS]   = { 120, 3000, -3.0f, 1.0f },   /* creuse pour la voix */
-	[BR_LINE]   = { 80,  0,    0,     0 },
+/* presets : HPF Hz (0=off) ; 2 cloches freq/gain dB/Q (gain 0 = neutre) */
+static const struct {
+	float hpf;
+	float f1, g1, q1;   /* cloche 1 : présence / creusement voix */
+	float f2, g2, q2;   /* cloche 2 : modelage (boue/air/corps) */
+} EQX_P[BR_NROLES] = {
+	[BR_OFF]    = { 0 },
+	[BR_LEAD]   = { 90,  3500, +3.0f, 0.9f,  500,  -2.0f, 1.0f },  /* présence + dé-boue */
+	[BR_CHOIR]  = { 120, 4000, +1.5f, 0.9f,  400,  -1.5f, 1.0f },
+	[BR_KICK]   = { 0,   70,   +2.5f, 0.9f,  400,  -3.0f, 1.2f },  /* poids + creux carton */
+	[BR_SNARE]  = { 120, 4000, +2.0f, 0.9f,  250,  +1.5f, 1.0f },  /* claquant + corps */
+	[BR_DRUMS]  = { 200, 6000, +1.5f, 0.9f,  500,  -1.5f, 1.0f },  /* air + dé-boue */
+	[BR_BASS]   = { 30,  80,   +1.5f, 1.0f,  3500, -2.0f, 1.0f },  /* grave + dégage voix */
+	[BR_GUITAR] = { 120, 3000, -3.0f, 1.0f,  300,  -2.0f, 1.0f },  /* creuse voix + dé-boue */
+	[BR_KEYS]   = { 120, 3000, -3.0f, 1.0f,  300,  -2.0f, 1.0f },  /* creuse voix + dé-boue */
+	[BR_LINE]   = { 80,  0, 0, 0,  0, 0, 0 },
 };
 
 static void eqx_hpf(struct eqx_bq *q, float fc)
@@ -2072,10 +2078,10 @@ static void eqx_peak(struct eqx_bq *q, float fc, float gdb, float Q)
 static void eqx_config(int i, int role)   /* control thread (rare) */
 {
 	eqx_hpf(&g_eqx.bq[i][0], EQX_P[role].hpf);
-	eqx_peak(&g_eqx.bq[i][1], EQX_P[role].pk_f, EQX_P[role].pk_g,
-		 EQX_P[role].pk_q);
-	g_eqx.st[i][0][0] = g_eqx.st[i][0][1] = 0.0f;
-	g_eqx.st[i][1][0] = g_eqx.st[i][1][1] = 0.0f;
+	eqx_peak(&g_eqx.bq[i][1], EQX_P[role].f1, EQX_P[role].g1, EQX_P[role].q1);
+	eqx_peak(&g_eqx.bq[i][2], EQX_P[role].f2, EQX_P[role].g2, EQX_P[role].q2);
+	for (int b = 0; b < EQX_BQ; b++)
+		g_eqx.st[i][b][0] = g_eqx.st[i][b][1] = 0.0f;
 	g_eqx.role_of[i] = role;
 }
 
