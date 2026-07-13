@@ -2287,18 +2287,24 @@ static struct {
 					   * (1/4 du max reçu = 12 dB) */
 	float  risk_decay;                /* oubli mémoire du risque (dB/s) */
 	float  risk_margin;              /* marge du plafond risque (dB) */
+	float  gate_db;                   /* V13.9 GATE AUTO : seuil adaptatif
+					   * = al_ref − gate_db (rôles gate_on,
+					   * ferme le micro sur la repisse) */
 	/* V13.9 — BALANCE AUTO musique/voix/chœurs : tient la voix lead et les
 	 * chœurs à un écart cible au-dessus du lit musique (somme des loudness
 	 * lt_ms par groupe). Agit sur presence_gain, le makeup LUFS tient −14. */
 	int    balance_on;                /* balance auto active */
 	float  bal_lufs_tgt;              /* cible LUFS master (−14) */
-	float  bal_e_tgt;                 /* cible écart voix−musique (dB, +3) */
-	float  g_voice_db;                /* gain groupe VOIX courant (dB) */
+	float  bal_e_tgt;                 /* cible écart voix lead−musique (+3 dB) */
+	float  bal_c_tgt;                 /* cible écart chœurs−musique (+1,5 dB) */
+	float  g_voice_db;                /* gain groupe VOIX LEAD courant (dB) */
+	float  g_choir_db;                /* gain groupe CHŒURS courant (dB) */
 	float  g_music_db;                /* gain groupe MUSIQUE courant (dB) */
 	float  prog_peak;                 /* peak-hold loudness programme (gel) */
 } g_bmx = { .meas_src = -1, .freeze_db = 12.0f, .risk_decay = 0.05f,
-	    .risk_margin = 3.0f, .balance_on = 1,
-	    .bal_lufs_tgt = -14.0f, .bal_e_tgt = 3.0f, .prog_peak = -120.0f };
+	    .risk_margin = 3.0f, .gate_db = 15.0f, .balance_on = 1,
+	    .bal_lufs_tgt = -14.0f, .bal_e_tgt = 3.0f, .bal_c_tgt = 1.5f,
+	    .prog_peak = -120.0f };
 
 /* V13.6 : EQ de placement (audio_thread, entre gate et comp) — lit
  * g_bmx.role donc défini APRÈS g_bmx. Biquads forme II transposée. */
@@ -2456,20 +2462,29 @@ static void bmx_tick(void)
 		 * SEUL gain de groupe par tick selon le quadrant :
 		 *   LUFS<−14 & E<3 → monter VOIX    | LUFS<−14 & E>3 → monter MUSIQUE
 		 *   LUFS>−14 & E<3 → baisser MUSIQUE | LUFS>−14 & E>3 → baisser VOIX
-		 * GEL : dans un creux (prog < crête récente −12 dB) ou groupe muet, on
+		 * GEL : dans un creux (prog < crête récente −3 dB) ou groupe muet, on
 		 * ne monte JAMAIS → fin de morceau / passage calme restent calmes.
-		 * VOIX = LEAD+CHŒURS · MUSIQUE = instruments. Remplace le chase makeup. */
+		 * VOIX = LEAD · MUSIQUE = instruments. Les CHŒURS ont leur propre
+		 * asservissement d'écart (bal_c_tgt, +1,5 dB) subordonné : leur gain
+		 * suit musique+cible, même gel — ils ne pilotent pas le LUFS.
+		 * Remplace le chase makeup. */
 		if (g_bmx.balance_on) {
-			float Pv = 0.0f, Pm = 0.0f;
+			/* RÈGLE UNIVERSELLE « pas de signal → on ne bouge rien » :
+			 * chaque groupe n'est sommé que sur ses voies ACTIVES au sens
+			 * du gel keeper (act[] : pre ≥ al_ref − freeze_db). Un groupe
+			 * sans voie active = h?=0 → ses gains sont GELÉS (ni montée
+			 * ni descente) — on n'asservit JAMAIS du bruit de fond. */
+			float Pv = 0.0f, Pc = 0.0f, Pm = 0.0f;
 			for (int i = 0; i < N_EXP_CH; i++) {
 				int r = g_bmx.role[i];
-				if (r == BR_OFF) continue;
-				if (r == BR_LEAD || r == BR_CHOIR) Pv += g_bmx.lt_ms[i];
-				else                               Pm += g_bmx.lt_ms[i];
+				if (r == BR_OFF || !act[i]) continue;
+				if      (r == BR_LEAD)  Pv += g_bmx.lt_ms[i];
+				else if (r == BR_CHOIR) Pc += g_bmx.lt_ms[i];
+				else                    Pm += g_bmx.lt_ms[i];
 			}
-			int hv = (Pv > 1e-6f), hm = (Pm > 1e-6f);
+			int hv = (Pv > 1e-6f), hm = (Pm > 1e-6f), hc = (Pc > 1e-6f);
 			/* peak-hold du programme pour le gel (décroît 0,5 dB/s) */
-			float prog = 10.0f * log10f(Pv + Pm + 1e-12f);
+			float prog = 10.0f * log10f(Pv + Pc + Pm + 1e-12f);
 			if (prog > g_bmx.prog_peak) g_bmx.prog_peak = prog;
 			else                        g_bmx.prog_peak -= 0.5f;
 			/* « au niveau fort » = programme à moins de 3 dB sous sa crête
@@ -2513,6 +2528,20 @@ static void bmx_tick(void)
 				if (g_bmx.g_music_db >  36.0f) g_bmx.g_music_db =  36.0f;
 				if (g_bmx.g_music_db < -24.0f) g_bmx.g_music_db = -24.0f;
 			}
+			/* CHŒURS : asservissement d'écart subordonné — tient les
+			 * chœurs à musique + bal_c_tgt (boucle fermée, slew ≤1 dB/
+			 * tick), même gel : jamais de montée dans un creux. */
+			if (hc && hm && lufs > -50.0f) {
+				float Ec = (10.0f * log10f(Pc) - 10.0f * log10f(Pm))
+					 + (g_bmx.g_choir_db - g_bmx.g_music_db);
+				float d = g_bmx.bal_c_tgt - Ec;   /* >0 → monter */
+				if (d >  1.0f) d =  1.0f;
+				if (d < -1.0f) d = -1.0f;
+				if (d > 0.0f && !loud) d = 0.0f;  /* gel des montées */
+				g_bmx.g_choir_db += d;
+				if (g_bmx.g_choir_db >  36.0f) g_bmx.g_choir_db =  36.0f;
+				if (g_bmx.g_choir_db < -24.0f) g_bmx.g_choir_db = -24.0f;
+			}
 		}
 
 		/* V13.6 : compresseur auto par rôle, seuil ADAPTATIF (al_ref =
@@ -2521,12 +2550,27 @@ static void bmx_tick(void)
 		for (int i = 0; i < N_EXP_CH; i++) {
 			g_st.keeper_target[i] = powf(10.0f, g_bmx.kdb[i] / 20.0f);
 			int r = g_bmx.role[i];
-			/* V13.9 — gain de groupe (balance auto) : voix / musique */
+			/* V13.9 — gain de groupe (balance auto) : lead/chœurs/musique */
 			g_st.presence_target[i] =
 				(!g_bmx.balance_on || r == BR_OFF) ? 1.0f
-				: (r == BR_LEAD || r == BR_CHOIR)
+				: (r == BR_LEAD)
 					? powf(10.0f, g_bmx.g_voice_db / 20.0f)
+				: (r == BR_CHOIR)
+					? powf(10.0f, g_bmx.g_choir_db / 20.0f)
 					: powf(10.0f, g_bmx.g_music_db / 20.0f);
+			/* V13.9 — GATE AUTO : seuil adaptatif = al_ref − gate_db
+			 * (al_ref = crête mémorisée de LA voie → le seuil suit la
+			 * source ; la repisse, bien plus basse, n'ouvre pas).
+			 * Rôles gate_on seulement (LEAD/CHŒURS/KICK/SNARE) ;
+			 * ré-armé chaque tick (état préservé si déjà on). */
+			if (r != BR_OFF && BMX_P[r].gate_on) {
+				float gthr = g_bmx.al_ref[i] - g_bmx.gate_db;
+				if (gthr < -80.0f) gthr = -80.0f;
+				if (gthr > -20.0f) gthr = -20.0f;
+				exp_configure(i, 1, gthr, BMX_P[r].gate_ratio,
+					      2.0f, 150.0f, 40.0f,
+					      BMX_P[r].gate_hold);
+			}
 			if (r == BR_OFF || !BMX_P[r].comp_on) {
 				if (g_cmp[i].on)
 					cmp_configure(i, 0, g_cmp[i].thr_db,
@@ -4759,7 +4803,7 @@ static void handle_cmd(int fd, const char *line)
 				g_bmx.al_ref[i] = g_bmx.risk[i] = -120.0f;   /* recale les peak-holds */
 			g_bmx.al_anchor = -120.0f;           /* ré-init de l'ancre */
 			/* V13.9 — reset balance auto (gains groupe neutres) */
-			g_bmx.g_voice_db = g_bmx.g_music_db = 0.0f;
+			g_bmx.g_voice_db = g_bmx.g_choir_db = g_bmx.g_music_db = 0.0f;
 			g_bmx.prog_peak = -120.0f;
 			for (int i = 0; i < N_INPUT_TOTAL; i++)
 				g_st.presence_target[i] = g_st.presence_gain[i] = 1.0f;
@@ -4799,6 +4843,14 @@ static void handle_cmd(int fd, const char *line)
 					cmp_configure(i, 0, g_cmp[i].thr_db,
 						g_cmp[i].ratio, g_cmp[i].atk_ms,
 						g_cmp[i].rel_ms, g_cmp[i].makeup_db);
+			/* V13.9 : coupe aussi les GATES AUTO posées par l'automix */
+			for (int i = 0; i < N_EXP_CH; i++)
+				if (g_bmx.role[i] != BR_OFF && g_exp[i].on &&
+				    BMX_P[g_bmx.role[i]].gate_on)
+					exp_configure(i, 0, g_exp[i].thr_db,
+						g_exp[i].ratio, g_exp[i].atk_ms,
+						g_exp[i].rel_ms, g_exp[i].range_db,
+						g_exp[i].hold_ms);
 			pthread_mutex_unlock(&g_st.target_lock);
 		}
 		atomic_store(&g_presets_dirty, 1);
@@ -5462,9 +5514,12 @@ static void handle_cmd(int fd, const char *line)
 			g_bmx.risk_decay = v;
 		if (json_get_float(line, "risk_margin", &v) >= 0 && v >= 0.0f && v <= 12.0f)
 			g_bmx.risk_margin = v;
+		if (json_get_float(line, "gate_db", &v) >= 0 && v >= 3.0f && v <= 30.0f)
+			g_bmx.gate_db = v;
 		dprintf(fd, "{\"ok\":true,\"op\":\"automix_tune\",\"freeze_db\":%.1f,"
-			"\"risk_decay\":%.3f,\"risk_margin\":%.1f}\n",
-			g_bmx.freeze_db, g_bmx.risk_decay, g_bmx.risk_margin);
+			"\"risk_decay\":%.3f,\"risk_margin\":%.1f,\"gate_db\":%.1f}\n",
+			g_bmx.freeze_db, g_bmx.risk_decay, g_bmx.risk_margin,
+			g_bmx.gate_db);
 
 	} else if (json_has_op(line, "set_vspatial")) {
 		/* V13.9 — spatializer voix (widener Lauridsen LEAD+CHŒURS) :
@@ -5500,11 +5555,15 @@ static void handle_cmd(int fd, const char *line)
 			g_bmx.bal_lufs_tgt = v;
 		if (json_get_float(line, "e_tgt", &v) >= 0 && v >= -6.0f && v <= 12.0f)
 			g_bmx.bal_e_tgt = v;
+		if (json_get_float(line, "c_tgt", &v) >= 0 && v >= -6.0f && v <= 12.0f)
+			g_bmx.bal_c_tgt = v;
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_balance\",\"on\":%d,"
-			"\"lufs_tgt\":%.1f,\"e_tgt\":%.1f,\"voice_db\":%.1f,"
-			"\"music_db\":%.1f,\"lufs\":%.1f}\n",
+			"\"lufs_tgt\":%.1f,\"e_tgt\":%.1f,\"c_tgt\":%.1f,"
+			"\"voice_db\":%.1f,\"choir_db\":%.1f,\"music_db\":%.1f,"
+			"\"lufs\":%.1f}\n",
 			g_bmx.balance_on, g_bmx.bal_lufs_tgt, g_bmx.bal_e_tgt,
-			g_bmx.g_voice_db, g_bmx.g_music_db,
+			g_bmx.bal_c_tgt, g_bmx.g_voice_db, g_bmx.g_choir_db,
+			g_bmx.g_music_db,
 			atomic_load_explicit(&g_mk.lufs_c, memory_order_relaxed) * 0.01);
 
 	} else if (json_has_op(line, "get_meters_lite")) {

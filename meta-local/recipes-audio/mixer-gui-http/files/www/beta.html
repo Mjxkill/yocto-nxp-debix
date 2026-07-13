@@ -737,9 +737,13 @@ input[type=range]::-moz-range-track{height:16px;border-radius:8px;background:#0b
             <span style="width:96px;">MÉMOIRE CRÊTE<br><b id="atriskv" style="color:#e9e5da;">— dB/s</b></span>
             <input type="range" id="atrisk" min="0" max="2" step="0.01" value="0.05" style="flex:1;">
           </label>
-          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);">
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);margin-bottom:5px;">
             <span style="width:96px;">MARGE CRÊTE<br><b id="atmargv" style="color:#e9e5da;">— dB</b></span>
             <input type="range" id="atmarg" min="0" max="12" step="0.5" value="3" style="flex:1;">
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);">
+            <span style="width:96px;">GATE VOIX<br><b id="atgatev" style="color:#e9e5da;">— dB</b></span>
+            <input type="range" id="atgate" min="3" max="30" step="1" value="15" style="flex:1;">
           </label>
         </div>
 
@@ -757,6 +761,10 @@ input[type=range]::-moz-range-track{height:16px;border-radius:8px;background:#0b
           <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);margin-bottom:5px;">
             <span style="width:96px;">VOIX / MUSIQUE<br><b id="balev" style="color:#e9e5da;">— dB</b></span>
             <input type="range" id="bale" min="-6" max="12" step="0.5" value="3" style="flex:1;">
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);margin-bottom:5px;">
+            <span style="width:96px;">CHŒURS / MUSIQUE<br><b id="balcv" style="color:#e9e5da;">— dB</b></span>
+            <input type="range" id="balc" min="-6" max="12" step="0.5" value="1.5" style="flex:1;">
           </label>
           <div id="balst" style="font-size:9px;color:var(--mut);">…</div>
         </div>
@@ -3759,10 +3767,14 @@ function balRender(){
     document.getElementById("bale").value=balSt.e_tgt;
     document.getElementById("ballufsv").textContent=balSt.lufs_tgt.toFixed(1)+" LUFS";
     document.getElementById("balev").textContent="+"+balSt.e_tgt.toFixed(1)+" dB";
+    if(balSt.c_tgt!=null){
+      document.getElementById("balc").value=balSt.c_tgt;
+      document.getElementById("balcv").textContent="+"+balSt.c_tgt.toFixed(1)+" dB";
+    }
   }
   const sg=v=>(v>=0?"+":"")+v.toFixed(1);
   document.getElementById("balst").textContent=
-    `voix ${sg(balSt.voice_db)} · musique ${sg(balSt.music_db)} · mesure ${balSt.lufs.toFixed(1)} LUFS`;
+    `voix ${sg(balSt.voice_db)} · chœurs ${sg(balSt.choir_db||0)} · musique ${sg(balSt.music_db)} · ${balSt.lufs.toFixed(1)} LUFS`;
 }
 function vspRender(){
   if(!vspSt)return;
@@ -3782,6 +3794,7 @@ document.getElementById("vspon").addEventListener("click",()=>
   cmd({op:"set_vspatial",on:vspSt&&vspSt.on?0:1}).then(r=>{if(r.ok){vspSt=r;vspRender();}}));
 [["ballufs","lufs_tgt","ballufsv",v=>(+v).toFixed(1)+" LUFS","set_balance",()=>balDrag,d=>balDrag=d],
  ["bale","e_tgt","balev",v=>"+"+(+v).toFixed(1)+" dB","set_balance",()=>balDrag,d=>balDrag=d],
+ ["balc","c_tgt","balcv",v=>"+"+(+v).toFixed(1)+" dB","set_balance",()=>balDrag,d=>balDrag=d],
  ["vspam","amount","vspamv",v=>(+v).toFixed(0),"set_vspatial",()=>vspDrag,d=>vspDrag=d],
  ["vspdl","delay_ms","vspdlv",v=>(+v).toFixed(0)+" ms","set_vspatial",()=>vspDrag,d=>vspDrag=d]]
 .forEach(([id,key,lbl,fmt,op,,setDrag])=>{
@@ -3800,10 +3813,13 @@ function atRender(){
   if(atSt.freeze_db!=null){g.value=atSt.freeze_db;document.getElementById("atgelv").textContent="−"+(+atSt.freeze_db).toFixed(0)+" dB";}
   if(atSt.risk_decay!=null){ri.value=atSt.risk_decay;document.getElementById("atriskv").textContent=(+atSt.risk_decay).toFixed(2)+" dB/s";}
   if(atSt.risk_margin!=null){m.value=atSt.risk_margin;document.getElementById("atmargv").textContent="+"+(+atSt.risk_margin).toFixed(1)+" dB";}
+  const g2=document.getElementById("atgate");
+  if(atSt.gate_db!=null){g2.value=atSt.gate_db;document.getElementById("atgatev").textContent="−"+(+atSt.gate_db).toFixed(0)+" dB";}
 }
 [["atgel","freeze_db","atgelv",v=>"−"+(+v).toFixed(0)+" dB"],
  ["atrisk","risk_decay","atriskv",v=>(+v).toFixed(2)+" dB/s"],
- ["atmarg","risk_margin","atmargv",v=>"+"+(+v).toFixed(1)+" dB"]].forEach(([id,key,lbl,fmt])=>{
+ ["atmarg","risk_margin","atmargv",v=>"+"+(+v).toFixed(1)+" dB"],
+ ["atgate","gate_db","atgatev",v=>"−"+(+v).toFixed(0)+" dB"]].forEach(([id,key,lbl,fmt])=>{
   const el=document.getElementById(id);
   el.addEventListener("pointerdown",()=>{atDrag=true;});
   el.addEventListener("pointerup",()=>{atDrag=false;});

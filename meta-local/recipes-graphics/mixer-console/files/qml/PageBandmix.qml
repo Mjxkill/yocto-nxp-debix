@@ -407,7 +407,7 @@ Item {
 
             // ======= RÉGLAGES AUTOMIX (tout réglable live — mandat R&D) =======
             Rectangle {
-                width: parent.width; height: 108; radius: 8; color: "#171c21"
+                width: parent.width; height: 134; radius: 8; color: "#171c21"
                 Column {
                     anchors.fill: parent; anchors.margins: 10; spacing: 6
                     Text { text: "RÉGLAGES AUTOMIX";
@@ -416,7 +416,8 @@ Item {
                         // [libellé, clé, min, max, préfixe signe, décimales, suffixe]
                         model: [["GEL SILENCE",  "freeze_db",   3,  40, "−", 0, " dB"],
                                 ["MÉMOIRE CRÊTE", "risk_decay",  0,   2, "",  2, " dB/s"],
-                                ["MARGE CRÊTE",   "risk_margin", 0,  12, "+", 1, " dB"]]
+                                ["MARGE CRÊTE",   "risk_margin", 0,  12, "+", 1, " dB"],
+                                ["GATE VOIX",     "gate_db",     3,  30, "−", 0, " dB"]]
                         Row {
                             width: parent.width; spacing: 8
                             property real vmin: modelData[2]
@@ -467,7 +468,7 @@ Item {
 
             // ======= V13.9 : BALANCE AUTO musique/voix (quadrants + gel) =======
             Rectangle {
-                width: parent.width; height: 118; radius: 8; color: "#171c21"
+                width: parent.width; height: 144; radius: 8; color: "#171c21"
                 Column {
                     anchors.fill: parent; anchors.margins: 10; spacing: 6
                     Row {
@@ -495,8 +496,9 @@ Item {
                     }
                     Repeater {
                         // [libellé, clé, min, max, décimales, suffixe]
-                        model: [["LUFS CIBLE",    "lufs_tgt", -24, -8, 1, ""],
-                                ["VOIX / MUSIQUE", "e_tgt",    -6, 12, 1, " dB"]]
+                        model: [["LUFS CIBLE",      "lufs_tgt", -24, -8, 1, ""],
+                                ["VOIX / MUSIQUE",   "e_tgt",    -6, 12, 1, " dB"],
+                                ["CHŒURS / MUSIQUE", "c_tgt",    -6, 12, 1, " dB"]]
                         Row {
                             width: parent.width; spacing: 8
                             property real vmin: modelData[2]
@@ -507,7 +509,7 @@ Item {
                                 width: 128
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: modelData[0] + "  "
-                                      + (modelData[1] === "e_tgt" && parent.val >= 0 ? "+" : "")
+                                      + (modelData[1] !== "lufs_tgt" && parent.val >= 0 ? "+" : "")
                                       + Number(parent.val).toFixed(modelData[4]) + modelData[5]
                                 color: "#c9c4b8"; font.pixelSize: 8
                             }
@@ -546,9 +548,13 @@ Item {
                     Text {
                         width: parent.width; color: "#7a848c"; font.pixelSize: 8
                         text: page.bal ? ("voix " + (page.bal.voice_db >= 0 ? "+" : "")
-                              + page.bal.voice_db.toFixed(1) + " · musique "
+                              + page.bal.voice_db.toFixed(1) + " · chœurs "
+                              + (page.bal.choir_db !== undefined
+                                 ? (page.bal.choir_db >= 0 ? "+" : "")
+                                   + page.bal.choir_db.toFixed(1) : "—")
+                              + " · musique "
                               + (page.bal.music_db >= 0 ? "+" : "")
-                              + page.bal.music_db.toFixed(1) + " · mesure "
+                              + page.bal.music_db.toFixed(1) + " · "
                               + page.bal.lufs.toFixed(1) + " LUFS") : "…"
                     }
                 }
