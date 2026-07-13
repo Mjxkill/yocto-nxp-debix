@@ -2078,8 +2078,10 @@ static const struct {
 	float f2, g2, q2;   /* cloche 2 : modelage (boue/air/corps) */
 } EQX_P[BR_NROLES] = {
 	[BR_OFF]    = { 0 },
-	[BR_LEAD]   = { 90,  3500, +3.0f, 0.9f,  500,  -2.0f, 1.0f },  /* présence + dé-boue */
-	[BR_CHOIR]  = { 120, 4000, +1.5f, 0.9f,  400,  -1.5f, 1.0f },
+	/* V13.9 : HPF voix relevés — la voix ne bave plus dans le territoire
+	 * basse/kick. Lead 250 Hz validé oreille (150 « mieux, pousse encore »). */
+	[BR_LEAD]   = { 250, 3500, +3.0f, 0.9f,  500,  -2.0f, 1.0f },  /* présence + dé-boue */
+	[BR_CHOIR]  = { 180, 4000, +1.5f, 0.9f,  400,  -1.5f, 1.0f },
 	[BR_KICK]   = { 0,   70,   +2.5f, 0.9f,  400,  -3.0f, 1.2f },  /* poids + creux carton */
 	[BR_SNARE]  = { 120, 4000, +2.0f, 0.9f,  250,  +1.5f, 1.0f },  /* claquant + corps */
 	[BR_DRUMS]  = { 200, 6000, +1.5f, 0.9f,  500,  -1.5f, 1.0f },  /* air + dé-boue */
@@ -2301,6 +2303,9 @@ static struct {
 	float  g_choir_db;                /* gain groupe CHŒURS courant (dB) */
 	float  g_music_db;                /* gain groupe MUSIQUE courant (dB) */
 	float  prog_peak;                 /* peak-hold loudness programme (gel) */
+	int    bal_staged;                /* 0 = staging initial (8 dB/s jusqu'au
+					   * 1er lock ±2 dB) — volume utilisable
+					   * en ~4 s dès que les musiciens jouent */
 } g_bmx = { .meas_src = -1, .freeze_db = 12.0f, .risk_decay = 0.05f,
 	    .risk_margin = 3.0f, .gate_db = 15.0f, .balance_on = 1,
 	    .bal_lufs_tgt = -14.0f, .bal_e_tgt = 3.0f, .bal_c_tgt = 1.5f,
@@ -2502,7 +2507,13 @@ static void bmx_tick(void)
 				float lerr = lufs - g_bmx.bal_lufs_tgt;   /* >0 trop fort */
 				float eerr = E - g_bmx.bal_e_tgt;          /* >0 voix haute */
 				const float DB = 1.0f;                     /* deadband */
-				float st = (fabsf(lerr) > 6.0f) ? 3.0f : 1.0f; /* gain-stage */
+				/* STAGING INITIAL (exigence scène : volume utilisable
+				 * tout de suite) : 8 dB/s jusqu'au 1er lock ±2 dB,
+				 * puis vitesses douces 3/1 dB/s (anti-pompage). */
+				if (!g_bmx.bal_staged && fabsf(lerr) <= 2.0f)
+					g_bmx.bal_staged = 1;
+				float st = !g_bmx.bal_staged ? 8.0f
+					 : (fabsf(lerr) > 6.0f) ? 3.0f : 1.0f;
 				float dv = 0.0f, dm = 0.0f;
 				if (lerr < -DB) {              /* trop faible → MONTER */
 					if (eerr > DB) dm = +st;      /* voix trop haute → musique */
@@ -2535,8 +2546,9 @@ static void bmx_tick(void)
 				float Ec = (10.0f * log10f(Pc) - 10.0f * log10f(Pm))
 					 + (g_bmx.g_choir_db - g_bmx.g_music_db);
 				float d = g_bmx.bal_c_tgt - Ec;   /* >0 → monter */
-				if (d >  1.0f) d =  1.0f;
-				if (d < -1.0f) d = -1.0f;
+				float cs = g_bmx.bal_staged ? 1.0f : 8.0f;
+				if (d >  cs) d =  cs;
+				if (d < -cs) d = -cs;
 				if (d > 0.0f && !loud) d = 0.0f;  /* gel des montées */
 				g_bmx.g_choir_db += d;
 				if (g_bmx.g_choir_db >  36.0f) g_bmx.g_choir_db =  36.0f;
@@ -4802,9 +4814,11 @@ static void handle_cmd(int fd, const char *line)
 			for (int i = 0; i < N_EXP_CH; i++)
 				g_bmx.al_ref[i] = g_bmx.risk[i] = -120.0f;   /* recale les peak-holds */
 			g_bmx.al_anchor = -120.0f;           /* ré-init de l'ancre */
-			/* V13.9 — reset balance auto (gains groupe neutres) */
+			/* V13.9 — reset balance auto (gains groupe neutres) + staging
+			 * initial ré-armé (montée rapide 8 dB/s jusqu'au 1er lock) */
 			g_bmx.g_voice_db = g_bmx.g_choir_db = g_bmx.g_music_db = 0.0f;
 			g_bmx.prog_peak = -120.0f;
+			g_bmx.bal_staged = 0;
 			for (int i = 0; i < N_INPUT_TOTAL; i++)
 				g_st.presence_target[i] = g_st.presence_gain[i] = 1.0f;
 			/* V13.6 : EQ de placement + vfocus renforcé (place voix) */
