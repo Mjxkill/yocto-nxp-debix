@@ -92,6 +92,11 @@ struct mixer_state {
 	 * les faders). Multiplié partout où automix_gain l'est. */
 	float keeper_gain[N_INPUT_TOTAL];
 	float keeper_target[N_INPUT_TOTAL];
+	/* V13.9 — BALANCE AUTO : gain de « présence » par voie (voix lead /
+	 * chœurs tenus à un écart cible au-dessus du lit musique). Multiplié
+	 * dans le master comme keeper_gain. 1.0 = neutre (instruments). */
+	float presence_gain[N_INPUT_TOTAL];
+	float presence_target[N_INPUT_TOTAL];
 
 	/* E6.e : 1 moteur d'effet par bus (4 bus × stéréo, géré par fx_engine).
 	 * Defaults : 0=compressor, 1=reverb, 2=delay, 3=eq.
@@ -1767,6 +1772,15 @@ static void smooth_gains(void)
 			g_st.keeper_gain[i] += alpha_k *
 				(g_st.keeper_target[i] - g_st.keeper_gain[i]);
 	}
+
+	/* V13.9 — BALANCE AUTO : slew du gain de présence (τ ≈ 2 s, comme le
+	 * keeper — le dB/tick de la boucle 1 Hz fixe déjà la vitesse macro). */
+	{
+		const float alpha_p = 0.001f;
+		for (int i = 0; i < N_INPUT_TOTAL; i++)
+			g_st.presence_gain[i] += alpha_p *
+				(g_st.presence_target[i] - g_st.presence_gain[i]);
+	}
 }
 
 /* ========= V12-EXP — expandeur/gate par tranche (16 voies réelles) =========
@@ -1884,6 +1898,7 @@ static void exp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
  * ARCHI_V13_BANDMIX.md. */
 struct cmp_ch {
 	int   on;
+	int   releasing;                   /* extinction douce : ramp gain→1 */
 	float thr_db, ratio, makeup_db;   /* config user */
 	float atk_ms, rel_ms;
 	float thr_lin, ka, kr, makeup_lin; /* précalc (control thread) */
@@ -1916,8 +1931,17 @@ static void cmp_configure(int src, int on, float thr_db, float ratio,
 	c->makeup_lin = powf(10.0f, makeup_db / 20.0f);
 	c->on = on ? 1 : 0;
 	if (!c->on) {
-		c->env = 0.0f; c->gain = 1.0f;
-		atomic_store_explicit(&c->gr_mdb, 0, memory_order_relaxed);
+		/* extinction : si le comp jouait (gain réduit), on RAMPE vers 1 via
+		 * cmp_render (pas de saut = pas de clic). Si jamais lancé (gain≤0 au
+		 * boot) ou déjà à l'unité, on fige direct. */
+		if (c->gain <= 0.0f || c->gain == 1.0f) {
+			c->env = 0.0f; c->gain = 1.0f; c->releasing = 0;
+			atomic_store_explicit(&c->gr_mdb, 0, memory_order_relaxed);
+		} else {
+			c->releasing = 1;
+		}
+	} else {
+		c->releasing = 0;
 	}
 }
 
@@ -1926,25 +1950,31 @@ static void cmp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 {
 	for (int i = 0; i < N_EXP_CH; i++) {
 		struct cmp_ch *c = &g_cmp[i];
-		if (!c->on)
+		if (!c->on && !c->releasing)
 			continue;
-		float p = 0.0f;
-		const float *x = in_block[i];
-		for (int f = 0; f < PERIOD_FRAMES; f++) {
-			float v = x[f] < 0 ? -x[f] : x[f];
-			if (v > p) p = v;
-		}
-		c->env += (p > c->env ? c->ka : c->kr) * (p - c->env);
+		float gt;
+		if (c->on) {
+			float p = 0.0f;
+			const float *x = in_block[i];
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float v = x[f] < 0 ? -x[f] : x[f];
+				if (v > p) p = v;
+			}
+			c->env += (p > c->env ? c->ka : c->kr) * (p - c->env);
 
-		float g_db = 0.0f;
-		if (c->env > c->thr_lin) {
-			float env_db = 20.0f * log10f(c->env + 1e-10f);
-			g_db = (c->thr_db - env_db) * (1.0f - 1.0f / c->ratio);
+			float g_db = 0.0f;
+			if (c->env > c->thr_lin) {
+				float env_db = 20.0f * log10f(c->env + 1e-10f);
+				g_db = (c->thr_db - env_db) * (1.0f - 1.0f / c->ratio);
+			}
+			gt = powf(10.0f, g_db / 20.0f) * c->makeup_lin;
+			atomic_store_explicit(&c->gr_mdb,
+					      (uint32_t)(-g_db * 1000.0f),
+					      memory_order_relaxed);
+		} else {
+			gt = 1.0f;   /* releasing : cible unité, ramp doux vers 1 */
+			atomic_store_explicit(&c->gr_mdb, 0, memory_order_relaxed);
 		}
-		float gt = powf(10.0f, g_db / 20.0f) * c->makeup_lin;
-		atomic_store_explicit(&c->gr_mdb,
-				      (uint32_t)(-g_db * 1000.0f),
-				      memory_order_relaxed);
 
 		float g0 = c->gain;
 		float step = (gt - g0) / (float)PERIOD_FRAMES;
@@ -1955,6 +1985,10 @@ static void cmp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 			y[f] *= g;
 		}
 		c->gain = gt;
+		if (c->releasing && fabsf(gt - 1.0f) < 1e-3f) {
+			c->releasing = 0;   /* extinction terminée */
+			c->env = 0.0f;
+		}
 	}
 }
 
@@ -2030,8 +2064,9 @@ static const float COMP_OFF[BR_NROLES] = {
 #define EQX_BQ 3
 struct eqx_bq { float b0, b1, b2, a1, a2; };
 static struct {
-	struct eqx_bq bq[N_EXP_CH][EQX_BQ];
-	float st[N_EXP_CH][EQX_BQ][2];
+	struct eqx_bq bq[2][N_EXP_CH][EQX_BQ];  /* double-buffer : bascule sans clic */
+	_Atomic int   bank[N_EXP_CH];           /* banque active par voie */
+	float st[N_EXP_CH][EQX_BQ][2];          /* états (audio, JAMAIS vidés en live) */
 	int   role_of[N_EXP_CH];      /* rôle pour lequel les coefs sont calculés */
 	_Atomic int on;
 } g_eqx;
@@ -2077,12 +2112,142 @@ static void eqx_peak(struct eqx_bq *q, float fc, float gdb, float Q)
 }
 static void eqx_config(int i, int role)   /* control thread (rare) */
 {
-	eqx_hpf(&g_eqx.bq[i][0], EQX_P[role].hpf);
-	eqx_peak(&g_eqx.bq[i][1], EQX_P[role].f1, EQX_P[role].g1, EQX_P[role].q1);
-	eqx_peak(&g_eqx.bq[i][2], EQX_P[role].f2, EQX_P[role].g2, EQX_P[role].q2);
-	for (int b = 0; b < EQX_BQ; b++)
-		g_eqx.st[i][b][0] = g_eqx.st[i][b][1] = 0.0f;
+	/* calcule dans la banque INACTIVE puis bascule atomiquement : l'audio ne
+	 * lit jamais des coefs à moitié écrits. Les états NE sont PAS vidés → le
+	 * filtre glisse vers les nouveaux coefs sans saut d'échantillon (crack). */
+	int nb = !atomic_load_explicit(&g_eqx.bank[i], memory_order_relaxed);
+	eqx_hpf(&g_eqx.bq[nb][i][0], EQX_P[role].hpf);
+	eqx_peak(&g_eqx.bq[nb][i][1], EQX_P[role].f1, EQX_P[role].g1, EQX_P[role].q1);
+	eqx_peak(&g_eqx.bq[nb][i][2], EQX_P[role].f2, EQX_P[role].g2, EQX_P[role].q2);
+	atomic_store_explicit(&g_eqx.bank[i], nb, memory_order_release);
 	g_eqx.role_of[i] = role;
+}
+
+/* ============ V13.7 — MASTER : EQ mastering + makeup LUFS (BS.1770) ========
+ * Étage master dans l'audio_thread, AVANT l'insert (spectral_env/exciter/
+ * limiter_native) pour que le limiteur EXISTANT tienne les crêtes :
+ *   out 0/1 → EQ master (3 biquads) → makeup (piloté LUFS) → insert → out_gain
+ * Mètre short-term LUFS K-pondéré (K-weighting ITU-R BS.1770) sur la sortie
+ * réelle, lu par bmx_tick qui asservit le makeup vers MASTER_LUFS_TGT.
+ * Lié à AUTOMIX LIVE (g_master_on). ARCHI_V13.7_MASTER_LUFS_EQ.md */
+#define MASTER_LUFS_TGT   (-14.0f)
+#define MASTER_MK_MAX_DB   (36.0f)   /* makeup = gain-staging global (stems faibles) */
+#define MASTER_MK_MIN_DB   (-6.0f)
+#define LUFS_ST_A          (1.0f / (3.0f * (float)SAMPLE_RATE))   /* short-term ~3 s */
+
+static void save_master_eq(void);        /* déf. plus bas (persistance) */
+static _Atomic int g_master_on;          /* étage master actif (autolive) */
+
+/* --- EQ master : 3 biquads RBJ (low shelf / -500 bell / high shelf), double
+ *     buffer pour bascule sans lock depuis le control thread --- */
+static struct eqx_bq g_meq_bank[2][3];
+static _Atomic int    g_meq_active;         /* banque active (steady) */
+static _Atomic int    g_meq_pending = -1;   /* banque à fondre (-1 = aucune) */
+static float          g_meq_st[2][2][3][2]; /* [banque][L/R][biquad][z] */
+#define MEQ_XF_LEN 2400                     /* crossfade coefs ~50 ms (anti-clic) */
+static int            g_meq_fading;         /* audio-owned : fondu en cours */
+static int            g_meq_xf;             /* audio-owned : position du fondu */
+static struct {                          /* params (control thread) */
+	float low_hz, low_db;
+	float mid_hz, mid_db, mid_q;
+	float air_hz, air_db;
+} g_meq_p = { 60.0f, +3.0f, 500.0f, -2.5f, 1.0f, 10000.0f, +3.0f };
+
+/* --- makeup LUFS --- */
+static struct {
+	float k1[2][2], k2[2][2];   /* K-weighting : 2 biquads BS.1770 × L/R */
+	float ms;                   /* EWMA puissance K-pondérée (short-term) */
+	float mk_db;                /* makeup courant en dB (état bmx_tick) */
+	_Atomic int makeup_mq;      /* cible makeup ×1000 linéaire (→ audio) */
+	float makeup_cur;           /* gain lissé (audio_thread) */
+	_Atomic int lufs_c;         /* LUFS short-term ×100 publié (→ bmx_tick) */
+} g_mk = { .makeup_mq = 1000, .lufs_c = -12000 };
+
+/* K-weighting ITU-R BS.1770 @ 48 kHz — coefficients canoniques (forme
+ * transposée II, a0=1). Stage 1 = pré-filtre shelf tête ; stage 2 = RLB HP. */
+#define K1_B0   1.53512485958697f
+#define K1_B1  (-2.69169618940638f)
+#define K1_B2   1.19839281085285f
+#define K1_A1  (-1.69065929318241f)
+#define K1_A2   0.73248077421585f
+#define K2_B0   1.0f
+#define K2_B1  (-2.0f)
+#define K2_B2   1.0f
+#define K2_A1  (-1.99004745483398f)
+#define K2_A2   0.99007225036621f
+
+static void meq_shelf(struct eqx_bq *q, float fc, float gdb, int high)
+{
+	if (fc <= 0.0f || gdb == 0.0f) { *q = (struct eqx_bq){ 1, 0, 0, 0, 0 }; return; }
+	float A  = powf(10.0f, gdb / 40.0f);
+	float w  = 2.0f * (float)M_PI * fc / (float)SAMPLE_RATE;
+	float cw = cosf(w), sw = sinf(w);
+	float al = sw * 0.5f * 1.41421356f;          /* S=1 → alpha = sw/2·√2 */
+	float tsa = 2.0f * sqrtf(A) * al;
+	float ap1 = A + 1.0f, am1 = A - 1.0f;
+	float b0, b1, b2, a0, a1, a2;
+	if (high) {
+		b0 =  A * (ap1 + am1 * cw + tsa);
+		b1 = -2.0f * A * (am1 + ap1 * cw);
+		b2 =  A * (ap1 + am1 * cw - tsa);
+		a0 =        ap1 - am1 * cw + tsa;
+		a1 =  2.0f * (am1 - ap1 * cw);
+		a2 =        ap1 - am1 * cw - tsa;
+	} else {
+		b0 =  A * (ap1 - am1 * cw + tsa);
+		b1 =  2.0f * A * (am1 - ap1 * cw);
+		b2 =  A * (ap1 - am1 * cw - tsa);
+		a0 =        ap1 + am1 * cw + tsa;
+		a1 = -2.0f * (am1 + ap1 * cw);
+		a2 =        ap1 + am1 * cw - tsa;
+	}
+	q->b0 = b0 / a0; q->b1 = b1 / a0; q->b2 = b2 / a0;
+	q->a1 = a1 / a0; q->a2 = a2 / a0;
+}
+
+static void meq_compute(int bank)
+{
+	meq_shelf(&g_meq_bank[bank][0], g_meq_p.low_hz, g_meq_p.low_db, 0);
+	eqx_peak (&g_meq_bank[bank][1], g_meq_p.mid_hz, g_meq_p.mid_db, g_meq_p.mid_q);
+	meq_shelf(&g_meq_bank[bank][2], g_meq_p.air_hz, g_meq_p.air_db, 1);
+}
+
+/* CHANGEMENT LIVE : calcule dans la banque inactive (états frais) et signale
+ * un crossfade à l'audio → l'ancien et le nouveau filtre sont mélangés en
+ * fondu sur ~50 ms. Zéro clic, même en passant par un gain 0 (passe-tout). */
+static void meq_recalc(void)
+{
+	int nb = !atomic_load_explicit(&g_meq_active, memory_order_relaxed);
+	meq_compute(nb);
+	/* états : PAS de reset à zéro (sinon la cloche sonne un transitoire à sa
+	 * fréquence = pop). L'audio copie l'état chaud de l'ancienne banque au
+	 * démarrage du fondu → les deux filtres partent du même état. */
+	atomic_store_explicit(&g_meq_pending, nb, memory_order_release);
+}
+
+/* BOOT / ENABLE : pose les coefs direct dans la banque active, pas de fondu
+ * (pas d'audio en cours ou reset volontaire). */
+static void meq_init(void)
+{
+	int a = atomic_load_explicit(&g_meq_active, memory_order_relaxed);
+	meq_compute(a);
+	atomic_store_explicit(&g_meq_pending, -1, memory_order_relaxed);
+}
+
+/* traite les 3 biquads d'une banque pour 1 échantillon (états mis à jour) */
+static inline float meq_chain(int bank, int ch, float in)
+{
+	float x = in;
+	for (int b = 0; b < 3; b++) {
+		struct eqx_bq *q = &g_meq_bank[bank][b];
+		float z1 = g_meq_st[bank][ch][b][0];
+		float z2 = g_meq_st[bank][ch][b][1];
+		float y = q->b0 * x + z1;
+		g_meq_st[bank][ch][b][0] = q->b1 * x - q->a1 * y + z2;
+		g_meq_st[bank][ch][b][1] = q->b2 * x - q->a2 * y;
+		x = y;
+	}
+	return x;
 }
 
 struct bmx_meas {
@@ -2105,6 +2270,10 @@ static struct {
 	float  al_anchor;                 /* V13.5 : ancre loudness (voix), gelée */
 	float  al_ref[N_EXP_CH];          /* V13.5 : peak-hold loudness pré-fader
 					   * (détection silence sans soundcheck) */
+	float  risk[N_EXP_CH];            /* V13.8 : mémoire du risque LENTE
+					   * (peak-hold, décroît 0,05 dB/s) — plafonne
+					   * le keeper : une source qui a été forte
+					   * reste tenue plusieurs minutes */
 	float  ref_share[N_EXP_CH];       /* parts de puissance verrouillées */
 	float  lt_ms[N_EXP_CH];           /* loudness long terme POST-fader (τ 10 s) */
 	float  lt_pre[N_EXP_CH];          /* idem PRÉ-fader (détection silence,
@@ -2113,7 +2282,23 @@ static struct {
 	int    locking;                    /* capture de référence en cours */
 	int    lock_ticks;
 	double lock_acc[N_EXP_CH];
-} g_bmx = { .meas_src = -1 };
+	/* V13.9 — tunables automix réglables en live (R&D, jamais en dur) */
+	float  freeze_db;                 /* gel si pre < al_ref − freeze_db
+					   * (1/4 du max reçu = 12 dB) */
+	float  risk_decay;                /* oubli mémoire du risque (dB/s) */
+	float  risk_margin;              /* marge du plafond risque (dB) */
+	/* V13.9 — BALANCE AUTO musique/voix/chœurs : tient la voix lead et les
+	 * chœurs à un écart cible au-dessus du lit musique (somme des loudness
+	 * lt_ms par groupe). Agit sur presence_gain, le makeup LUFS tient −14. */
+	int    balance_on;                /* balance auto active */
+	float  bal_lufs_tgt;              /* cible LUFS master (−14) */
+	float  bal_e_tgt;                 /* cible écart voix−musique (dB, +3) */
+	float  g_voice_db;                /* gain groupe VOIX courant (dB) */
+	float  g_music_db;                /* gain groupe MUSIQUE courant (dB) */
+	float  prog_peak;                 /* peak-hold loudness programme (gel) */
+} g_bmx = { .meas_src = -1, .freeze_db = 12.0f, .risk_decay = 0.05f,
+	    .risk_margin = 3.0f, .balance_on = 1,
+	    .bal_lufs_tgt = -14.0f, .bal_e_tgt = 3.0f, .prog_peak = -120.0f };
 
 /* V13.6 : EQ de placement (audio_thread, entre gate et comp) — lit
  * g_bmx.role donc défini APRÈS g_bmx. Biquads forme II transposée. */
@@ -2127,8 +2312,9 @@ static void eqx_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 			continue;
 		if (g_eqx.role_of[i] != role)   /* rôle changé : recalcule */
 			eqx_config(i, role);
+		int bk = atomic_load_explicit(&g_eqx.bank[i], memory_order_acquire);
 		for (int b = 0; b < EQX_BQ; b++) {
-			struct eqx_bq *q = &g_eqx.bq[i][b];
+			struct eqx_bq *q = &g_eqx.bq[bk][i][b];
 			float z1 = g_eqx.st[i][b][0], z2 = g_eqx.st[i][b][1];
 			float *x = in_block[i];
 			for (int f = 0; f < PERIOD_FRAMES; f++) {
@@ -2227,8 +2413,12 @@ static void bmx_tick(void)
 			pre_db[i] = pre;
 			if (pre > g_bmx.al_ref[i]) g_bmx.al_ref[i] = pre;
 			else g_bmx.al_ref[i] -= 0.5f;
-			if (pre < -60.0f || pre < g_bmx.al_ref[i] - 22.0f)
-				continue;         /* source en pause : figée */
+			/* V13.8 : mémoire du risque LENTE (monte instantané, oublie
+			 * 0,05 dB/s ≈ 3 dB/min) → tient une source longtemps */
+			if (pre > g_bmx.risk[i]) g_bmx.risk[i] = pre;
+			else g_bmx.risk[i] -= g_bmx.risk_decay;
+			if (pre < -60.0f || pre < g_bmx.al_ref[i] - g_bmx.freeze_db)
+				continue;   /* < 1/4 du max reçu : gelée (V13.9) */
 			act[i] = 1; any = 1;
 			if (pre > Lmax) Lmax = pre;
 			if (g_bmx.role[i] == BR_LEAD && pre > Llead) {
@@ -2245,20 +2435,98 @@ static void bmx_tick(void)
 			g_bmx.al_anchor += 0.10f * (anchor_now - g_bmx.al_anchor);
 		for (int i = 0; i < N_EXP_CH; i++) {
 			if (!act[i]) continue;
-			float tgt = (g_bmx.al_anchor + BMX_P[g_bmx.role[i]].mix_db)
-				    - pre_db[i];
+			float place = g_bmx.al_anchor + BMX_P[g_bmx.role[i]].mix_db;
+			float tgt = place - pre_db[i];
+			/* V13.8 — MÉMOIRE DU RISQUE : une source qui A ÉTÉ forte
+			 * (al_ref = crête mémorisée) ne remonte pas quand elle se tait.
+			 * On plafonne le keeper pour qu'À SON NIVEAU FORT mémorisé la
+			 * source ne dépasse pas sa place + 3 dB : keeper ≤ place+3−al_ref.
+			 * al_ref décroît 0,5 dB/s → « garde le risque puis pardonne ». */
+			float risk_cap = place + g_bmx.risk_margin - g_bmx.risk[i];
+			if (tgt > risk_cap) tgt = risk_cap;
 			if (tgt >  18.0f) tgt =  18.0f;
 			if (tgt < -24.0f) tgt = -24.0f;
 			float d = tgt - g_bmx.kdb[i];   /* slew ≤1 dB/tick, zm 0,5 */
 			if (d > 0.5f)  g_bmx.kdb[i] += (d > 1.0f ? 1.0f : d);
 			if (d < -0.5f) g_bmx.kdb[i] += (d < -1.0f ? -1.0f : d);
 		}
+
+		/* V13.9 — BALANCE AUTO (table utilisateur). Ramène EN MÊME TEMPS le
+		 * master à −14 LUFS ET l'écart voix−musique à +3 dB, en bougeant UN
+		 * SEUL gain de groupe par tick selon le quadrant :
+		 *   LUFS<−14 & E<3 → monter VOIX    | LUFS<−14 & E>3 → monter MUSIQUE
+		 *   LUFS>−14 & E<3 → baisser MUSIQUE | LUFS>−14 & E>3 → baisser VOIX
+		 * GEL : dans un creux (prog < crête récente −12 dB) ou groupe muet, on
+		 * ne monte JAMAIS → fin de morceau / passage calme restent calmes.
+		 * VOIX = LEAD+CHŒURS · MUSIQUE = instruments. Remplace le chase makeup. */
+		if (g_bmx.balance_on) {
+			float Pv = 0.0f, Pm = 0.0f;
+			for (int i = 0; i < N_EXP_CH; i++) {
+				int r = g_bmx.role[i];
+				if (r == BR_OFF) continue;
+				if (r == BR_LEAD || r == BR_CHOIR) Pv += g_bmx.lt_ms[i];
+				else                               Pm += g_bmx.lt_ms[i];
+			}
+			int hv = (Pv > 1e-6f), hm = (Pm > 1e-6f);
+			/* peak-hold du programme pour le gel (décroît 0,5 dB/s) */
+			float prog = 10.0f * log10f(Pv + Pm + 1e-12f);
+			if (prog > g_bmx.prog_peak) g_bmx.prog_peak = prog;
+			else                        g_bmx.prog_peak -= 0.5f;
+			/* « au niveau fort » = programme à moins de 3 dB sous sa crête
+			 * récente. Sous ce seuil = creux (pause, fin, passage calme) :
+			 * on n'autorise PLUS aucune MONTÉE (la descente reste permise). */
+			int loud = (prog >= g_bmx.prog_peak - 3.0f);
+			float lufs = atomic_load_explicit(&g_mk.lufs_c,
+					memory_order_relaxed) * 0.01f;
+			if (hv && hm && lufs > -50.0f) {
+				/* E = écart RÉEL en sortie : loudness pré-présence (lt_ms)
+				 * + les gains de groupe déjà appliqués → boucle fermée
+				 * (sinon l'axe écart file aux butées). LUFS l'est déjà. */
+				float E = (10.0f * log10f(Pv) - 10.0f * log10f(Pm))
+					+ (g_bmx.g_voice_db - g_bmx.g_music_db);
+				float lerr = lufs - g_bmx.bal_lufs_tgt;   /* >0 trop fort */
+				float eerr = E - g_bmx.bal_e_tgt;          /* >0 voix haute */
+				const float DB = 1.0f;                     /* deadband */
+				float st = (fabsf(lerr) > 6.0f) ? 3.0f : 1.0f; /* gain-stage */
+				float dv = 0.0f, dm = 0.0f;
+				if (lerr < -DB) {              /* trop faible → MONTER */
+					if (eerr > DB) dm = +st;      /* voix trop haute → musique */
+					else           dv = +st;      /* sinon → voix */
+				} else if (lerr > DB) {       /* trop fort → BAISSER */
+					if (eerr > DB) dv = -st;      /* voix trop haute → voix */
+					else           dm = -st;      /* sinon → musique */
+				} else {                      /* LUFS ok → écart seul */
+					if      (eerr >  DB) dv = -1.0f;
+					else if (eerr < -DB) dv = +1.0f;
+				}
+				/* GEL DES MONTÉES dans un creux : ne JAMAIS monter quand
+				 * le programme baisse (fin de morceau / passage calme). */
+				if (!loud) { if (dv > 0.0f) dv = 0.0f;
+					     if (dm > 0.0f) dm = 0.0f; }
+				/* garde silence : ne JAMAIS monter un groupe muet */
+				if (dv > 0.0f && !hv) dv = 0.0f;
+				if (dm > 0.0f && !hm) dm = 0.0f;
+				g_bmx.g_voice_db += dv;
+				g_bmx.g_music_db += dm;
+				if (g_bmx.g_voice_db >  36.0f) g_bmx.g_voice_db =  36.0f;
+				if (g_bmx.g_voice_db < -24.0f) g_bmx.g_voice_db = -24.0f;
+				if (g_bmx.g_music_db >  36.0f) g_bmx.g_music_db =  36.0f;
+				if (g_bmx.g_music_db < -24.0f) g_bmx.g_music_db = -24.0f;
+			}
+		}
+
 		/* V13.6 : compresseur auto par rôle, seuil ADAPTATIF (al_ref =
 		 * mémoire de crête → tient le trop-fort, agit au sample). */
 		pthread_mutex_lock(&g_st.target_lock);
 		for (int i = 0; i < N_EXP_CH; i++) {
 			g_st.keeper_target[i] = powf(10.0f, g_bmx.kdb[i] / 20.0f);
 			int r = g_bmx.role[i];
+			/* V13.9 — gain de groupe (balance auto) : voix / musique */
+			g_st.presence_target[i] =
+				(!g_bmx.balance_on || r == BR_OFF) ? 1.0f
+				: (r == BR_LEAD || r == BR_CHOIR)
+					? powf(10.0f, g_bmx.g_voice_db / 20.0f)
+					: powf(10.0f, g_bmx.g_music_db / 20.0f);
 			if (r == BR_OFF || !BMX_P[r].comp_on) {
 				if (g_cmp[i].on)
 					cmp_configure(i, 0, g_cmp[i].thr_db,
@@ -2273,6 +2541,32 @@ static void bmx_tick(void)
 				      BMX_P[r].c_atk, BMX_P[r].c_rel, 0.0f);
 		}
 		pthread_mutex_unlock(&g_st.target_lock);
+		/* V13.7 — makeup LUFS. V13.9 : si la BALANCE AUTO est active, c'est
+		 * ELLE qui tient −14 LUFS (via les gains de groupe) → le makeup reste
+		 * NEUTRE. Deux correcteurs sur le même LUFS = pompage : on n'en garde
+		 * qu'un. Le chase makeup ne sert que si la balance est coupée. */
+		if (g_bmx.balance_on) {
+			g_mk.mk_db = 0.0f;
+			atomic_store_explicit(&g_mk.makeup_mq, 1000,
+					      memory_order_relaxed);
+		} else {
+			float lufs = atomic_load_explicit(&g_mk.lufs_c,
+					memory_order_relaxed) * 0.01f;
+			if (lufs > -50.0f) {
+				float want = MASTER_LUFS_TGT - lufs + g_mk.mk_db;
+				if (want > MASTER_MK_MAX_DB) want = MASTER_MK_MAX_DB;
+				if (want < MASTER_MK_MIN_DB) want = MASTER_MK_MIN_DB;
+				float d = want - g_mk.mk_db;
+				/* slew adaptatif : 4 dB/s si loin, 1 dB/s près (anti-pompage) */
+				float lim = (fabsf(d) > 4.0f) ? 4.0f : 1.0f;
+				if (d >  lim) d =  lim;
+				if (d < -lim) d = -lim;
+				g_mk.mk_db += d;
+				atomic_store_explicit(&g_mk.makeup_mq,
+					(int)(powf(10.0f, g_mk.mk_db / 20.0f) * 1000.0f),
+					memory_order_relaxed);
+			}
+		}
 		return;
 	}
 
@@ -2798,9 +3092,10 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 	for (int s = 0; s < N_INPUT_REAL; s++) {
 		if (g_st.mute_mask & (1u << s))
 			continue;
-		/* V12-AMX/V13 : idem phase A — cohérence sends/master */
+		/* V12-AMX/V13 : idem phase A — cohérence sends/master.
+		 * V13.9 : × presence_gain (balance auto voix/musique). */
 		const float ig = g_st.input_gain[s] * g_st.automix_gain[s]
-				 * g_st.keeper_gain[s];
+				 * g_st.keeper_gain[s] * g_st.presence_gain[s];
 		const float *src = in_block[s];
 		for (int o = 0; o < N_OUTPUT_TOTAL; o++) {
 			const float g = ig * g_st.master_gain[s][o];
@@ -2819,6 +3114,78 @@ static void mix_block(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 			if (g == 0.0f) continue;
 			mac_block_n4(out_block[o], src, g, N);
 		}
+	}
+}
+
+/* ===== V13.9 — VOICE SPATIALIZER : widener décorrélé (Lauridsen) =====
+ * Élargit la voix (rôles LEAD + CHŒURS) sans la décentrer : on somme la voix
+ * telle qu'elle apparaît au master (mono, centre), on en dérive un « side »
+ * décorrélé = copie retardée (~18 ms), et on l'injecte ±dans out0/out1 APRÈS
+ * mix_block et AVANT l'EQ/limiter master. Mono-compatible (out0+out1 annule le
+ * side → repli mono = mix d'origine). amount=0 → strictement transparent.
+ * RT : somme voix en NEON (mac_block_n4), boucle retard/inject légère (96 it). */
+#define VSPAT_RING     4096          /* ≥ délai max (85 ms @48k = 4080) */
+#define VSPAT_DLY_DEF  18            /* ms par défaut */
+static struct {
+	_Atomic int   on;
+	_Atomic int   amount_mq;     /* cible ×1000 (0..1000 → gain side 0..1) */
+	_Atomic int   delay_smp;     /* retard en samples */
+	float         amount_cur;    /* gain lissé (audio_thread) */
+	int           wpos;
+	float         ring[VSPAT_RING];
+} g_vspat = { .amount_mq = 500,
+	      .delay_smp = (VSPAT_DLY_DEF * SAMPLE_RATE) / 1000 };
+
+static void vspat_render(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
+			 float out_block[N_OUTPUT_TOTAL][PERIOD_FRAMES], int N)
+{
+	int on = atomic_load_explicit(&g_vspat.on, memory_order_relaxed);
+	float tgt = on ? atomic_load_explicit(&g_vspat.amount_mq,
+					      memory_order_relaxed) / 1000.0f : 0.0f;
+	/* court-circuit total quand inactif ET déjà éteint (transparent) */
+	if (tgt == 0.0f && g_vspat.amount_cur < 1e-4f) {
+		g_vspat.amount_cur = 0.0f;
+		return;
+	}
+	int dly = atomic_load_explicit(&g_vspat.delay_smp, memory_order_relaxed);
+	if (dly < 1) dly = 1;
+	if (dly > VSPAT_RING - PERIOD_FRAMES) dly = VSPAT_RING - PERIOD_FRAMES;
+
+	/* voix telle qu'elle sort au master (mono, centre) : somme des voies
+	 * LEAD/CHŒURS avec leur gain effectif vers out0 — accumulation NEON. */
+	static float vbus[PERIOD_FRAMES];
+	memset(vbus, 0, sizeof(float) * N);
+	for (int s = 0; s < N_EXP_CH; s++) {
+		int r = g_bmx.role[s];
+		if (r != BR_LEAD && r != BR_CHOIR) continue;
+		if (g_st.mute_mask & (1u << s)) continue;
+		float ig = g_st.input_gain[s] * g_st.automix_gain[s]
+			 * g_st.keeper_gain[s] * g_st.master_gain[s][0];
+		if (ig == 0.0f) continue;
+		mac_block_n4(vbus, in_block[s], ig, N);
+	}
+
+	/* retard + injection ±side (séquentiel à cause du ring, mais 96 it).
+	 * NEUTRE EN LOUDNESS : on réduit la voix sèche de (1−c) tout en ajoutant
+	 * le side ±a·vd, avec c=√(1−a²) → puissance de la voix PAR CANAL
+	 * constante (c²+a²=1). On gagne la largeur sans monter le niveau voix.
+	 * (a=0 → c=1 : strictement transparent). */
+	const float ka = 1.0f / (0.02f * SAMPLE_RATE);   /* slew ~20 ms */
+	float *o0 = out_block[0], *o1 = out_block[1];
+	for (int f = 0; f < N; f++) {
+		g_vspat.ring[g_vspat.wpos] = vbus[f];
+		int rp = g_vspat.wpos - dly;
+		if (rp < 0) rp += VSPAT_RING;
+		float vd = g_vspat.ring[rp];
+		if (++g_vspat.wpos >= VSPAT_RING) g_vspat.wpos = 0;
+
+		g_vspat.amount_cur += (tgt - g_vspat.amount_cur) * ka;
+		float a = g_vspat.amount_cur;
+		float c = sqrtf(1.0f - a * a);       /* a∈[0,1] → c∈[1,0] */
+		float dry  = (c - 1.0f) * vbus[f];   /* retire (1−c) de la voix sèche */
+		float side = a * vd;
+		o0[f] += dry + side;
+		o1[f] += dry - side;
 	}
 }
 
@@ -3033,6 +3400,65 @@ static void *audio_thread(void *arg)
 		                        in_block[N_INPUT_MICS + 1],
 		                        PERIOD_FRAMES);
 
+		/* V13.9 — spatializer voix : widener décorrélé LEAD+CHŒURS,
+		 * injecté dans out0/out1 avant l'EQ/limiter master (tap NPU
+		 * ci-dessus non affecté, il lit in_block mic). */
+		vspat_render(in_block, out_block, PERIOD_FRAMES);
+
+		/* V13.7 — EQ master + makeup LUFS AVANT l'insert : le boost passe
+		 * par le limiter_native (slot 2) → crêtes tenues, pas d'écrêtage. */
+		if (atomic_load_explicit(&g_master_on, memory_order_relaxed)) {
+			int act = atomic_load_explicit(&g_meq_active,
+			                               memory_order_acquire);
+			int pend = atomic_load_explicit(&g_meq_pending,
+			                                memory_order_acquire);
+			if (!g_meq_fading && pend >= 0 && pend != act) {
+				g_meq_fading = 1; g_meq_xf = 0;  /* démarre le fondu */
+				/* démarrage à chaud : le nouveau filtre part de l'état
+				 * courant de l'ancien → pas de ring (pop) à la Fc */
+				memcpy(g_meq_st[pend], g_meq_st[act],
+				       sizeof(g_meq_st[pend]));
+			}
+			if (g_meq_fading) {
+				/* fondu ancien(act) → nouveau(pend) sur MEQ_XF_LEN */
+				for (int ch = 0; ch < 2; ch++) {
+					float *x = out_block[ch];
+					int xf = g_meq_xf;
+					for (int f = 0; f < PERIOD_FRAMES; f++) {
+						float yo = meq_chain(act,  ch, x[f]);
+						float yn = meq_chain(pend, ch, x[f]);
+						float w = (float)(xf + f) / (float)MEQ_XF_LEN;
+						if (w > 1.0f) w = 1.0f;
+						x[f] = yo * (1.0f - w) + yn * w;
+					}
+				}
+				g_meq_xf += PERIOD_FRAMES;
+				if (g_meq_xf >= MEQ_XF_LEN) {   /* fondu terminé */
+					atomic_store_explicit(&g_meq_active, pend,
+					                      memory_order_release);
+					atomic_store_explicit(&g_meq_pending, -1,
+					                      memory_order_relaxed);
+					g_meq_fading = 0;
+				}
+			} else {
+				for (int ch = 0; ch < 2; ch++) {
+					float *x = out_block[ch];
+					for (int f = 0; f < PERIOD_FRAMES; f++)
+						x[f] = meq_chain(act, ch, x[f]);
+				}
+			}
+			float mtgt = atomic_load_explicit(&g_mk.makeup_mq,
+			                memory_order_relaxed) * 0.001f;
+			float mc = g_mk.makeup_cur;
+			mc += (mtgt - mc) * 0.0625f;   /* converge ~32 ms (anti-zipper) */
+			if (fabsf(mc - mtgt) < 1e-4f) mc = mtgt;
+			g_mk.makeup_cur = mc;
+			if (mc != 1.0f)
+				for (int ch = 0; ch < 2; ch++)
+					for (int f = 0; f < PERIOD_FRAMES; f++)
+						out_block[ch][f] *= mc;
+		}
+
 		/* V9.4 — Insert mastering post-master sur out_0+out_1 DSP.
 		 * In-place : out_block[0/1] modifié si insert actif. Autres out
 		 * (UAC2 stems, phone) restent dry.
@@ -3058,6 +3484,30 @@ static void *audio_thread(void *arg)
 			if (cur != 1.0f)
 				for (int f = 0; f < PERIOD_FRAMES; f++)
 					out_block[o][f] *= cur;
+		}
+
+		/* V13.7 — mètre short-term LUFS K-pondéré (BS.1770) sur la sortie
+		 * réelle out 0/1, publié pour l'asservissement makeup (bmx_tick). */
+		if (atomic_load_explicit(&g_master_on, memory_order_relaxed)) {
+			float ms = g_mk.ms;
+			for (int f = 0; f < PERIOD_FRAMES; f++) {
+				float acc = 0.0f;
+				for (int ch = 0; ch < 2; ch++) {
+					float in = out_block[ch][f];
+					float y1 = K1_B0 * in + g_mk.k1[ch][0];
+					g_mk.k1[ch][0] = K1_B1 * in - K1_A1 * y1 + g_mk.k1[ch][1];
+					g_mk.k1[ch][1] = K1_B2 * in - K1_A2 * y1;
+					float y2 = K2_B0 * y1 + g_mk.k2[ch][0];
+					g_mk.k2[ch][0] = K2_B1 * y1 - K2_A1 * y2 + g_mk.k2[ch][1];
+					g_mk.k2[ch][1] = K2_B2 * y1 - K2_A2 * y2;
+					acc += y2 * y2;
+				}
+				ms += LUFS_ST_A * (acc - ms);
+			}
+			g_mk.ms = ms;
+			float lufs = -0.691f + 10.0f * log10f(ms + 1e-12f);
+			atomic_store_explicit(&g_mk.lufs_c, (int)(lufs * 100.0f),
+			                      memory_order_relaxed);
 		}
 
 		/* Analyzer taps : push N samples par tap (lecture buffers block) */
@@ -4306,8 +4756,13 @@ static void handle_cmd(int fd, const char *line)
 		g_bmx.autolive = on ? 1 : 0;
 		if (g_bmx.autolive) {
 			for (int i = 0; i < N_EXP_CH; i++)
-				g_bmx.al_ref[i] = -120.0f;   /* recale le peak-hold */
+				g_bmx.al_ref[i] = g_bmx.risk[i] = -120.0f;   /* recale les peak-holds */
 			g_bmx.al_anchor = -120.0f;           /* ré-init de l'ancre */
+			/* V13.9 — reset balance auto (gains groupe neutres) */
+			g_bmx.g_voice_db = g_bmx.g_music_db = 0.0f;
+			g_bmx.prog_peak = -120.0f;
+			for (int i = 0; i < N_INPUT_TOTAL; i++)
+				g_st.presence_target[i] = g_st.presence_gain[i] = 1.0f;
 			/* V13.6 : EQ de placement + vfocus renforcé (place voix) */
 			for (int i = 0; i < N_EXP_CH; i++)
 				g_eqx.role_of[i] = -1;       /* force le recalcul coefs */
@@ -4317,9 +4772,23 @@ static void handle_cmd(int fd, const char *line)
 			if (g_vf.amount < 0.7f) g_vf.amount = 0.7f;
 			if (g_vf.max_cut_db < 6.0f) g_vf.max_cut_db = 6.0f;
 			pthread_mutex_unlock(&g_st.target_lock);
+			/* V13.7 — étage master : EQ mastering + makeup LUFS */
+			memset(g_meq_st, 0, sizeof(g_meq_st));
+			g_meq_fading = 0;
+			meq_init();   /* pose l'EQ direct (pas de fondu à l'activation) */
+			memset(g_mk.k1, 0, sizeof(g_mk.k1));
+			memset(g_mk.k2, 0, sizeof(g_mk.k2));
+			g_mk.ms = 0.0f;
+			g_mk.mk_db = 0.0f;
+			g_mk.makeup_cur = 1.0f;
+			atomic_store(&g_mk.makeup_mq, 1000);
+			atomic_store(&g_mk.lufs_c, -12000);   /* gelé au démarrage */
+			atomic_store(&g_master_on, 1);
 		} else {
 			memset(g_bmx.kdb, 0, sizeof(g_bmx.kdb));
 			atomic_store(&g_eqx.on, 0);
+			atomic_store(&g_master_on, 0);
+			atomic_store(&g_mk.makeup_mq, 1000);
 			pthread_mutex_lock(&g_st.target_lock);
 			for (int i = 0; i < N_INPUT_TOTAL; i++)
 				g_st.keeper_target[i] = 1.0f;
@@ -4955,6 +5424,89 @@ static void handle_cmd(int fd, const char *line)
 			        atomic_load_explicit(&g_out_gain_m[o], memory_order_relaxed));
 		dprintf(fd, "]}\n");
 
+	} else if (json_has_op(line, "master_eq")) {
+		/* V13.7 — EQ de mastering master (3 bandes), réglable en direct :
+		 * {"op":"master_eq","low_db":..,"low_hz":..,"mid_db":..,"mid_hz":..,
+		 *  "mid_q":..,"air_db":..,"air_hz":..} — champs absents = inchangés.
+		 * Sans champ = simple lecture (makeup_db/lufs courants inclus). */
+		float v; int ch = 0;
+		if (json_get_float(line, "low_hz", &v) >= 0) { g_meq_p.low_hz = v; ch = 1; }
+		if (json_get_float(line, "low_db", &v) >= 0) { g_meq_p.low_db = v; ch = 1; }
+		if (json_get_float(line, "mid_hz", &v) >= 0) { g_meq_p.mid_hz = v; ch = 1; }
+		if (json_get_float(line, "mid_db", &v) >= 0) { g_meq_p.mid_db = v; ch = 1; }
+		if (json_get_float(line, "mid_q",  &v) >= 0) { g_meq_p.mid_q  = v; ch = 1; }
+		if (json_get_float(line, "air_hz", &v) >= 0) { g_meq_p.air_hz = v; ch = 1; }
+		if (json_get_float(line, "air_db", &v) >= 0) { g_meq_p.air_db = v; ch = 1; }
+		if (ch) {   /* seulement si un champ a changé (sinon = lecture pure,
+		             * pas de crossfade ni d'écriture flash sur un poll GUI) */
+			meq_recalc();
+			save_master_eq();
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"master_eq\","
+			"\"low_db\":%.2f,\"low_hz\":%.1f,\"mid_db\":%.2f,"
+			"\"mid_hz\":%.1f,\"mid_q\":%.2f,\"air_db\":%.2f,"
+			"\"air_hz\":%.1f,\"makeup_db\":%.2f,\"lufs\":%.2f}\n",
+			g_meq_p.low_db, g_meq_p.low_hz, g_meq_p.mid_db,
+			g_meq_p.mid_hz, g_meq_p.mid_q, g_meq_p.air_db,
+			g_meq_p.air_hz, g_mk.mk_db,
+			atomic_load_explicit(&g_mk.lufs_c, memory_order_relaxed) * 0.01f);
+
+	} else if (json_has_op(line, "automix_tune")) {
+		/* V13.9 — tunables automix réglables en LIVE (R&D) :
+		 * {"op":"automix_tune","freeze_db":..,"risk_decay":..,"risk_margin":..}
+		 * champs absents = inchangés ; sans champ = lecture. */
+		float v;
+		if (json_get_float(line, "freeze_db",   &v) >= 0 && v >= 3.0f && v <= 40.0f)
+			g_bmx.freeze_db = v;
+		if (json_get_float(line, "risk_decay",  &v) >= 0 && v >= 0.0f && v <= 2.0f)
+			g_bmx.risk_decay = v;
+		if (json_get_float(line, "risk_margin", &v) >= 0 && v >= 0.0f && v <= 12.0f)
+			g_bmx.risk_margin = v;
+		dprintf(fd, "{\"ok\":true,\"op\":\"automix_tune\",\"freeze_db\":%.1f,"
+			"\"risk_decay\":%.3f,\"risk_margin\":%.1f}\n",
+			g_bmx.freeze_db, g_bmx.risk_decay, g_bmx.risk_margin);
+
+	} else if (json_has_op(line, "set_vspatial")) {
+		/* V13.9 — spatializer voix (widener Lauridsen LEAD+CHŒURS) :
+		 * {"op":"set_vspatial","on":0/1,"amount":0..100,"delay_ms":3..40}
+		 * champs absents = inchangés ; toujours renvoie l'état courant. */
+		int iv; float v;
+		if (json_get_int(line, "on", &iv) >= 0)
+			atomic_store_explicit(&g_vspat.on, iv ? 1 : 0,
+					      memory_order_relaxed);
+		if (json_get_float(line, "amount", &v) >= 0 && v >= 0.0f && v <= 100.0f)
+			atomic_store_explicit(&g_vspat.amount_mq, (int)(v * 10.0f + 0.5f),
+					      memory_order_relaxed);
+		if (json_get_float(line, "delay_ms", &v) >= 0 && v >= 3.0f && v <= 40.0f)
+			atomic_store_explicit(&g_vspat.delay_smp,
+					      (int)(v * SAMPLE_RATE / 1000.0f),
+					      memory_order_relaxed);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_vspatial\",\"on\":%d,"
+			"\"amount\":%.0f,\"delay_ms\":%.1f}\n",
+			atomic_load_explicit(&g_vspat.on, memory_order_relaxed),
+			atomic_load_explicit(&g_vspat.amount_mq, memory_order_relaxed) / 10.0,
+			atomic_load_explicit(&g_vspat.delay_smp, memory_order_relaxed)
+				* 1000.0 / SAMPLE_RATE);
+
+	} else if (json_has_op(line, "set_balance")) {
+		/* V13.9 — BALANCE AUTO (table quadrants) : tient LUFS=lufs_tgt ET
+		 * écart voix−musique = e_tgt en bougeant les gains de groupe.
+		 * {"op":"set_balance","on":0/1,"lufs_tgt":-30..-6,"e_tgt":-6..12}
+		 * absent=inchangé. Renvoie l'état + gains groupe + LUFS mesuré. */
+		int iv; float v;
+		if (json_get_int(line, "on", &iv) >= 0)
+			g_bmx.balance_on = iv ? 1 : 0;
+		if (json_get_float(line, "lufs_tgt", &v) >= 0 && v >= -30.0f && v <= -6.0f)
+			g_bmx.bal_lufs_tgt = v;
+		if (json_get_float(line, "e_tgt", &v) >= 0 && v >= -6.0f && v <= 12.0f)
+			g_bmx.bal_e_tgt = v;
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_balance\",\"on\":%d,"
+			"\"lufs_tgt\":%.1f,\"e_tgt\":%.1f,\"voice_db\":%.1f,"
+			"\"music_db\":%.1f,\"lufs\":%.1f}\n",
+			g_bmx.balance_on, g_bmx.bal_lufs_tgt, g_bmx.bal_e_tgt,
+			g_bmx.g_voice_db, g_bmx.g_music_db,
+			atomic_load_explicit(&g_mk.lufs_c, memory_order_relaxed) * 0.01);
+
 	} else if (json_has_op(line, "get_meters_lite")) {
 		/* V10-N2 : peaks seuls (in/out/fx), SANS le payload analyzer
 		 * (~4.8 KB) — pour l'app native mixer-console qui poll à 30 Hz
@@ -5461,6 +6013,32 @@ static void load_out_gain(void)
 		if (fscanf(f, "%d", &v) != 1) break;
 		if (v >= 0 && v <= 4000)
 			atomic_store_explicit(&g_out_gain_m[o], v, memory_order_relaxed);
+	}
+	fclose(f);
+}
+
+/* V13.7 — persistance des 7 params de l'EQ master (mastering). Fichier dédié,
+ * retro-compatible (absent → défauts smile). */
+#define MASTER_EQ_PATH "/var/lib/mixer-pro/master_eq"
+static void save_master_eq(void)
+{
+	mkdir("/var/lib/mixer-pro", 0755);
+	FILE *f = fopen(MASTER_EQ_PATH, "w");
+	if (!f) return;
+	fprintf(f, "%.2f %.1f %.2f %.1f %.3f %.2f %.1f\n",
+		g_meq_p.low_db, g_meq_p.low_hz, g_meq_p.mid_db, g_meq_p.mid_hz,
+		g_meq_p.mid_q, g_meq_p.air_db, g_meq_p.air_hz);
+	fclose(f);
+}
+static void load_master_eq(void)
+{
+	FILE *f = fopen(MASTER_EQ_PATH, "r");
+	if (!f) return;
+	float a, b, c, d, e, g, h;
+	if (fscanf(f, "%f %f %f %f %f %f %f", &a, &b, &c, &d, &e, &g, &h) == 7) {
+		g_meq_p.low_db = a; g_meq_p.low_hz = b; g_meq_p.mid_db = c;
+		g_meq_p.mid_hz = d; g_meq_p.mid_q  = e; g_meq_p.air_db = g;
+		g_meq_p.air_hz = h;
 	}
 	fclose(f);
 }
@@ -6000,6 +6578,8 @@ int main(int argc, char **argv)
 	load_out_gain();     /* V9.5.21 — restaure les gains de sortie persistés */
 	for (int o = 0; o < N_OUTPUT_TOTAL; o++)   /* pas de rampe au boot */
 		g_out_gain_cur[o] = atomic_load(&g_out_gain_m[o]) * 0.001f;
+	load_master_eq();    /* V13.7 — restaure l'EQ master persistée */
+	meq_init();          /* précalcule les biquads (banque active, pas de fondu) */
 
 	/* Reset matrices = identity (all 0, then fx_bus_target = 1.0) */
 	memset(&g_st.send_gain,     0, sizeof(g_st.send_gain));
@@ -6029,6 +6609,8 @@ int main(int argc, char **argv)
 		g_st.automix_gtarget[i] = 1.0f;
 		g_st.keeper_gain[i] = 1.0f;     /* V13-BANDMIX */
 		g_st.keeper_target[i] = 1.0f;
+		g_st.presence_gain[i] = 1.0f;   /* V13.9 balance auto */
+		g_st.presence_target[i] = 1.0f;
 	}
 	/* V12-EXP : défauts gates (off) — avant load_mixer_state qui écrase */
 	for (int i = 0; i < N_EXP_CH; i++)
@@ -6044,6 +6626,15 @@ int main(int argc, char **argv)
 	/* V9.5.21b — restaure l'état complet (insert + assistant + routage)
 	 * APRÈS l'init des défauts g_st (sinon écrasé), AVANT les threads. */
 	load_mixer_state();
+
+	/* V13.6/13.7 — si AUTOMIX LIVE persisté actif, réarme les étages auto
+	 * que le loader ne rallume pas (EQ placement + EQ master + makeup). */
+	if (g_bmx.autolive) {
+		for (int i = 0; i < N_EXP_CH; i++)
+			g_eqx.role_of[i] = -1;
+		atomic_store(&g_eqx.on, 1);
+		atomic_store(&g_master_on, 1);
+	}
 
 	/* V12-SMP : charge la banque de samples (avant threads, pas de lock) */
 	mkdir("/var/lib/ala", 0755);

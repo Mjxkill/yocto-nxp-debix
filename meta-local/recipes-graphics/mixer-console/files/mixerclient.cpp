@@ -56,20 +56,22 @@ MixerClient::MixerClient(QObject *parent) : QObject(parent)
 
     /* spectre : get_meters COMPLET (payload analyzer ~5 Ko) à 10 Hz —
      * V10-N8b : pages MIXER (0) et MASTERING (2) — l'index 2 est celui de
-     * PageMastering dans main.qml (le gating 0-1 de N8 gelait la page) */
+     * PageMastering dans main.qml (le gating 0-1 de N8 gelait la page)
+     * V13.9 : + AUTO MIX (6) — FFT master dans la colonne d'analyse */
     m_analyzerTimer.setInterval(100);
     connect(&m_analyzerTimer, &QTimer::timeout, this, [this] {
-        if ((m_activePage == 0 || m_activePage == 2)
+        if ((m_activePage == 0 || m_activePage == 2 || m_activePage == 6)
             && m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_meters\"}\n", TagAnalyzer);
     });
     m_analyzerTimer.start();
 
     /* enveloppe ML (insert chain slot 0) à 5 Hz —
-     * V10-N8b : pages MIXER (0, overlay spectre) et MASTERING (2) */
+     * V10-N8b : pages MIXER (0, overlay spectre) et MASTERING (2)
+     * V13.9 : + AUTO MIX (6) — enveloppe NPU sur le FFT master */
     m_insertTimer.setInterval(200);
     connect(&m_insertTimer, &QTimer::timeout, this, [this] {
-        if ((m_activePage == 0 || m_activePage == 2)
+        if ((m_activePage == 0 || m_activePage == 2 || m_activePage == 6)
             && m_connected && m_pending.size() < 3)
             request("{\"op\":\"get_insert\"}\n", TagInsert);
     });

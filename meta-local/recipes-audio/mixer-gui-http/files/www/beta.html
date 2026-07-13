@@ -333,6 +333,15 @@ function holdify(btn,cb,opts={}){
   color:var(--mut);border:1px solid var(--line);cursor:pointer;background:var(--panel);}
 .sftab.on{color:var(--accent);border-color:rgba(229,161,60,.45);background:rgba(229,161,60,.08);}
 .sfbody{flex:1;overflow-y:auto;padding:10px 14px;}
+/* V13.9 : sliders unifiés look console (barre sombre + curseur ambre),
+ * remplace le range brut du navigateur PARTOUT (même recette que le LCD). */
+input[type=range]{-webkit-appearance:none;appearance:none;height:16px;border-radius:8px;
+  background:#0b0e11;outline:none;border:1px solid #05070a;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+  width:26px;height:16px;border-radius:8px;background:#e5a13c;border:none;cursor:pointer;}
+input[type=range]::-moz-range-thumb{width:26px;height:16px;border-radius:8px;
+  background:#e5a13c;border:none;cursor:pointer;}
+input[type=range]::-moz-range-track{height:16px;border-radius:8px;background:#0b0e11;}
 .sfsub{font-size:10px;color:var(--mut);letter-spacing:.12em;margin:2px 0 8px;}
 .sfrow{display:grid;grid-template-columns:150px 1fr 96px;gap:10px;align-items:center;
   padding:4px 0;border-bottom:1px solid rgba(255,255,255,.03);}
@@ -671,14 +680,107 @@ function holdify(btn,cb,opts={}){
       <button class="wbtn ok" id="bmxlive">LIVE —</button>
       <button class="wbtn" id="bmxdugan">DUGAN —</button>
     </div>
-    <div style="display:flex;align-items:center;gap:12px;background:#171c21;border-radius:8px;padding:8px 12px;">
-      <button class="wbtn" id="bmxvf" style="min-width:150px;">PLACE À LA VOIX —</button>
-      <div style="font-size:8px;color:var(--mut);letter-spacing:2px;">AMOUNT</div>
-      <input type="range" id="bmxvfam" min="0" max="100" value="50" style="width:160px;">
-      <div id="bmxvfcuts" style="display:flex;gap:4px;align-items:flex-end;height:26px;"></div>
-      <span id="bmxvfact" style="color:#4cc470;font-size:10px;"></span>
-    </div>
-    <div id="bmxchans" style="display:flex;flex-direction:column;gap:5px;"></div>
+
+    <!-- V13.9 : corps 2 colonnes — voies à gauche, réglages/analyse à droite -->
+    <div style="display:flex;gap:10px;align-items:flex-start;">
+
+      <!-- COLONNE GAUCHE : liste des voies (VU + KEEPER côte à côte) -->
+      <div id="bmxchans" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;"></div>
+
+      <!-- COLONNE DROITE : FFT + EQ master + réglages live -->
+      <div style="width:296px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;">
+
+        <!-- FFT master (sortie OUT 0/1, tap 3) -->
+        <div style="background:#171c21;border-radius:8px;padding:8px 10px;">
+          <div style="color:var(--accent);font-size:9px;letter-spacing:2px;margin-bottom:5px;">FFT MASTER · sortie</div>
+          <canvas id="bmxfft" width="276" height="72" style="width:100%;background:#0d1116;border-radius:4px;display:block;"></canvas>
+        </div>
+
+        <!-- V13.7 : EQ MASTER (mastering) + état makeup/LUFS en direct -->
+        <div style="background:#171c21;border-radius:8px;padding:8px 10px;">
+          <div style="display:flex;align-items:baseline;gap:8px;">
+            <div style="color:var(--accent);font-size:9px;letter-spacing:2px;">EQ MASTER</div>
+            <span style="flex:1"></span>
+            <div id="meqmk" style="font-size:15px;color:#4cc470;font-weight:700;">— dB</div>
+            <div id="meqlufs" style="font-size:9px;color:var(--mut);">LUFS —</div>
+          </div>
+          <canvas id="meqcurve" width="276" height="50" style="width:100%;background:#0d1116;border-radius:4px;margin:5px 0;display:block;"></canvas>
+          <div id="meqval" style="font-size:9px;color:var(--mut);line-height:1.4;margin-bottom:4px;">…</div>
+          <div style="display:flex;gap:8px;font-size:9px;color:var(--mut);text-align:center;">
+            <label style="flex:1;">SUB<br><input type="range" id="meqlow" min="-6" max="6" step="0.5" value="2" style="width:100%;"></label>
+            <label style="flex:1;">MÉD<br><input type="range" id="meqmid" min="-9" max="4" step="0.5" value="-3" style="width:100%;"></label>
+            <label style="flex:1;">AIR<br><input type="range" id="meqair" min="-4" max="9" step="0.5" value="5" style="width:100%;"></label>
+          </div>
+        </div>
+
+        <!-- PLACE À LA VOIX (vfocus) -->
+        <div style="background:#171c21;border-radius:8px;padding:8px 10px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="wbtn" id="bmxvf" style="flex:1;font-size:10px;">PLACE À LA VOIX —</button>
+            <span id="bmxvfact" style="color:#4cc470;font-size:9px;"></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+            <div style="font-size:8px;color:var(--mut);letter-spacing:2px;">DOSE</div>
+            <input type="range" id="bmxvfam" min="0" max="100" value="50" style="flex:1;">
+            <div id="bmxvfcuts" style="display:flex;gap:3px;align-items:flex-end;height:22px;"></div>
+          </div>
+        </div>
+
+        <!-- V13.9 : réglages automix live (tout réglable — mandat R&D) -->
+        <div style="background:#171c21;border-radius:8px;padding:8px 10px;">
+          <div style="color:var(--accent);font-size:9px;letter-spacing:2px;margin-bottom:6px;">RÉGLAGES AUTOMIX</div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);margin-bottom:5px;">
+            <span style="width:96px;">GEL SILENCE<br><b id="atgelv" style="color:#e9e5da;">— dB</b></span>
+            <input type="range" id="atgel" min="3" max="40" step="1" value="12" style="flex:1;">
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);margin-bottom:5px;">
+            <span style="width:96px;">MÉMOIRE CRÊTE<br><b id="atriskv" style="color:#e9e5da;">— dB/s</b></span>
+            <input type="range" id="atrisk" min="0" max="2" step="0.01" value="0.05" style="flex:1;">
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);">
+            <span style="width:96px;">MARGE CRÊTE<br><b id="atmargv" style="color:#e9e5da;">— dB</b></span>
+            <input type="range" id="atmarg" min="0" max="12" step="0.5" value="3" style="flex:1;">
+          </label>
+        </div>
+
+        <!-- V13.9 : BALANCE AUTO musique/voix (table quadrants + gel) -->
+        <div style="background:#171c21;border-radius:8px;padding:8px 10px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <div style="color:var(--accent);font-size:9px;letter-spacing:2px;">BALANCE AUTO</div>
+            <span style="flex:1"></span>
+            <button class="wbtn" id="balon" style="font-size:9px;padding:2px 10px;">—</button>
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);margin-bottom:5px;">
+            <span style="width:96px;">LUFS CIBLE<br><b id="ballufsv" style="color:#e9e5da;">—</b></span>
+            <input type="range" id="ballufs" min="-24" max="-8" step="0.5" value="-14" style="flex:1;">
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);margin-bottom:5px;">
+            <span style="width:96px;">VOIX / MUSIQUE<br><b id="balev" style="color:#e9e5da;">— dB</b></span>
+            <input type="range" id="bale" min="-6" max="12" step="0.5" value="3" style="flex:1;">
+          </label>
+          <div id="balst" style="font-size:9px;color:var(--mut);">…</div>
+        </div>
+
+        <!-- V13.9 : SPATIALIZER VOIX (widener Lauridsen, mono-compatible) -->
+        <div style="background:#171c21;border-radius:8px;padding:8px 10px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <div style="color:var(--accent);font-size:9px;letter-spacing:2px;">SPATIAL VOIX</div>
+            <span style="flex:1"></span>
+            <button class="wbtn" id="vspon" style="font-size:9px;padding:2px 10px;">—</button>
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);margin-bottom:5px;">
+            <span style="width:96px;">LARGEUR<br><b id="vspamv" style="color:#e9e5da;">—</b></span>
+            <input type="range" id="vspam" min="0" max="100" step="1" value="50" style="flex:1;">
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:9px;color:var(--mut);">
+            <span style="width:96px;">RETARD<br><b id="vspdlv" style="color:#e9e5da;">— ms</b></span>
+            <input type="range" id="vspdl" min="3" max="40" step="1" value="18" style="flex:1;">
+          </label>
+        </div>
+
+      </div><!-- /colonne droite -->
+    </div><!-- /corps 2 colonnes -->
+
     <div style="font-size:9px;color:var(--mut);">1· rôle par tranche 2· MESURER (12 s, source seule) 3· CALCULER 4· ajuster puis VERROUILLER 5· LIVE ON</div>
   </div>
 
@@ -3558,30 +3660,38 @@ function bmxRender(){
   c.innerHTML=st.chans.map((ch,i)=>{
     const active=ch.role!=="off",meas=st.measuring===i;
     const ri=BMXROLES.indexOf(ch.role);
-    return `<div style="display:flex;align-items:center;gap:8px;border-radius:6px;padding:6px 8px;
+    const kdb=active?ch.keeper_db:0;
+    return `<div style="display:flex;align-items:center;gap:6px;border-radius:6px;padding:5px 8px;
       background:${meas?"#2a1512":active?"#171c21":"#14181c"};
       border:1px solid ${meas?"#e05545":active?"#39434b":"#22282e"};">
-      <span style="width:40px;font-weight:700;color:var(--accent);font-size:11px;">${bmxStrip(i)}</span>
-      <button class="wbtn" data-br="${i}" data-d="-1">&#8249;</button>
-      <span style="width:96px;text-align:center;font-weight:700;font-size:11px;
+      <span style="width:34px;font-weight:700;color:var(--accent);font-size:11px;">${bmxStrip(i)}</span>
+      <button class="wbtn" data-br="${i}" data-d="-1" style="padding:2px 6px;">&#8249;</button>
+      <span style="width:84px;text-align:center;font-weight:700;font-size:10px;
         color:${active?"#e9e5da":"#3a434b"};">${ri>=0?BMXNAMES[ri]:ch.role}</span>
-      <button class="wbtn" data-br="${i}" data-d="1">&#8250;</button>
+      <button class="wbtn" data-br="${i}" data-d="1" style="padding:2px 6px;">&#8250;</button>
       ${active?`<button class="wbtn ${ch.done?"ok":""}" data-bm="${i}" ${meas?"disabled":""}
-        style="width:120px;">${meas?("● "+st.meas_elapsed+"/12 s")
-          :(ch.done?("✓ "+ch.rms_db.toFixed(1)+" dB"):"MESURER")}</button>`:""}
-      <span style="flex:1"></span>
-      ${active?`<div style="width:168px;display:flex;flex-direction:column;gap:5px;">
-        <div style="font-size:9px;letter-spacing:.2em;color:var(--mut);">NIVEAU</div>
-        <div style="height:13px;border-radius:6px;background:#0b0e11;overflow:hidden;">
+        style="width:90px;padding:3px 4px;font-size:9px;">${meas?("● "+st.meas_elapsed+"/12")
+          :(ch.done?("✓ "+ch.rms_db.toFixed(1)):"MESURER")}</button>`
+        :`<span style="width:90px;"></span>`}
+      ${active?`
+      <!-- VU (niveau) — prend la place restante -->
+      <div style="flex:1;min-width:40px;display:flex;align-items:center;gap:5px;">
+        <span style="font-size:8px;letter-spacing:.15em;color:var(--mut);width:16px;">VU</span>
+        <div style="flex:1;height:12px;border-radius:6px;background:#0b0e11;overflow:hidden;">
           <div data-vu="${i}" style="height:100%;width:0;background:#3d8a54;border-radius:6px;transition:width .09s;"></div></div>
-        <div style="font-size:9px;letter-spacing:.2em;color:var(--mut);">KEEPER ${(ch.keeper_db>=0?"+":"")+ch.keeper_db.toFixed(1)} dB</div>
-        <div style="height:13px;border-radius:6px;background:#0b0e11;position:relative;overflow:hidden;">
+      </div>
+      <!-- KEEPER (volume auto) — CÔTE À CÔTE avec le VU -->
+      <div style="width:132px;display:flex;align-items:center;gap:5px;">
+        <span style="font-size:8px;color:var(--mut);width:26px;">VOL</span>
+        <div style="flex:1;height:12px;border-radius:6px;background:#0b0e11;position:relative;overflow:hidden;">
           <div style="position:absolute;left:calc(50% - 1px);top:0;width:2px;height:100%;background:#39434b;"></div>
           <div style="position:absolute;top:0;height:100%;border-radius:6px;transition:all .3s ease;
-            ${(()=>{const k=Math.max(-24,Math.min(24,ch.keeper_db));const half=50;
+            ${(()=>{const k=Math.max(-24,Math.min(24,kdb));const half=50;
               return k>=0?`left:50%;width:${k/24*half}%;background:#4cc470;`
                         :`left:${50+k/24*half}%;width:${-k/24*half}%;background:#e8b84b;`;})()}"></div></div>
-      </div>`:""}
+        <span style="font-size:9px;font-weight:700;width:38px;text-align:right;
+          color:${kdb>=0?"#4cc470":"#e8b84b"};">${(kdb>=0?"+":"")+kdb.toFixed(1)}</span>
+      </div>`:`<span style="flex:1"></span>`}
     </div>`;}).join("");
   c.querySelectorAll("[data-br]").forEach(bt=>bt.addEventListener("click",()=>{
     const i=+bt.dataset.br,cur=BMXROLES.indexOf(bmxSt.chans[i].role);
@@ -3601,18 +3711,150 @@ function bmxVfRender(){
     `<div style="width:14px;border-radius:2px;background:#e8b84b;
       height:${Math.max(2,Math.min(26,cd/Math.max(1,v.max_cut_db)*26))}px;"></div>`).join("");
 }
+let bmxTapSet=false;
+function bmxFft(spec){
+  const cv=document.getElementById("bmxfft");if(!cv)return;
+  const ctx=cv.getContext("2d"),W=cv.width,H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle="#1c232a";
+  [0.25,0.5,0.75].forEach(g=>{const y=H*g;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();});
+  if(!Array.isArray(spec))return;
+  const N=spec.length;
+  ctx.fillStyle="#3a7fb0";
+  for(let x=0;x<W;x++){
+    const v=spec[Math.min(N-1,Math.round(x/W*(N-1)))];
+    const h=Math.max(0,Math.min(1,(v+90)/90))*H;
+    ctx.fillRect(x,H-h,1,h);
+  }
+}
 function bmxPoll(){
   if(window.CURPAGE!=="BANDMIX")return;
+  if(!bmxTapSet){bmxTapSet=true;cmd({op:"set_tap",tap:3,kind:3,a:0,b:1});}
   cmd({op:"bandmix_status"}).then(r=>{if(r.ok){bmxSt=r;bmxRender();}});
   cmd({op:"get_meters"}).then(r=>{if(!r||!r.in)return;
     document.querySelectorAll("#bmxchans [data-vu]").forEach(v=>{
       const lv=r.in[+v.dataset.vu]||0;
       const db=lv>0?20*Math.log10(lv/2147483647):-60;
-      v.style.width=Math.max(0,Math.min(100,(db+60)/60*100))+"%";});});
+      v.style.width=Math.max(0,Math.min(100,(db+60)/60*100))+"%";});
+    if(Array.isArray(r.analyzer)&&r.analyzer[3]&&Array.isArray(r.analyzer[3].s))
+      bmxFft(r.analyzer[3].s);});
   cmd({op:"get_vfocus"}).then(r=>{if(r.ok){bmxVf=r;bmxVfRender();}});
   cmd({op:"get_automix"}).then(r=>{if(r.ok){bmxDugan=r.on===1;}});
+  cmd({op:"master_eq"}).then(r=>{if(r.ok){meqSt=r;meqRender();}});
+  cmd({op:"automix_tune"}).then(r=>{if(r.ok){atSt=r;atRender();}});
+  cmd({op:"set_balance"}).then(r=>{if(r.ok){balSt=r;balRender();}});
+  cmd({op:"set_vspatial"}).then(r=>{if(r.ok){vspSt=r;vspRender();}});
 }
 setInterval(bmxPoll,500);
+
+/* V13.9 web : BALANCE AUTO + SPATIAL VOIX (parité LCD) */
+let balSt=null,balDrag=false,vspSt=null,vspDrag=false;
+function balRender(){
+  if(!balSt)return;
+  const b=document.getElementById("balon");
+  b.textContent=balSt.on?"● ON":"OFF";
+  b.style.color=balSt.on?"#4cc470":"";
+  if(!balDrag){
+    document.getElementById("ballufs").value=balSt.lufs_tgt;
+    document.getElementById("bale").value=balSt.e_tgt;
+    document.getElementById("ballufsv").textContent=balSt.lufs_tgt.toFixed(1)+" LUFS";
+    document.getElementById("balev").textContent="+"+balSt.e_tgt.toFixed(1)+" dB";
+  }
+  const sg=v=>(v>=0?"+":"")+v.toFixed(1);
+  document.getElementById("balst").textContent=
+    `voix ${sg(balSt.voice_db)} · musique ${sg(balSt.music_db)} · mesure ${balSt.lufs.toFixed(1)} LUFS`;
+}
+function vspRender(){
+  if(!vspSt)return;
+  const b=document.getElementById("vspon");
+  b.textContent=vspSt.on?"● ON":"OFF";
+  b.style.color=vspSt.on?"#4cc470":"";
+  if(!vspDrag){
+    document.getElementById("vspam").value=vspSt.amount;
+    document.getElementById("vspdl").value=vspSt.delay_ms;
+    document.getElementById("vspamv").textContent=vspSt.amount.toFixed(0);
+    document.getElementById("vspdlv").textContent=vspSt.delay_ms.toFixed(0)+" ms";
+  }
+}
+document.getElementById("balon").addEventListener("click",()=>
+  cmd({op:"set_balance",on:balSt&&balSt.on?0:1}).then(r=>{if(r.ok){balSt=r;balRender();}}));
+document.getElementById("vspon").addEventListener("click",()=>
+  cmd({op:"set_vspatial",on:vspSt&&vspSt.on?0:1}).then(r=>{if(r.ok){vspSt=r;vspRender();}}));
+[["ballufs","lufs_tgt","ballufsv",v=>(+v).toFixed(1)+" LUFS","set_balance",()=>balDrag,d=>balDrag=d],
+ ["bale","e_tgt","balev",v=>"+"+(+v).toFixed(1)+" dB","set_balance",()=>balDrag,d=>balDrag=d],
+ ["vspam","amount","vspamv",v=>(+v).toFixed(0),"set_vspatial",()=>vspDrag,d=>vspDrag=d],
+ ["vspdl","delay_ms","vspdlv",v=>(+v).toFixed(0)+" ms","set_vspatial",()=>vspDrag,d=>vspDrag=d]]
+.forEach(([id,key,lbl,fmt,op,,setDrag])=>{
+  const el=document.getElementById(id);
+  el.addEventListener("pointerdown",()=>setDrag(true));
+  el.addEventListener("pointerup",()=>setDrag(false));
+  el.addEventListener("input",()=>{document.getElementById(lbl).textContent=fmt(el.value);});
+  el.addEventListener("change",()=>{setDrag(false);cmd({op:op,[key]:+el.value});});
+});
+
+/* V13.9 web : réglages automix live (gel silence / mémoire crête / marge) */
+let atSt=null, atDrag=false;
+function atRender(){
+  if(!atSt||atDrag)return;
+  const g=document.getElementById("atgel"),ri=document.getElementById("atrisk"),m=document.getElementById("atmarg");
+  if(atSt.freeze_db!=null){g.value=atSt.freeze_db;document.getElementById("atgelv").textContent="−"+(+atSt.freeze_db).toFixed(0)+" dB";}
+  if(atSt.risk_decay!=null){ri.value=atSt.risk_decay;document.getElementById("atriskv").textContent=(+atSt.risk_decay).toFixed(2)+" dB/s";}
+  if(atSt.risk_margin!=null){m.value=atSt.risk_margin;document.getElementById("atmargv").textContent="+"+(+atSt.risk_margin).toFixed(1)+" dB";}
+}
+[["atgel","freeze_db","atgelv",v=>"−"+(+v).toFixed(0)+" dB"],
+ ["atrisk","risk_decay","atriskv",v=>(+v).toFixed(2)+" dB/s"],
+ ["atmarg","risk_margin","atmargv",v=>"+"+(+v).toFixed(1)+" dB"]].forEach(([id,key,lbl,fmt])=>{
+  const el=document.getElementById(id);
+  el.addEventListener("pointerdown",()=>{atDrag=true;});
+  el.addEventListener("pointerup",()=>{atDrag=false;});
+  el.addEventListener("input",()=>{document.getElementById(lbl).textContent=fmt(el.value);});
+  el.addEventListener("change",()=>{atDrag=false;cmd({op:"automix_tune",[key]:+el.value});});
+});
+
+/* V13.7 web : EQ master — courbe + makeup/LUFS live + sliders */
+let meqSt=null, meqDrag=false;
+function meqCurve(p){
+  const cv=document.getElementById("meqcurve"); if(!cv)return;
+  const ctx=cv.getContext("2d"), W=cv.width, H=cv.height, MID=H/2, SC=H/2/12;
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle="#242c34";
+  [-6,0,6].forEach(g=>{const y=MID-g*SC;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();});
+  const sh=(f,fc,g,hi)=>{const r=f/fc;return g*(hi? r/(1+r) : 1/(1+r));};
+  const bell=(f,fc,g,q)=>{const bw=Math.max(1,fc/q),d=f-fc;return g/(1+Math.pow(d/(bw/2),2));};
+  const f0=30,f1=20000;
+  ctx.strokeStyle="#4cc470";ctx.lineWidth=1.6;ctx.beginPath();
+  for(let x=0;x<W;x++){
+    const f=f0*Math.pow(f1/f0,x/W);
+    const db=sh(f,p.low_hz,p.low_db,false)+bell(f,p.mid_hz,p.mid_db,p.mid_q)+sh(f,p.air_hz,p.air_db,true);
+    const y=Math.max(1,Math.min(H-1,MID-db*SC));
+    x?ctx.lineTo(x,y):ctx.moveTo(x,y);
+  }
+  ctx.stroke();
+}
+function meqRender(){
+  if(!meqSt)return;
+  const s=meqSt, sg=v=>(v>0?"+":"")+v;
+  document.getElementById("meqval").textContent=
+    `sub ${sg(s.low_db)}@${s.low_hz|0} · méd ${sg(s.mid_db)}@${s.mid_hz|0} · air ${sg(s.air_db)}@${(s.air_hz/1000).toFixed(1)}k`;
+  document.getElementById("meqmk").textContent=`${sg(+s.makeup_db.toFixed(1))} dB`;
+  document.getElementById("meqlufs").textContent=`LUFS ${s.lufs.toFixed(1)}`;
+  if(!meqDrag){
+    document.getElementById("meqlow").value=s.low_db;
+    document.getElementById("meqmid").value=s.mid_db;
+    document.getElementById("meqair").value=s.air_db;
+  }
+  meqCurve(s);
+}
+["meqlow","meqmid","meqair"].forEach((id,k)=>{
+  const el=document.getElementById(id), key=["low_db","mid_db","air_db"][k];
+  el.addEventListener("pointerdown",()=>{meqDrag=true;});
+  el.addEventListener("pointerup",()=>{meqDrag=false;});
+  el.addEventListener("input",()=>{
+    if(meqSt){meqSt[key]=+el.value;meqCurve(meqSt);
+      document.getElementById("meqval").textContent="… réglage …";}
+    cmd({op:"master_eq",[key]:+el.value});
+  });
+});
 document.getElementById("bmxcalc").addEventListener("click",()=>cmd({op:"bandmix_calc"}).then(bmxPoll));
 document.getElementById("bmxlock").addEventListener("click",()=>cmd({op:"bandmix_lock"}).then(bmxPoll));
 document.getElementById("bmxauto").addEventListener("click",()=>
