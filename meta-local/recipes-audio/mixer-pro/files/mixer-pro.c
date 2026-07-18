@@ -2274,8 +2274,11 @@ static struct {
 					   * (détection silence sans soundcheck) */
 	float  risk[N_EXP_CH];            /* V13.8 : mémoire du risque LENTE
 					   * (peak-hold, décroît 0,05 dB/s) — plafonne
-					   * le keeper : une source qui a été forte
-					   * reste tenue plusieurs minutes */
+					   * le keeper AU RETOUR DE SILENCE (anti-
+					   * blast de reprise, V13.9) */
+	int    act_ticks[N_EXP_CH];       /* V13.9 : ticks consécutifs d'activité
+					   * (remis à 0 au gel) — le plafond risque
+					   * ne s'applique que ≤ 5 (reprise) */
 	float  ref_share[N_EXP_CH];       /* parts de puissance verrouillées */
 	float  lt_ms[N_EXP_CH];           /* loudness long terme POST-fader (τ 10 s) */
 	float  lt_pre[N_EXP_CH];          /* idem PRÉ-fader (détection silence,
@@ -2306,10 +2309,26 @@ static struct {
 	int    bal_staged;                /* 0 = staging initial (8 dB/s jusqu'au
 					   * 1er lock ±2 dB) — volume utilisable
 					   * en ~4 s dès que les musiciens jouent */
+	/* V13.9 — SOLO : la voie soloée monte à l'ancre + solo_db (sans plafond
+	 * risque, slew rapide 3 dB/tick). Manuel (bouton GUI) ou détection auto
+	 * (voix muette + une source musique domine nettement les autres). */
+	int    solo_src;                  /* voie en solo (−1 = aucune) */
+	int    solo_auto;                 /* détection automatique active */
+	int    solo_is_auto;              /* le solo courant vient de l'auto */
+	int    solo_on_cnt, solo_off_cnt; /* hystérésis engage/release (ticks) */
+	float  solo_db;                   /* place du solo vs ancre (−1 dB) */
+	float  solo_base[N_EXP_CH];       /* V2 : ligne de base par voie (EWMA
+					   * lente du loudness pré-fader) — un
+					   * solo = la voie monte +6 dB AU-DESSUS
+					   * DE SA PROPRE base (pas de la
+					   * batterie). −999 = non initialisée */
 } g_bmx = { .meas_src = -1, .freeze_db = 12.0f, .risk_decay = 0.05f,
 	    .risk_margin = 3.0f, .gate_db = 15.0f, .balance_on = 1,
 	    .bal_lufs_tgt = -14.0f, .bal_e_tgt = 3.0f, .bal_c_tgt = 1.5f,
-	    .prog_peak = -120.0f };
+	    .prog_peak = -120.0f,
+	    /* solo_auto OFF par défaut : une automation non validée à l'oreille
+	     * ne s'active pas toute seule (suspect pompage) — opt-in au bouton */
+	    .solo_src = -1, .solo_auto = 0, .solo_db = -1.0f };
 
 /* V13.6 : EQ de placement (audio_thread, entre gate et comp) — lit
  * g_bmx.role donc défini APRÈS g_bmx. Biquads forme II transposée. */
@@ -2428,9 +2447,23 @@ static void bmx_tick(void)
 			 * 0,05 dB/s ≈ 3 dB/min) → tient une source longtemps */
 			if (pre > g_bmx.risk[i]) g_bmx.risk[i] = pre;
 			else g_bmx.risk[i] -= g_bmx.risk_decay;
-			if (pre < -60.0f || pre < g_bmx.al_ref[i] - g_bmx.freeze_db)
+			if (pre < -60.0f || pre < g_bmx.al_ref[i] - g_bmx.freeze_db) {
+				g_bmx.act_ticks[i] = 0;   /* gel → prochaine
+							   * activité = reprise */
 				continue;   /* < 1/4 du max reçu : gelée (V13.9) */
+			}
 			act[i] = 1; any = 1;
+			if (g_bmx.act_ticks[i] < 1000) g_bmx.act_ticks[i]++;
+			/* V13.9 — solo v2 : ligne de base (monte τ 60 s, descend
+			 * τ 20 s ; jamais entretenue par la voie en solo, sinon
+			 * le solo remonterait sa propre base). */
+			if (g_bmx.solo_base[i] < -500.0f)
+				g_bmx.solo_base[i] = pre;
+			else if (i != g_bmx.solo_src)
+				g_bmx.solo_base[i] +=
+					((pre > g_bmx.solo_base[i])
+					 ? (1.0f / 60.0f) : (1.0f / 20.0f))
+					* (pre - g_bmx.solo_base[i]);
 			if (pre > Lmax) Lmax = pre;
 			if (g_bmx.role[i] == BR_LEAD && pre > Llead) {
 				Llead = pre; have_lead = 1;
@@ -2444,17 +2477,77 @@ static void bmx_tick(void)
 			g_bmx.al_anchor += 0.30f * (anchor_now - g_bmx.al_anchor);
 		else if (g_bmx.al_anchor < -110.0f)   /* jamais de voix : suit max */
 			g_bmx.al_anchor += 0.10f * (anchor_now - g_bmx.al_anchor);
+
+		/* V13.9 — DÉTECTION AUTO DE SOLO (v2) : voix muette ET une voie
+		 * musique monte ≥ +6 dB AU-DESSUS DE SA PROPRE LIGNE DE BASE
+		 * (médiane lente) — le vrai signal d'un soliste : il joue plus
+		 * fort que lui-même, pas plus fort que la batterie (v1 ne se
+		 * déclenchait jamais en solo accompagné). Engage 2 ticks ;
+		 * release : voix de retour ou élévation < +3 dB (2 ticks). Ne
+		 * touche jamais un solo posé MANUELLEMENT (bouton GUI). */
+		if (g_bmx.solo_auto) {
+			if (g_bmx.solo_src < 0) {
+				int best = -1; float bex = 6.0f;
+				for (int i = 0; i < N_EXP_CH; i++) {
+					int r = g_bmx.role[i];
+					if (!act[i] || r == BR_OFF ||
+					    r == BR_LEAD || r == BR_CHOIR)
+						continue;
+					float ex = pre_db[i] - g_bmx.solo_base[i];
+					if (ex > bex) { bex = ex; best = i; }
+				}
+				if (!have_lead && best >= 0) {
+					g_bmx.solo_off_cnt = 0;
+					if (++g_bmx.solo_on_cnt >= 2) {
+						g_bmx.solo_src = best;
+						g_bmx.solo_is_auto = 1;
+						g_bmx.solo_on_cnt = 0;
+					}
+				} else
+					g_bmx.solo_on_cnt = 0;
+			} else if (g_bmx.solo_is_auto) {
+				int s = g_bmx.solo_src;
+				int keep = !have_lead && act[s] &&
+					   (pre_db[s] - g_bmx.solo_base[s] > 3.0f);
+				if (keep)
+					g_bmx.solo_off_cnt = 0;
+				else if (++g_bmx.solo_off_cnt >= 2) {
+					g_bmx.solo_src = -1;
+					g_bmx.solo_is_auto = 0;
+					g_bmx.solo_off_cnt = 0;
+				}
+			}
+		}
+
 		for (int i = 0; i < N_EXP_CH; i++) {
 			if (!act[i]) continue;
+			/* V13.9 — SOLO : la voie monte à l'ancre + solo_db, sans
+			 * plafond risque, slew rapide 3 dB/tick (montée ~2 s). */
+			if (i == g_bmx.solo_src) {
+				float tgt = g_bmx.al_anchor + g_bmx.solo_db
+					  - pre_db[i];
+				if (tgt >  18.0f) tgt =  18.0f;
+				if (tgt < -24.0f) tgt = -24.0f;
+				float d = tgt - g_bmx.kdb[i];
+				if (d >  3.0f) d =  3.0f;
+				if (d < -3.0f) d = -3.0f;
+				g_bmx.kdb[i] += d;
+				continue;
+			}
 			float place = g_bmx.al_anchor + BMX_P[g_bmx.role[i]].mix_db;
 			float tgt = place - pre_db[i];
-			/* V13.8 — MÉMOIRE DU RISQUE : une source qui A ÉTÉ forte
-			 * (al_ref = crête mémorisée) ne remonte pas quand elle se tait.
-			 * On plafonne le keeper pour qu'À SON NIVEAU FORT mémorisé la
-			 * source ne dépasse pas sa place + 3 dB : keeper ≤ place+3−al_ref.
-			 * al_ref décroît 0,5 dB/s → « garde le risque puis pardonne ». */
-			float risk_cap = place + g_bmx.risk_margin - g_bmx.risk[i];
-			if (tgt > risk_cap) tgt = risk_cap;
+			/* V13.8/V13.9 — MÉMOIRE DU RISQUE, recentrée sur son but :
+			 * l'ANTI-BLAST DE REPRISE. Le plafond (à son niveau fort
+			 * mémorisé la source ne dépasse pas place+3) ne s'applique
+			 * QUE dans les 5 premières secondes après un retour de
+			 * silence. Une source qui JOUE en continu est équilibrée
+			 * à sa place sans frein — sinon les instruments dynamiques
+			 * (cuivres) restaient 8-10 dB sous leur place en permanence. */
+			if (g_bmx.act_ticks[i] <= 5) {
+				float risk_cap = place + g_bmx.risk_margin
+					       - g_bmx.risk[i];
+				if (tgt > risk_cap) tgt = risk_cap;
+			}
 			if (tgt >  18.0f) tgt =  18.0f;
 			if (tgt < -24.0f) tgt = -24.0f;
 			float d = tgt - g_bmx.kdb[i];   /* slew ≤1 dB/tick, zm 0,5 */
@@ -2582,6 +2675,14 @@ static void bmx_tick(void)
 				exp_configure(i, 1, gthr, BMX_P[r].gate_ratio,
 					      2.0f, 150.0f, 40.0f,
 					      BMX_P[r].gate_hold);
+			} else if (g_exp[i].on) {
+				/* rôle sans gate (ou off) : DÉSARME la gate auto
+				 * héritée d'un rôle précédent (symétrique au comp
+				 * — sinon gate fantôme après changement de rôle) */
+				exp_configure(i, 0, g_exp[i].thr_db,
+					      g_exp[i].ratio, g_exp[i].atk_ms,
+					      g_exp[i].rel_ms, g_exp[i].range_db,
+					      g_exp[i].hold_ms);
 			}
 			if (r == BR_OFF || !BMX_P[r].comp_on) {
 				if (g_cmp[i].on)
@@ -4814,22 +4915,28 @@ static void handle_cmd(int fd, const char *line)
 			for (int i = 0; i < N_EXP_CH; i++)
 				g_bmx.al_ref[i] = g_bmx.risk[i] = -120.0f;   /* recale les peak-holds */
 			g_bmx.al_anchor = -120.0f;           /* ré-init de l'ancre */
-			/* V13.9 — reset balance auto (gains groupe neutres) + staging
-			 * initial ré-armé (montée rapide 8 dB/s jusqu'au 1er lock) */
-			g_bmx.g_voice_db = g_bmx.g_choir_db = g_bmx.g_music_db = 0.0f;
+			/* V13.9 — reset balance auto : les GAINS DE GROUPE sont
+			 * CONSERVÉS (même groupe, même salle → volume plein dès
+			 * la 1re seconde, exigence scène) ; on ne recale que le
+			 * peak-hold programme, le staging (petites corrections
+			 * rapides) et les compteurs d'activité. */
 			g_bmx.prog_peak = -120.0f;
 			g_bmx.bal_staged = 0;
-			for (int i = 0; i < N_INPUT_TOTAL; i++)
-				g_st.presence_target[i] = g_st.presence_gain[i] = 1.0f;
-			/* V13.6 : EQ de placement + vfocus renforcé (place voix) */
+			memset(g_bmx.act_ticks, 0, sizeof(g_bmx.act_ticks));
+			/* V13.9 — reset solo (l'auto se re-déclenchera si mérité) */
+			g_bmx.solo_src = -1;
+			g_bmx.solo_is_auto = 0;
+			g_bmx.solo_on_cnt = g_bmx.solo_off_cnt = 0;
+			for (int i = 0; i < N_EXP_CH; i++)
+				g_bmx.solo_base[i] = -999.0f;   /* base v2 à réapprendre */
+			/* V13.6 : EQ de placement.
+			 * V13.9 : le vfocus n'est PLUS forcé ici — un reset ne doit
+			 * JAMAIS écraser un réglage posé par l'opérateur (le bouton
+			 * PLACE À LA VOIX semblait « cassé » : choix OFF silencieuse-
+			 * ment ré-armé à chaque lancement de morceau). */
 			for (int i = 0; i < N_EXP_CH; i++)
 				g_eqx.role_of[i] = -1;       /* force le recalcul coefs */
 			atomic_store(&g_eqx.on, 1);
-			pthread_mutex_lock(&g_st.target_lock);
-			g_vf.on = 1;
-			if (g_vf.amount < 0.7f) g_vf.amount = 0.7f;
-			if (g_vf.max_cut_db < 6.0f) g_vf.max_cut_db = 6.0f;
-			pthread_mutex_unlock(&g_st.target_lock);
 			/* V13.7 — étage master : EQ mastering + makeup LUFS */
 			memset(g_meq_st, 0, sizeof(g_meq_st));
 			g_meq_fading = 0;
@@ -4870,6 +4977,22 @@ static void handle_cmd(int fd, const char *line)
 		atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"autolive\":%d}\n", g_bmx.autolive);
 
+	} else if (json_has_op(line, "bandmix_solo")) {
+		/* V13.9 — SOLO : {"op":"bandmix_solo","src":-1..15,"auto":0/1}
+		 * src = voie à soloer (−1 = aucun), pose un solo MANUEL (que
+		 * l'auto ne relâche pas). auto = détection automatique on/off. */
+		int iv;
+		if (json_get_int(line, "src", &iv) >= 0 && iv >= -1 && iv < N_EXP_CH) {
+			g_bmx.solo_src = iv;
+			g_bmx.solo_is_auto = 0;
+			g_bmx.solo_on_cnt = g_bmx.solo_off_cnt = 0;
+		}
+		if (json_get_int(line, "auto", &iv) >= 0)
+			g_bmx.solo_auto = iv ? 1 : 0;
+		dprintf(fd, "{\"ok\":true,\"op\":\"bandmix_solo\",\"src\":%d,"
+			"\"auto\":%d,\"is_auto\":%d}\n",
+			g_bmx.solo_src, g_bmx.solo_auto, g_bmx.solo_is_auto);
+
 	} else if (json_has_op(line, "bandmix_status")) {
 		int ms = atomic_load(&g_bmx.meas_src);
 		int elapsed = 0;
@@ -4882,9 +5005,11 @@ static void handle_cmd(int fd, const char *line)
 			"{\"ok\":true,\"live\":%d,\"ref_valid\":%d,"
 			"\"autolive\":%d,"
 			"\"locking\":%d,\"measuring\":%d,\"meas_elapsed\":%d,"
+			"\"solo\":%d,\"solo_auto\":%d,\"solo_is_auto\":%d,"
 			"\"chans\":[",
 			g_bmx.live, g_bmx.ref_valid, g_bmx.autolive,
-			g_bmx.locking, ms, elapsed);
+			g_bmx.locking, ms, elapsed,
+			g_bmx.solo_src, g_bmx.solo_auto, g_bmx.solo_is_auto);
 		for (int i = 0; i < N_EXP_CH; i++) {
 			n += snprintf(reply + n, sizeof(reply) - n,
 				"%s{\"src\":%d,\"role\":\"%s\",\"done\":%d,"
@@ -6685,6 +6810,8 @@ int main(int argc, char **argv)
 		g_st.presence_gain[i] = 1.0f;   /* V13.9 balance auto */
 		g_st.presence_target[i] = 1.0f;
 	}
+	for (int i = 0; i < N_EXP_CH; i++)
+		g_bmx.solo_base[i] = -999.0f;   /* V13.9 solo v2 : base à apprendre */
 	/* V12-EXP : défauts gates (off) — avant load_mixer_state qui écrase */
 	for (int i = 0; i < N_EXP_CH; i++)
 		exp_configure(i, 0, -50.0f, 3.0f, 5.0f, 150.0f, 40.0f, 50.0f);

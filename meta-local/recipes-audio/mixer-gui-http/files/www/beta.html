@@ -679,6 +679,7 @@ input[type=range]::-moz-range-track{height:16px;border-radius:8px;background:#0b
       <button class="wbtn" id="bmxlock">VERROUILLER</button>
       <button class="wbtn ok" id="bmxlive">LIVE —</button>
       <button class="wbtn" id="bmxdugan">DUGAN —</button>
+      <button class="wbtn" id="bmxsoloauto" title="Détection automatique de solo">SOLO AUTO</button>
     </div>
 
     <!-- V13.9 : corps 2 colonnes — voies à gauche, réglages/analyse à droite -->
@@ -3679,8 +3680,11 @@ function bmxRender(){
       <button class="wbtn" data-br="${i}" data-d="1" style="padding:2px 6px;">&#8250;</button>
       ${active?`<button class="wbtn ${ch.done?"ok":""}" data-bm="${i}" ${meas?"disabled":""}
         style="width:90px;padding:3px 4px;font-size:9px;">${meas?("● "+st.meas_elapsed+"/12")
-          :(ch.done?("✓ "+ch.rms_db.toFixed(1)):"MESURER")}</button>`
-        :`<span style="width:90px;"></span>`}
+          :(ch.done?("✓ "+ch.rms_db.toFixed(1)):"MESURER")}</button>
+      <button class="wbtn" data-so="${i}" title="Solo (monte la voie à la place de la voix)"
+        style="width:26px;padding:3px 2px;font-size:9px;font-weight:700;
+        ${st.solo===i?"background:#2a2214;border-color:#e5a13c;color:#e5a13c;":""}">S</button>`
+        :`<span style="width:122px;"></span>`}
       ${active?`
       <!-- VU (niveau) — prend la place restante -->
       <div style="flex:1;min-width:40px;display:flex;align-items:center;gap:5px;">
@@ -3707,6 +3711,12 @@ function bmxRender(){
     cmd({op:"bandmix_role",src:i,role:BMXROLES[nx]}).then(bmxPoll);}));
   c.querySelectorAll("[data-bm]").forEach(bt=>bt.addEventListener("click",()=>
     cmd({op:"bandmix_measure",src:+bt.dataset.bm}).then(bmxPoll)));
+  c.querySelectorAll("[data-so]").forEach(bt=>bt.addEventListener("click",()=>{
+    const i=+bt.dataset.so;
+    cmd({op:"bandmix_solo",src:bmxSt&&bmxSt.solo===i?-1:i}).then(bmxPoll);}));
+  const sa=document.getElementById("bmxsoloauto");
+  sa.textContent=st.solo_auto?(st.solo_is_auto?"● SOLO AUTO":"SOLO AUTO ON"):"SOLO AUTO";
+  sa.style.color=st.solo_auto?(st.solo_is_auto?"#e5a13c":"#4cc470"):"";
 }
 function bmxVfRender(){
   const v=bmxVf;if(!v)return;
@@ -3879,6 +3889,8 @@ document.getElementById("bmxlive").addEventListener("click",()=>
   cmd({op:"bandmix_live",on:bmxSt&&bmxSt.live?0:1}).then(bmxPoll));
 document.getElementById("bmxdugan").addEventListener("click",()=>
   cmd({op:"set_automix_cfg",on:bmxDugan?0:1}).then(bmxPoll));
+document.getElementById("bmxsoloauto").addEventListener("click",()=>
+  cmd({op:"bandmix_solo",auto:bmxSt&&bmxSt.solo_auto?0:1}).then(bmxPoll));
 document.getElementById("bmxvf").addEventListener("click",()=>
   cmd({op:"set_vfocus",on:bmxVf&&bmxVf.on?0:1}).then(bmxPoll));
 const bmxAm=document.getElementById("bmxvfam");

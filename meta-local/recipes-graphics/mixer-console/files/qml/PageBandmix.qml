@@ -180,6 +180,27 @@ Item {
                                              function() {})
                     }
                 }
+                // V13.9 — détection automatique de solo (instrument dominant
+                // quand la voix se tait → monte à la place de la voix)
+                Rectangle {
+                    width: 96; height: 46; radius: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    property bool on: page.st !== null && page.st.solo_auto === 1
+                    property bool live2: page.st !== null && page.st.solo_is_auto === 1
+                    color: live2 ? "#2a2214" : (on ? "#142a19" : "#1b2126")
+                    border.color: live2 ? "#e5a13c" : (on ? "#4cc470" : "#39434b")
+                    border.width: (on || live2) ? 2 : 1
+                    Text { anchors.centerIn: parent
+                           text: parent.live2 ? "● SOLO" : (parent.on ? "SOLO AUTO" : "SOLO OFF")
+                           color: parent.live2 ? "#e5a13c" : (parent.on ? "#4cc470" : "#8b959d")
+                           font.pixelSize: 10; font.bold: true }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: mixer.call({ op: "bandmix_solo",
+                                               auto: parent.on ? 0 : 1 },
+                                             function() { page.refresh(); })
+                    }
+                }
                 Rectangle {
                     width: 40; height: 46; radius: 6
                     anchors.verticalCenter: parent.verticalCenter
@@ -750,6 +771,26 @@ Item {
                                     gesturePolicy: TapHandler.ReleaseWithinBounds
                                     onTapped: mixer.call({ op: "bandmix_measure",
                                                            src: index },
+                                                         function() { page.refresh(); })
+                                }
+                            }
+                            // V13.9 — SOLO : monte la voie à la place de la voix
+                            Rectangle {
+                                width: 30; height: 32; radius: 5
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: active
+                                property bool so: page.st !== null
+                                                  && page.st.solo === index
+                                color: so ? "#2a2214" : "#1b2126"
+                                border.color: so ? "#e5a13c" : "#39434b"
+                                border.width: so ? 2 : 1
+                                Text { anchors.centerIn: parent; text: "S"
+                                       color: parent.so ? "#e5a13c" : "#8b959d"
+                                       font.pixelSize: 12; font.bold: true }
+                                TapHandler {
+                                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                                    onTapped: mixer.call({ op: "bandmix_solo",
+                                                           src: parent.so ? -1 : index },
                                                          function() { page.refresh(); })
                                 }
                             }
