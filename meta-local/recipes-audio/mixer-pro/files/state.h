@@ -24,6 +24,7 @@
 
 #include "mixer-pro.h"
 #include "effects.h"
+#include "analyzer.h"
 
 struct alsa_pcm {
 	const char *name;
@@ -155,5 +156,9 @@ extern atomic_int  g_insert_bypass;   /* V13-SCENES : bypass runtime */
 /* V9.5.12 — mode Mixer Assistant (0=passthrough, 1=mastering) */
 extern _Atomic int g_assistant_mode;
 extern _Atomic int g_assistant_source;   /* 0=HW IN, 1=USB IN */
+
+/* E7.5 — analyzer taps (storage dans mixer-pro.c, écrits par
+ * audio_thread, lus par analyzer.c + op get_meters). */
+extern mixer_tap_t g_taps[N_TAPS];
 
 #endif /* MIXER_STATE_H */

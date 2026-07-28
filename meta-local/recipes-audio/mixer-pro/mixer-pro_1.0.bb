@@ -36,6 +36,8 @@ SRC_URI = " \
     file://persist.h \
     file://uac2_ring.c \
     file://uac2_ring.h \
+    file://audio_loop.c \
+    file://audio_loop.h \
     file://effects.c \
     file://effects.h \
     file://analyzer.c \
