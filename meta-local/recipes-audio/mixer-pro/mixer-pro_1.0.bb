@@ -21,6 +21,8 @@ SRC_URI = " \
     file://sampler.h \
     file://looper.c \
     file://looper.h \
+    file://midix.c \
+    file://midix.h \
     file://effects.c \
     file://effects.h \
     file://analyzer.c \

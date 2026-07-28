@@ -156,3 +156,68 @@ courte (restart round-trip persistance, un morceau dataset, delta xruns = 0,
 **Interdits pendant le chantier** : aucune modification de comportement, aucun
 renommage d'op, aucune « amélioration au passage ». Toute envie d'amélioration
 va dans une liste pour après.
+
+## 10. Architecture détaillée — étape 2 (modules RT) + placement de persist
+
+Rédigée 2026-07-28 après l'étape 1 (sampler/looper/midix extraits). Chaque
+module suit le patron validé à l'étape 1 : `.h` = doc du rôle + API en
+fonctions groupées + externs temporaires pour les ops (qui migreront à
+l'étape 4), `.c` = code déplacé tel quel.
+
+### 10.1 `strip_dyn.c/h` — dynamique par tranche + lien stéréo (~520 l.)
+
+Contenu : expandeur/gate V12-EXP (`g_exp`, `exp_render`, config), compresseur
+natif V13-COMP (`g_cmp`, `cmp_render`, `cmp_configure`), lien stéréo V13.3
+(`g_link`, `link_partner`) — le lien vit ici car il miroite précisément les
+écritures fader/mute/gate/comp.
+API : `exp_render(in_block)`, `cmp_render(in_block)`,
+`cmp_configure(src, on, thr, ratio, atk, rel, mk)`, `link_partner(src)`
+(inline .h, appelé par les handlers socket).
+Invariant RT : render appelés par l'audio_thread sous target_lock, états
+jamais vidés en live.
+
+### 10.2 `automix.c/h` — AUTOMIX LIVE complet (~950 l.)
+
+Contenu : `g_bmx` (rôles, parts de réf, balance quadrants, gate auto, solo
+v2, staging, risk), `automix_update` (Dugan par bloc), `bmx_tick` (1 Hz :
+soundcheck/lock/keeper/balance), le calcul du mix (staging+gate+comp+faders),
+l'EQ de placement par rôle (`g_eqx`, `eqx_config`, `eqx_render` — lit
+`g_bmx.role`, donc même module).
+API : `automix_update(in_block, N)`, `bmx_tick_1hz()`, `bmx_compute_mix(...)`,
+`eqx_config(i, role)`, `eqx_render(in_block)` + `extern g_bmx`/`g_eqx`
+(ops + persist, temporaire).
+Invariants gravés en tête de .h : pas de signal → aucun gain ne bouge
+(gated act[]) ; un reset n'écrase jamais un réglage opérateur ; gel des
+montées si prog < crête−3 dB.
+
+### 10.3 `master.c/h` — bus master (~430 l.)
+
+Contenu : EQ mastering 3 bandes (`g_meq_p`, `g_meq_bank`, double-banque +
+crossfade), makeup LUFS BS.1770-4 (coeffs UIT exacts — ne pas recalculer),
+limiteur −1 dBFS. API : `meq_recalc()`, `meq_render(...)`, `save_master_eq()`,
+`master_makeup_tick()` + `extern g_meq_p` (ops + persist).
+
+### 10.4 `voice.c/h` — traitement voix (~250 l.)
+
+Contenu : vfocus V13 (`g_vf`, analyse bandes + cuts RBJ par bloc) +
+spatializer V13.9 (`g_vspat`, widener Lauridsen). Les deux sont « la voix »
+et partagent la sélection de la tranche lead. API : `vf_render(...)`,
+`vf_set(...)`, `vspat_render(...)` + externs temporaires.
+
+### 10.5 `persist.c/h` — sérialisation d'état + scènes (~600 l.)
+
+Contenu : `save_state_to`, `parse_state_lines` (parseur commun lot 5b),
+`load_mixer_state`, scènes V13 (apply/save sans coupure), presets_dirty.
+**Placement : EN FIN d'étape 2** (pas étape 1 comme prévu initialement) —
+persist lit/écrit les structs `g_bmx`/`g_vf`/`g_vspat`/`g_meq_p` : les
+extraire avant obligerait à déménager ces types DEUX fois (mixer-pro.c →
+state.h → automix.h/…). Une fois automix/master/voice en place, persist
+inclut leurs .h et se déplace en une passe. Aucun changement de périmètre,
+seulement d'ordre.
+
+### 10.6 Ce qui reste dans mixer-pro.c après l'étape 2
+
+State/init/main, UAC2+ASRC (étape 3 : `uac2_ring.c`), audio_thread +
+play_thread (étape 3 : `audio_loop.c`), control socket (étape 4), insert
+LV2 chain + divers (rejoindront control/audio_loop selon leur nature à
+l'étape 3/4). Cible post-étape 4 : mixer-pro.c ≈ 450 lignes.

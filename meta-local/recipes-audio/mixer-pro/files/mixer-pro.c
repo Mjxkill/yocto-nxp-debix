@@ -48,6 +48,7 @@
 #include "dsp_bq.h"   /* V14.0 étape 0 : biquads RBJ (eqx_bq, designers) */
 #include "sampler.h"  /* V14.0 étape 1 : sampleur V12-SMP (page PADS) */
 #include "looper.h"   /* V14.0 étape 1 : loopstation V12-LOOP-PRO */
+#include "midix.h"    /* V14.0 étape 1 : expandeur MIDI V12-MIDIX */
 
 /* ============================== State ============================== */
 /* struct alsa_pcm + struct mixer_state : déplacées dans state.h (V14.0
@@ -2364,108 +2365,7 @@ static void duck_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 	}
 }
 
-/* ========= V12-MIDIX — expandeur MIDI (consumer du ring SHM) =========
- * Le daemon midi-expander (fluidsynth, cores 0-1) rend le son du module
- * MIDI dans /dev/shm/ala-midix ; l'audio_thread le pop (non-bloquant,
- * zéros si retard/absent) et l'ADDITIONNE dans P1/P2 comme le sampleur
- * et le looper. mmap fait par persistence_thread (1 Hz, jamais en RT).
- * ARCHI_V12_MIDI_EXPANDER.md. */
-#define MIDIX_SHM   "/ala-midix"
-#define MIDIX_MAGIC 0x4D494458u
-
-struct midix_hdr {
-	uint32_t magic;
-	uint32_t ring_frames;
-	_Atomic uint32_t widx;
-	uint32_t _pad;
-};
-static struct {
-	struct midix_hdr *_Atomic hdr;   /* NULL tant que non mappé */
-	float   *data;
-	size_t   map_sz;
-	uint32_t ridx;                    /* cursor consumer privé */
-	float    gain;
-	_Atomic uint32_t underruns;
-	_Atomic uint32_t peak;
-} g_midix = { .gain = 1.0f };
-
-/* persistence_thread (1 Hz) — tente le mmap tant que le daemon n'est pas
- * là ; invalide si le magic disparaît (arrêt propre du daemon). */
-static void midix_try_map(void)
-{
-	struct midix_hdr *h = atomic_load(&g_midix.hdr);
-	if (h) {
-		if (h->magic != MIDIX_MAGIC) {   /* daemon parti */
-			atomic_store(&g_midix.hdr, NULL);
-			munmap(h, g_midix.map_sz);
-			g_midix.data = NULL;
-			mlog("midix: ring invalidé (daemon arrêté)");
-		}
-		return;
-	}
-	int fd = shm_open(MIDIX_SHM, O_RDONLY, 0);
-	if (fd < 0)
-		return;
-	struct stat st;
-	if (fstat(fd, &st) < 0 || st.st_size < (off_t)sizeof(*h)) {
-		close(fd);
-		return;
-	}
-	void *m = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-	close(fd);
-	if (m == MAP_FAILED)
-		return;
-	h = m;
-	if (h->magic != MIDIX_MAGIC || !h->ring_frames ||
-	    (off_t)(sizeof(*h) + (size_t)h->ring_frames * 2 * sizeof(float))
-	    > st.st_size) {
-		munmap(m, (size_t)st.st_size);
-		return;
-	}
-	g_midix.map_sz = (size_t)st.st_size;
-	g_midix.data = (float *)((char *)m + sizeof(*h));
-	g_midix.ridx = atomic_load(&h->widx);   /* démarre au présent */
-	atomic_store_explicit(&g_midix.hdr, h, memory_order_release);
-	mlog("midix: ring mappé (%u frames)", h->ring_frames);
-}
-
-/* Rendu (audio_thread, SOUS target_lock, après loop_render) */
-static void midix_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
-{
-	struct midix_hdr *h = atomic_load_explicit(&g_midix.hdr,
-						   memory_order_acquire);
-	if (!h)
-		return;
-	uint32_t w = atomic_load_explicit(&h->widx, memory_order_acquire);
-	int32_t avail = (int32_t)(w - g_midix.ridx);
-	if (avail < PERIOD_FRAMES) {   /* producer en retard → silence */
-		atomic_fetch_add_explicit(&g_midix.underruns, 1,
-					  memory_order_relaxed);
-		return;
-	}
-	/* dérive/burst : si on traîne trop, on saute au présent */
-	if (avail > (int32_t)(h->ring_frames / 2))
-		g_midix.ridx = w - PERIOD_FRAMES;
-
-	const int P = N_INPUT_MICS + N_INPUT_STEMS;   /* P1 = 16 */
-	const uint32_t ring = h->ring_frames;
-	const float g = g_midix.gain;
-	float pk = 0.0f;
-	for (int f = 0; f < PERIOD_FRAMES; f++) {
-		uint32_t idx = (g_midix.ridx + f) % ring;
-		float l = g_midix.data[(size_t)idx * 2];
-		float r = g_midix.data[(size_t)idx * 2 + 1];
-		in_block[P][f]     += l * g;
-		in_block[P + 1][f] += r * g;
-		float a = l < 0 ? -l : l, b = r < 0 ? -r : r;
-		if (a > b) b = a;
-		if (b > pk) pk = b;
-	}
-	g_midix.ridx += PERIOD_FRAMES;
-	atomic_store_explicit(&g_midix.peak,
-			      (uint32_t)(pk * g * 2147483647.0f),
-			      memory_order_relaxed);
-}
+/* V12-MIDIX — expandeur MIDI : déplacé dans midix.c/midix.h (V14.0 étape 1). */
 
 /* V12-AMX — calcul Dugan par bloc (appelé par audio_thread AVANT mix_block).
  * Énergie post-fader : e_i = mean(x²) × ig². Enveloppe asymétrique
