@@ -136,4 +136,9 @@ _Static_assert(_Alignof(float) <= 4, "float alignment compatible with atomicity"
 
 extern struct mixer_state g_st;   /* définie dans mixer-pro.c */
 
+/* Flag « état à sauver » de la persistance (armé sur toute écriture
+ * opérateur/automation, consommé par persistence_thread). Défini dans
+ * mixer-pro.c ; rejoindra persist.c à l'étape 2e. */
+extern atomic_int g_presets_dirty;
+
 #endif /* MIXER_STATE_H */
