@@ -1946,6 +1946,13 @@ static void cmp_configure(int src, int on, float thr_db, float ratio,
 }
 
 /* Rendu (audio_thread, SOUS target_lock, juste après exp_render) */
+/* NOTE (revue 2026-07-28, lot 5b) : ce compresseur de TRANCHE n'est PAS un
+ * doublon de fx_init_compressor (effects.c) — algorithmes distincts à
+ * dessein : ici crête PAR BLOC + loi de gain en dB + rampe de gain intra-
+ * bloc anti-zipper + gr publié GUI + extinction douce (16 voies mono,
+ * seuils adaptatifs bmx) ; effects.c = enveloppe PAR ÉCHANTILLON + loi
+ * linéaire (insert stéréo master, params fixes). Les fusionner changerait
+ * le son validé des deux. */
 static void cmp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 {
 	for (int i = 0; i < N_EXP_CH; i++) {
@@ -2101,16 +2108,22 @@ static void eqx_hpf(struct eqx_bq *q, float fc)
 	q->b2 = (1.0f + cw) / 2.0f / a0;
 	q->a1 = -2.0f * cw / a0;          q->a2 = (1.0f - al) / a0;
 }
+/* NOYAU peaking RBJ commun (revue 2026-07-28, lot 5b) : une seule formule
+ * dans le moteur. Prend cos(w) et alpha déjà calculés pour servir aussi le
+ * chemin RT du vfocus (cos/sin précalculés à l'init, appel par bloc). */
+static void rbj_peak_core(struct eqx_bq *q, float cw, float al, float A)
+{
+	float a0 = 1.0f + al / A;
+	q->b0 = (1.0f + al * A) / a0;  q->b1 = -2.0f * cw / a0;
+	q->b2 = (1.0f - al * A) / a0;
+	q->a1 = -2.0f * cw / a0;        q->a2 = (1.0f - al / A) / a0;
+}
 static void eqx_peak(struct eqx_bq *q, float fc, float gdb, float Q)
 {
 	if (fc <= 0.0f || gdb == 0.0f) { *q = (struct eqx_bq){ 1, 0, 0, 0, 0 }; return; }
 	float A = powf(10.0f, gdb / 40.0f);
 	float w = 2.0f * (float)M_PI * fc / (float)SAMPLE_RATE;
-	float cw = cosf(w), sw = sinf(w), al = sw / (2.0f * Q);
-	float a0 = 1.0f + al / A;
-	q->b0 = (1.0f + al * A) / a0;  q->b1 = -2.0f * cw / a0;
-	q->b2 = (1.0f - al * A) / a0;
-	q->a1 = -2.0f * cw / a0;        q->a2 = (1.0f - al / A) / a0;
+	rbj_peak_core(q, cosf(w), sinf(w) / (2.0f * Q), A);
 }
 static void eqx_config(int i, int role)   /* control thread (rare) */
 {
@@ -2838,7 +2851,9 @@ static void bmx_calc(void)
  * Zéro alloc, zéro transcendante par sample. ARCHI_V13_VOICEFOCUS.md. */
 #define VF_BANDS 5
 
-struct vf_bq { float b0, b1, b2, a1, a2; };
+/* L'ancienne « struct vf_bq » (champs identiques) a été fusionnée dans
+ * struct eqx_bq (revue 2026-07-28, lot 5b) : UN seul type de biquad RBJ
+ * dans tout le moteur. */
 
 static struct {
 	int   on;
@@ -2846,8 +2861,8 @@ static struct {
 	float max_cut_db;                /* profondeur max (défaut 4,5) */
 	/* précalculs par bande (fréquences fixes) */
 	float cw[VF_BANDS], alpha[VF_BANDS];   /* cos(w0), alpha(Q=1,4) */
-	struct vf_bq ana[VF_BANDS];      /* passe-bande analyse (fixes) */
-	struct vf_bq cut[VF_BANDS];      /* peaking application (par bloc) */
+	struct eqx_bq ana[VF_BANDS];      /* passe-bande analyse (fixes) */
+	struct eqx_bq cut[VF_BANDS];      /* peaking application (par bloc) */
 	/* états */
 	float az[VF_BANDS][2];           /* biquads analyse */
 	float env[VF_BANDS];             /* enveloppes bande (crête lissée) */
@@ -2873,21 +2888,16 @@ static void vf_init(void)
 		g_vf.ana[b].b2 = -g_vf.alpha[b] / a0;
 		g_vf.ana[b].a1 = -2.0f * g_vf.cw[b] / a0;
 		g_vf.ana[b].a2 = (1.0f - g_vf.alpha[b]) / a0;
-		g_vf.cut[b] = (struct vf_bq){ 1, 0, 0, 0, 0 };   /* neutre */
+		g_vf.cut[b] = (struct eqx_bq){ 1, 0, 0, 0, 0 };   /* neutre */
 	}
 }
 
-/* peaking RBJ, gain −cut_db (cos/sin précalculés → qq mults par bloc) */
+/* peaking RBJ, gain −cut_db — même NOYAU rbj_peak_core que l'eqx (lot 5b),
+ * avec cos/alpha précalculés à l'init → qq mults par bloc (chemin RT) */
 static inline void vf_peak_coefs(int b, float cut_db)
 {
-	float A  = powf(10.0f, -cut_db / 40.0f);
-	float al = g_vf.alpha[b];
-	float a0 = 1.0f + al / A;
-	g_vf.cut[b].b0 = (1.0f + al * A) / a0;
-	g_vf.cut[b].b1 = -2.0f * g_vf.cw[b] / a0;
-	g_vf.cut[b].b2 = (1.0f - al * A) / a0;
-	g_vf.cut[b].a1 = -2.0f * g_vf.cw[b] / a0;
-	g_vf.cut[b].a2 = (1.0f - al / A) / a0;
+	rbj_peak_core(&g_vf.cut[b], g_vf.cw[b], g_vf.alpha[b],
+		      powf(10.0f, -cut_db / 40.0f));
 }
 
 static inline int vf_is_voice(int i)
@@ -2930,7 +2940,7 @@ static void duck_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 			if (v > pk_wb) pk_wb = v;
 		}
 		for (int b = 0; b < VF_BANDS; b++) {
-			const struct vf_bq *q = &g_vf.ana[b];
+			const struct eqx_bq *q = &g_vf.ana[b];
 			float z1 = g_vf.az[b][0], z2 = g_vf.az[b][1];
 			float m = 0.0f;
 			for (int f = 0; f < PERIOD_FRAMES; f++) {
@@ -2983,7 +2993,7 @@ static void duck_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 		for (int b = 0; b < VF_BANDS; b++) {
 			if (g_vf.cut_db[b] <= 0.05f)
 				continue;
-			const struct vf_bq *q = &g_vf.cut[b];
+			const struct eqx_bq *q = &g_vf.cut[b];
 			float z1 = g_vf.st[i][b][0], z2 = g_vf.st[i][b][1];
 			for (int f = 0; f < PERIOD_FRAMES; f++) {
 				float xi = x[f];
@@ -6381,6 +6391,94 @@ static void save_mixer_state(void)
  * HORS lock puis swappée (pattern set_insert) seulement si le spec
  * diffère du courant. Les gains atterrissent dans les TARGETS → les
  * valeurs réelles glissent via smooth_gains (aucun clic). */
+/* ===== Parseur COMMUN des lignes d'état (revue code 2026-07-28, lot 5b) =====
+ * Boucle fgets/sscanf partagée par load_mixer_state (boot) et scene_apply
+ * (rappel live) — était dupliquée à l'identique dans les deux (77 lignes),
+ * chaque évolution devait être faite 2 fois (source de divergence).
+ * APPELANT responsable du verrouillage (les deux appellent sous target_lock).
+ * ATTENTION ordre des tests sscanf : les littéraux mangent les PRÉFIXES des
+ * mots-clés voisins ("bandmix" avale le début de "bandmix_live") et
+ * désynchronisent le flux. Tester le mot-clé long AVANT le court. */
+static void parse_state_lines(FILE *f)
+{
+	char bl[160];
+	int src, on, role, live, rv, al = 0;
+	float thr, ratio, atk, rel, mk, shr, sv[8];
+	int lk[8];
+	while (fgets(bl, sizeof(bl), f)) {
+		if (sscanf(bl, "comp %d %d %f %f %f %f %f",
+			   &src, &on, &thr, &ratio, &atk, &rel,
+			   &mk) == 7)
+			cmp_configure(src, on, thr, ratio, atk, rel, mk);
+		else if (sscanf(bl, "bandmix_live %d %d %d",
+				&live, &rv, &al) >= 2) {
+			g_bmx.ref_valid = rv ? 1 : 0;
+			g_bmx.live = (live && rv) ? 1 : 0;
+			g_bmx.autolive = al ? 1 : 0;   /* V13.5 */
+		} else if (sscanf(bl, "bandmix %d %d %f",
+				  &src, &role, &shr) == 3 &&
+			   src >= 0 && src < N_EXP_CH &&
+			   role >= 0 && role < BR_NROLES) {
+			g_bmx.role[src] = role;
+			g_bmx.ref_share[src] = shr;
+		} else if (sscanf(bl, "vfocus %d %f %f",
+				  &on, &atk, &rel) == 3) {
+			g_vf.on = on ? 1 : 0;
+			if (atk >= 0.0f && atk <= 100.0f)
+				g_vf.amount = atk / 100.0f;
+			if (rel >= 0.0f && rel <= 12.0f)
+				g_vf.max_cut_db = rel;
+		/* V13.9 (revue F15 + fiabilisation n°4) : restauration des
+		 * réglages V13.7-V13.9 — mêmes plages de validation que les
+		 * ops live ; meq_recalc = bascule crossfadée sans clic. */
+		} else if (sscanf(bl, "master_eq %f %f %f %f %f %f %f",
+				  &sv[0], &sv[1], &sv[2], &sv[3],
+				  &sv[4], &sv[5], &sv[6]) == 7) {
+			g_meq_p.low_hz = sv[0]; g_meq_p.low_db = sv[1];
+			g_meq_p.mid_hz = sv[2]; g_meq_p.mid_db = sv[3];
+			g_meq_p.mid_q  = sv[4];
+			g_meq_p.air_hz = sv[5]; g_meq_p.air_db = sv[6];
+			meq_recalc();
+			save_master_eq();   /* fichier dédié cohérent */
+		} else if (sscanf(bl, "automix_tune %f %f %f %f",
+				  &sv[0], &sv[1], &sv[2], &sv[3]) == 4) {
+			if (sv[0] >= 3.0f  && sv[0] <= 40.0f) g_bmx.freeze_db   = sv[0];
+			if (sv[1] >= 0.0f  && sv[1] <= 2.0f)  g_bmx.risk_decay  = sv[1];
+			if (sv[2] >= 0.0f  && sv[2] <= 12.0f) g_bmx.risk_margin = sv[2];
+			if (sv[3] >= 3.0f  && sv[3] <= 30.0f) g_bmx.gate_db     = sv[3];
+		} else if (sscanf(bl, "balance %d %f %f %f",
+				  &on, &sv[0], &sv[1], &sv[2]) == 4) {
+			g_bmx.balance_on = on ? 1 : 0;
+			if (sv[0] >= -30.0f && sv[0] <= -6.0f) g_bmx.bal_lufs_tgt = sv[0];
+			if (sv[1] >= -6.0f  && sv[1] <= 12.0f) g_bmx.bal_e_tgt   = sv[1];
+			if (sv[2] >= -6.0f  && sv[2] <= 12.0f) g_bmx.bal_c_tgt   = sv[2];
+		} else if (sscanf(bl, "vspatial %d %d %d",
+				  &on, &src, &role) == 3) {
+			atomic_store(&g_vspat.on, on ? 1 : 0);
+			if (src >= 0 && src <= 1000)
+				atomic_store(&g_vspat.amount_mq, src);
+			if (role >= 144 && role <= 1920)   /* 3..40 ms @48k */
+				atomic_store(&g_vspat.delay_smp, role);
+		} else if (sscanf(bl, "solo_auto %d", &on) == 1) {
+			g_bmx.solo_auto = on ? 1 : 0;
+		} else if (sscanf(bl, "sends %d %f %f %f %f %f %f %f %f",
+				  &src, &sv[0], &sv[1], &sv[2], &sv[3],
+				  &sv[4], &sv[5], &sv[6], &sv[7]) == 9 &&
+			   src >= 0 && src < N_INPUT_TOTAL) {
+			/* V13.1 : départs FX par tranche */
+			for (int b = 0; b < N_BUS_FX_CH && b < 8; b++)
+				if (sv[b] >= 0.0f && sv[b] <= 8.0f)
+					g_st.send_target[src][b] = sv[b];
+		} else if (sscanf(bl, "links %d %d %d %d %d %d %d %d",
+				  &lk[0], &lk[1], &lk[2], &lk[3],
+				  &lk[4], &lk[5], &lk[6], &lk[7]) == 8) {
+			/* V13.3 : liens stéréo */
+			for (int i = 0; i < N_LINK_PAIRS; i++)
+				atomic_store(&g_link[i], lk[i] ? 1 : 0);
+		}
+	}
+}
+
 static int scene_apply(const char *path)
 {
 	FILE *df = fopen(path, "r");
@@ -6479,84 +6577,7 @@ tail:
 			      &rng, &hold) == 8)
 			exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
 	}
-	{
-		char bl[160];
-		int src, on, role, live, rv, al = 0;
-		float thr, ratio, atk, rel, mk, shr, sv[8];
-		int lk[8];
-		while (fgets(bl, sizeof(bl), f)) {
-			if (sscanf(bl, "comp %d %d %f %f %f %f %f",
-				   &src, &on, &thr, &ratio, &atk, &rel,
-				   &mk) == 7)
-				cmp_configure(src, on, thr, ratio, atk, rel, mk);
-			else if (sscanf(bl, "bandmix_live %d %d %d",
-					&live, &rv, &al) >= 2) {
-				g_bmx.ref_valid = rv ? 1 : 0;
-				g_bmx.live = (live && rv) ? 1 : 0;
-				g_bmx.autolive = al ? 1 : 0;   /* V13.5 */
-			} else if (sscanf(bl, "bandmix %d %d %f",
-					  &src, &role, &shr) == 3 &&
-				   src >= 0 && src < N_EXP_CH &&
-				   role >= 0 && role < BR_NROLES) {
-				g_bmx.role[src] = role;
-				g_bmx.ref_share[src] = shr;
-			} else if (sscanf(bl, "vfocus %d %f %f",
-					  &on, &atk, &rel) == 3) {
-				g_vf.on = on ? 1 : 0;
-				if (atk >= 0.0f && atk <= 100.0f)
-					g_vf.amount = atk / 100.0f;
-				if (rel >= 0.0f && rel <= 12.0f)
-					g_vf.max_cut_db = rel;
-			/* V13.9 (revue F15 + fiabilisation n°4) : restauration des
-			 * réglages V13.7-V13.9 — mêmes plages de validation que les
-			 * ops live ; meq_recalc = bascule crossfadée sans clic. */
-			} else if (sscanf(bl, "master_eq %f %f %f %f %f %f %f",
-					  &sv[0], &sv[1], &sv[2], &sv[3],
-					  &sv[4], &sv[5], &sv[6]) == 7) {
-				g_meq_p.low_hz = sv[0]; g_meq_p.low_db = sv[1];
-				g_meq_p.mid_hz = sv[2]; g_meq_p.mid_db = sv[3];
-				g_meq_p.mid_q  = sv[4];
-				g_meq_p.air_hz = sv[5]; g_meq_p.air_db = sv[6];
-				meq_recalc();
-				save_master_eq();   /* fichier dédié cohérent */
-			} else if (sscanf(bl, "automix_tune %f %f %f %f",
-					  &sv[0], &sv[1], &sv[2], &sv[3]) == 4) {
-				if (sv[0] >= 3.0f  && sv[0] <= 40.0f) g_bmx.freeze_db   = sv[0];
-				if (sv[1] >= 0.0f  && sv[1] <= 2.0f)  g_bmx.risk_decay  = sv[1];
-				if (sv[2] >= 0.0f  && sv[2] <= 12.0f) g_bmx.risk_margin = sv[2];
-				if (sv[3] >= 3.0f  && sv[3] <= 30.0f) g_bmx.gate_db     = sv[3];
-			} else if (sscanf(bl, "balance %d %f %f %f",
-					  &on, &sv[0], &sv[1], &sv[2]) == 4) {
-				g_bmx.balance_on = on ? 1 : 0;
-				if (sv[0] >= -30.0f && sv[0] <= -6.0f) g_bmx.bal_lufs_tgt = sv[0];
-				if (sv[1] >= -6.0f  && sv[1] <= 12.0f) g_bmx.bal_e_tgt   = sv[1];
-				if (sv[2] >= -6.0f  && sv[2] <= 12.0f) g_bmx.bal_c_tgt   = sv[2];
-			} else if (sscanf(bl, "vspatial %d %d %d",
-					  &on, &src, &role) == 3) {
-				atomic_store(&g_vspat.on, on ? 1 : 0);
-				if (src >= 0 && src <= 1000)
-					atomic_store(&g_vspat.amount_mq, src);
-				if (role >= 144 && role <= 1920)   /* 3..40 ms @48k */
-					atomic_store(&g_vspat.delay_smp, role);
-			} else if (sscanf(bl, "solo_auto %d", &on) == 1) {
-				g_bmx.solo_auto = on ? 1 : 0;
-			} else if (sscanf(bl, "sends %d %f %f %f %f %f %f %f %f",
-					  &src, &sv[0], &sv[1], &sv[2], &sv[3],
-					  &sv[4], &sv[5], &sv[6], &sv[7]) == 9 &&
-				   src >= 0 && src < N_INPUT_TOTAL) {
-				/* V13.1 : départs FX par tranche */
-				for (int b = 0; b < N_BUS_FX_CH && b < 8; b++)
-					if (sv[b] >= 0.0f && sv[b] <= 8.0f)
-						g_st.send_target[src][b] = sv[b];
-			} else if (sscanf(bl, "links %d %d %d %d %d %d %d %d",
-					  &lk[0], &lk[1], &lk[2], &lk[3],
-					  &lk[4], &lk[5], &lk[6], &lk[7]) == 8) {
-				/* V13.3 : liens stéréo */
-				for (int i = 0; i < N_LINK_PAIRS; i++)
-					atomic_store(&g_link[i], lk[i] ? 1 : 0);
-			}
-		}
-	}
+	parse_state_lines(f);   /* boucle commune boot+scène */
 	pthread_mutex_unlock(&g_st.target_lock);
 	fclose(f);
 	free(buf);
@@ -6711,88 +6732,7 @@ static void load_mixer_state(void)
 			      &rng, &hold) == 8)
 			exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
 	}
-	/* V13-COMP + BANDMIX (optionnels) — fgets+sscanf ligne à ligne :
-	 * les boucles fscanf à littéral mangent les PRÉFIXES des mots-clés
-	 * voisins ("bandmix" avale le début de "bandmix_live") et
-	 * désynchronisent le flux. Tester le mot-clé long AVANT le court. */
-	{
-		char bl[160];
-		int src, on, role, live, rv, al = 0;
-		float thr, ratio, atk, rel, mk, shr, sv[8];
-		int lk[8];
-		while (fgets(bl, sizeof(bl), f)) {
-			if (sscanf(bl, "comp %d %d %f %f %f %f %f",
-				   &src, &on, &thr, &ratio, &atk, &rel,
-				   &mk) == 7)
-				cmp_configure(src, on, thr, ratio, atk, rel, mk);
-			else if (sscanf(bl, "bandmix_live %d %d %d",
-					&live, &rv, &al) >= 2) {
-				g_bmx.ref_valid = rv ? 1 : 0;
-				g_bmx.live = (live && rv) ? 1 : 0;
-				g_bmx.autolive = al ? 1 : 0;   /* V13.5 */
-			} else if (sscanf(bl, "bandmix %d %d %f",
-					  &src, &role, &shr) == 3 &&
-				   src >= 0 && src < N_EXP_CH &&
-				   role >= 0 && role < BR_NROLES) {
-				g_bmx.role[src] = role;
-				g_bmx.ref_share[src] = shr;
-			} else if (sscanf(bl, "vfocus %d %f %f",
-					  &on, &atk, &rel) == 3) {
-				g_vf.on = on ? 1 : 0;
-				if (atk >= 0.0f && atk <= 100.0f)
-					g_vf.amount = atk / 100.0f;
-				if (rel >= 0.0f && rel <= 12.0f)
-					g_vf.max_cut_db = rel;
-			/* V13.9 (revue F15 + fiabilisation n°4) : restauration des
-			 * réglages V13.7-V13.9 — mêmes plages de validation que les
-			 * ops live ; meq_recalc = bascule crossfadée sans clic. */
-			} else if (sscanf(bl, "master_eq %f %f %f %f %f %f %f",
-					  &sv[0], &sv[1], &sv[2], &sv[3],
-					  &sv[4], &sv[5], &sv[6]) == 7) {
-				g_meq_p.low_hz = sv[0]; g_meq_p.low_db = sv[1];
-				g_meq_p.mid_hz = sv[2]; g_meq_p.mid_db = sv[3];
-				g_meq_p.mid_q  = sv[4];
-				g_meq_p.air_hz = sv[5]; g_meq_p.air_db = sv[6];
-				meq_recalc();
-				save_master_eq();   /* fichier dédié cohérent */
-			} else if (sscanf(bl, "automix_tune %f %f %f %f",
-					  &sv[0], &sv[1], &sv[2], &sv[3]) == 4) {
-				if (sv[0] >= 3.0f  && sv[0] <= 40.0f) g_bmx.freeze_db   = sv[0];
-				if (sv[1] >= 0.0f  && sv[1] <= 2.0f)  g_bmx.risk_decay  = sv[1];
-				if (sv[2] >= 0.0f  && sv[2] <= 12.0f) g_bmx.risk_margin = sv[2];
-				if (sv[3] >= 3.0f  && sv[3] <= 30.0f) g_bmx.gate_db     = sv[3];
-			} else if (sscanf(bl, "balance %d %f %f %f",
-					  &on, &sv[0], &sv[1], &sv[2]) == 4) {
-				g_bmx.balance_on = on ? 1 : 0;
-				if (sv[0] >= -30.0f && sv[0] <= -6.0f) g_bmx.bal_lufs_tgt = sv[0];
-				if (sv[1] >= -6.0f  && sv[1] <= 12.0f) g_bmx.bal_e_tgt   = sv[1];
-				if (sv[2] >= -6.0f  && sv[2] <= 12.0f) g_bmx.bal_c_tgt   = sv[2];
-			} else if (sscanf(bl, "vspatial %d %d %d",
-					  &on, &src, &role) == 3) {
-				atomic_store(&g_vspat.on, on ? 1 : 0);
-				if (src >= 0 && src <= 1000)
-					atomic_store(&g_vspat.amount_mq, src);
-				if (role >= 144 && role <= 1920)   /* 3..40 ms @48k */
-					atomic_store(&g_vspat.delay_smp, role);
-			} else if (sscanf(bl, "solo_auto %d", &on) == 1) {
-				g_bmx.solo_auto = on ? 1 : 0;
-			} else if (sscanf(bl, "sends %d %f %f %f %f %f %f %f %f",
-					  &src, &sv[0], &sv[1], &sv[2], &sv[3],
-					  &sv[4], &sv[5], &sv[6], &sv[7]) == 9 &&
-				   src >= 0 && src < N_INPUT_TOTAL) {
-				/* V13.1 : départs FX par tranche */
-				for (int b = 0; b < N_BUS_FX_CH && b < 8; b++)
-					if (sv[b] >= 0.0f && sv[b] <= 8.0f)
-						g_st.send_target[src][b] = sv[b];
-			} else if (sscanf(bl, "links %d %d %d %d %d %d %d %d",
-					  &lk[0], &lk[1], &lk[2], &lk[3],
-					  &lk[4], &lk[5], &lk[6], &lk[7]) == 8) {
-				/* V13.3 : liens stéréo */
-				for (int i = 0; i < N_LINK_PAIRS; i++)
-					atomic_store(&g_link[i], lk[i] ? 1 : 0);
-			}
-		}
-	}
+	parse_state_lines(f);   /* boucle commune boot+scène */
 done:
 	fclose(f);
 	mlog("state: mixer_state restauré (assistant=%d/%d mute=0x%x)", am, as, mm);

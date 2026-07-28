@@ -46,6 +46,12 @@ static void comp_recalc(struct comp_state *c)
 	c->release_coef = expf(-1.0f / (c->release_ms * 0.001f * c->sr));
 }
 
+/* NOTE (revue 2026-07-28, lot 5b) : ce compresseur d'INSERT n'est PAS un
+ * doublon de cmp_render (mixer-pro.c) — algorithmes distincts à dessein :
+ * ici enveloppe PAR ÉCHANTILLON + loi de gain LINÉAIRE (stéréo master,
+ * params fixes) ; cmp_render = crête par bloc + loi en dB + rampe anti-
+ * zipper (16 tranches mono, seuils adaptatifs). Fusion = changement du son
+ * validé des deux. */
 /* V9.3 : process_block — boucle sur N samples, état env_l/env_r persistant.
  * Loop simple float → auto-vectorisable par gcc -O2 (gcc -ftree-loop-vectorize
  * activé en O2 ; voir asm produit pour confirmer NEON). */
