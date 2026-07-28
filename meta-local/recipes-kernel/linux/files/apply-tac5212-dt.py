@@ -216,7 +216,29 @@ def disable_sai7(m):
     return block
 content = re.sub(r'&sai7 \{.*?\n\};', disable_sai7, content, flags=re.DOTALL)
 
+# Revue code 2026-07-28 (F11) : les substitutions regex ci-dessus peuvent
+# no-op SILENCIEUSEMENT si la forme du DTS NXP change. On ASSERT donc le
+# résultat final : chaque marqueur essentiel doit être présent, sinon échec
+# bruyant du build (règle projet : jamais de fallback silencieux).
+_required = [
+    ('sof-sound-tac5212',                 'noeud sound card absent (étape 2)'),
+    ('compatible = "fsl,imx-audio-card"', 'compatible imx-audio-card absent (étape 2)'),
+    ('compatible = "ti,tac5212"',         'codecs TAC5212 absents (étape 6)'),
+]
+for _marker, _why in _required:
+    if _marker not in content:
+        sys.exit(f"apply-tac5212-dt: VERIF FINALE ECHOUEE — {_why} "
+                 f"[marqueur '{_marker}'] : le DTS NXP a probablement changé "
+                 f"de forme, adapter les regex de ce script")
+if 'spdif_dit' in content:
+    sys.exit("apply-tac5212-dt: VERIF FINALE ECHOUEE — spdif_dit toujours "
+             "présent (étape 1 sans effet)")
+_m = re.search(r'&sai7 \{.*?\n\};', content, flags=re.DOTALL)
+if not _m or 'status = "disabled"' not in _m.group(0):
+    sys.exit("apply-tac5212-dt: VERIF FINALE ECHOUEE — sai7 non désactivé "
+             "(étape 9 sans effet)")
+
 with open(dts_path, 'w') as f:
     f.write(content)
 
-print("TAC5212 DT changes applied successfully")
+print("TAC5212 DT changes applied successfully (vérif finale OK)")

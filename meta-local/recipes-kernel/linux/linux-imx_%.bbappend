@@ -47,7 +47,10 @@ SRC_URI += "file://apply-tac5212-bq12-maxreg.py"
 
 # V7.0-E7.4.b — patch imx-card.c to leave link->id at sequential default
 # (upstream forces link->id from cpu DT args, breaks SOF topology matching)
-SRC_URI += "file://apply-imx-card-linkid.py"
+# Revue code 2026-07-28 (F12) : converti de apply-imx-card-linkid.py (sed
+# python) en .patch standard — auditable devtool, échec bruyant si contexte
+# kernel change.
+SRC_URI += "file://0001-imx-card-keep-sequential-link-id-for-SOF-topology.patch"
 
 # Install TAC5212 driver into kernel tree, patch Kconfig/Makefile and DTS
 do_patch:prepend() {
@@ -93,8 +96,7 @@ do_patch:append() {
     cp ${WORKDIR}/logo_ala_clut224.ppm ${S}/drivers/video/logo/logo_linux_clut224.ppm
     # V11-AL fix BQ12 (MAX_REG 0x7E→0x7F)
     python3 ${WORKDIR}/apply-tac5212-bq12-maxreg.py ${S}
-    # V7.0-E7.4.b imx-card link_id : keep sequential default for SOF tplg match
-    python3 ${WORKDIR}/apply-imx-card-linkid.py ${S}
+    # (imx-card link_id : désormais un .patch SRC_URI standard — F12)
 }
 
 # Force TAC5212 + SOF imx-probes + PREEMPT_RT config into .config after kernel configure

@@ -1,0 +1,34 @@
+From: A.L.A. project <michael.jouannigot@office.electrosens.fr>
+Subject: [PATCH] ASoC: imx-card: keep sequential link->id for SOF topology match
+
+V7.0-E7.4.b — imx-card.c sets link->id = args.args[0] (the DSP DAI index
+from the cpu sound-dai phandle). But SOF topology files use link_id as a
+sequential ASoC link identifier (sof-imx8mp-tac5212.tplg expects 0), so
+snd_soc_find_dai_link() fails with:
+  "ASoC: physical link tac5212-hifi (id 0) not exist" / probe error -22.
+simple-card.c leaves link->id at its zeroed default, which is the
+convention SOF relies on. Comment out the override; the DSP DAI is still
+selected via link->cpus[0].of_node.
+
+Converti du script apply-imx-card-linkid.py en .patch standard
+(revue code 2026-07-28, F12).
+
+---
+--- a/sound/soc/fsl/imx-card.c
++++ b/sound/soc/fsl/imx-card.c
+@@ -610,7 +610,14 @@
+ 		}
+ 
+ 		link->platforms->of_node = link->cpus->of_node;
+-		link->id = args.args[0];
++		/* V7.0-E7.4.b imx-card link_id : do NOT use args.args[0] as link->id.
++		 * SOF topology link_id is a sequential ASoC index (0,1,2...),
++		 * independent of the DSP DAI index from cpu sound-dai. Leaving
++		 * link->id at its default 0/sequential allocation matches the
++		 * convention used by simple-card and by SOF tplg files like
++		 * sof-imx8mp-tac5212.tplg (DAI_CONFIG(SAI, 7, 0, tac5212-hifi)).
++		 */
++		/* link->id = args.args[0]; */
+ 
+ 		codec = of_get_child_by_name(np, "codec");
+ 		if (codec) {

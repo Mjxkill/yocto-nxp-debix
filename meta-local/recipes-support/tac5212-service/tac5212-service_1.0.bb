@@ -1,4 +1,9 @@
 SUMMARY = "TAC5212 boot-time reset service and script"
+# PROPRIÉTÉ UNIQUE (revue code 2026-07-28, F7) : cette recette est la SEULE
+# source de tac-reset (script + service). Les copies historiques identiques
+# dans recipes-kernel/linux/files/ étaient des doublons morts (jamais
+# installés par le bbappend kernel) — supprimées. Le ExecStartPre de
+# mixer-pro.service appelle /usr/bin/tac-reset installé ICI.
 DESCRIPTION = "Installs tac-reset script and systemd service for automatic \
 TAC5212 codec initialization at boot"
 LICENSE = "MIT"
