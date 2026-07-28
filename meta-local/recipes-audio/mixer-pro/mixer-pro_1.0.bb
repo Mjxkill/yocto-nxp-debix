@@ -17,6 +17,8 @@ SRC_URI = " \
     file://util.h \
     file://dsp_bq.c \
     file://dsp_bq.h \
+    file://sampler.c \
+    file://sampler.h \
     file://effects.c \
     file://effects.h \
     file://analyzer.c \
