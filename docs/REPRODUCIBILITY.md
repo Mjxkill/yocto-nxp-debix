@@ -121,14 +121,15 @@ incrémentaux : 5-30 min.
 L'image `.wic` finale se trouve dans
 `Model_AB_Infinity/tmp/deploy/images/imx8mpevk/`.
 
-> **Dette connue** : actuellement `do_rootfs` échoue sur le package
-> `kernel-module-imx-audio-tap` qui n'est pas trouvé dans les feeds.
-> Le recipe existe dans `meta-local/recipes-kernel/imx-audio-tap/` mais
-> son packaging deb doit être audité. Workaround temporaire : commenter
-> la ligne `IMAGE_INSTALL:append = " kernel-module-imx-audio-tap"` dans
-> `meta-local/recipes-fsl/images/imx-image-full.bbappend` pour la
-> première build, puis le réactiver après diagnostic. Sans le module,
-> le NPU tap (`/dev/imx-audio-tap-in/-out`) n'est pas exposé.
+> **Dette RÉSOLUE (revue code 2026-07-28, F1)** : l'échec `do_rootfs` sur
+> `kernel-module-imx-audio-tap` venait de l'installation directe du paquet
+> versionné ; l'image installe désormais le méta-paquet `imx-audio-tap`
+> (qui RDEPENDS sur `kernel-module-imx-audio-tap-${KV}` via Provides deb).
+> Validé par build image complet 2026-07-28. Autres points reproductibilité
+> réglés à la même date : chromium/mixer-kiosk retirés de l'image (la layer
+> meta-chromium était de toute façon ignorée sous scarthgap — compat ≤
+> nanbield) ; `flash.bin` versionné dans
+> `meta-local/recipes-bsp/imx-mkimage/files/` avec garde-fou md5 au build.
 
 ---
 

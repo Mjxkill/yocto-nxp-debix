@@ -37,7 +37,7 @@ tac5212.pdf
 !docs/ARCHI/*.pdf
 
 # Build artefacts root
-flash.bin
+/flash.bin
 
 # Test scripts dir (per-board tests)
 build-imx8m/

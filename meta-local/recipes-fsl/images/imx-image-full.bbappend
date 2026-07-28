@@ -122,12 +122,16 @@ IMAGE_INSTALL:append = " python3-numpy python3-pyaudio"
 # ML / NPU stack (TIM-VX, TFLite VX delegate, nnstreamer, etc.)
 IMAGE_INSTALL:append = " packagegroup-imx-ml"
 
-# V10-P4b — Kiosk console sur écran DSI (GO valide, fiche TESTS_V10_P4a).
-# PRÉREQUIS bblayers.conf (fichier de build NON versionné) :
-#   BBLAYERS += "${BSPDIR}/sources/meta-browser/meta-chromium"
-# (couche clonée dans sources/meta-browser, branche compatible scarthgap)
-# chromium-ozone-wayland tire ses RDEPENDS (libcxx, nspr, nss, upower).
-IMAGE_INSTALL:append = " chromium-ozone-wayland mixer-kiosk"
+# IMAGE SANS CHROMIUM (décision projet, appliquée revue code 2026-07-28 F3/F10).
+# Le kiosk chromium embarqué (V10-P4b) est remplacé par la console native Qt6
+# mixer-console depuis V10-NATIVE. L'accès web pour les PC distants reste
+# assuré par mixer-gui-http : beta.html est 100 % autonome (zéro CDN) et
+# fonctionne en salle SANS internet. La recette mixer-kiosk reste dans le
+# repo (non installée). NB : meta-chromium (sources/meta-browser) est de
+# toute façon IGNORÉE silencieusement par bitbake sous scarthgap
+# (LAYERSERIES_COMPAT ≤ nanbield) — l'ancien build chromium reposait sur un
+# hack local non versionné, trou de reproductibilité désormais fermé.
+# IMAGE_INSTALL:append = " chromium-ozone-wayland mixer-kiosk"
 
 # V10-N4.4 — calibration tactile GT911 (générée par l'écran 5 mires)
 IMAGE_INSTALL:append = " goodix-calibration"
