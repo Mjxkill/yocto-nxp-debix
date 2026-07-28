@@ -25,10 +25,10 @@ mixer-pro: mixer-pro.c mixer-pro.h effects.c effects.h analyzer.c analyzer.h \
            mixer_pro_shm_tap.c mixer_pro_shm_tap.h \
            state.h util.c util.h dsp_bq.c dsp_bq.h sampler.c sampler.h \
            looper.c looper.h midix.c midix.h strip_dyn.c strip_dyn.h \
-           master.c master.h automix.c automix.h
+           master.c master.h automix.c automix.h voice.c voice.h dsp_block.h
 	$(CC) $(CFLAGS) $(LILV_CFLAGS) $(LDFLAGS) -o $@ \
 	    mixer-pro.c effects.c analyzer.c mixer_pro_shm_tap.c \
-	    util.c dsp_bq.c sampler.c looper.c midix.c strip_dyn.c master.c automix.c \
+	    util.c dsp_bq.c sampler.c looper.c midix.c strip_dyn.c master.c automix.c voice.c \
 	    $(LIBS) $(LILV_LIBS)
 
 mixerctl: mixerctl.c

@@ -29,6 +29,9 @@ SRC_URI = " \
     file://master.h \
     file://automix.c \
     file://automix.h \
+    file://voice.c \
+    file://voice.h \
+    file://dsp_block.h \
     file://effects.c \
     file://effects.h \
     file://analyzer.c \
