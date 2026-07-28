@@ -222,7 +222,23 @@ champs optionnels font des **updates partiels** (champ absent = inchangé).
 | `bandmix_role` | src, role (lead/choir/kick/…/line/off) |
 | `bandmix_measure` | src (12 s auto-stop ; -1 = annuler) |
 | `bandmix_calc` / `bandmix_lock` / `bandmix_live` | calcul / référence 30 s / keeper on-off |
-| `bandmix_status` | live, ref_valid, measuring+elapsed, par tranche : role/done/rms/floor/keeper_db |
+| `bandmix_status` | live, ref_valid, measuring+elapsed, solo/solo_auto/solo_is_auto, par tranche : role/done/rms/floor/keeper_db |
+
+### AUTOMIX LIVE V13.5→V13.9 (référence complète — ajoutée suite revue code 2026-07-28)
+
+Tous les champs sont OPTIONNELS (absent = inchangé) ; l'op sans champ = lecture
+de l'état courant. Les réponses renvoient toujours l'état complet.
+
+| Op | Champs (plage) | Rôle |
+|---|---|---|
+| `bandmix_autolive` | `on` 0/1 | Interrupteur automix continu. `on:1` = RESET : recale ancre, peak-holds (al_ref/risk), keepers, compteurs solo, staging — mais CONSERVE les gains de groupe (volume plein immédiat, exigence scène) et NE TOUCHE PAS aux réglages opérateur (vfocus…) |
+| `automix_tune` | `freeze_db` 3..40 · `risk_decay` 0..2 · `risk_margin` 0..12 · `gate_db` 3..30 | Tunables live : gel silence (¼ du max = 12), oubli mémoire crête (dB/s), marge plafond reprise, seuil gate auto (al_ref − gate_db, en dB crête) |
+| `set_balance` | `on` 0/1 · `lufs_tgt` −30..−6 · `e_tgt` −6..12 · **`c_tgt` −6..12** | Balance auto 3 groupes (table quadrants) : tient le master à `lufs_tgt` ET les écarts CIBLES voix−musique (`e_tgt`, +3 déf.) et chœurs−musique (`c_tgt`, +1,5 déf.). POSITIF = groupe voulu AU-DESSUS du lit musique. Réponse : cibles + gains appliqués `voice_db`/`choir_db`/`music_db` + `lufs` mesuré. Gel : aucune montée si programme < crête−3 dB ou groupe inactif |
+| `bandmix_solo` | `src` −1..15 · `auto` 0/1 | Solo : voie → ancre −1 dB, sans plafond risque, slew 3 dB/s. `src` pose un solo MANUEL (jamais relâché par l'auto) ; −1 = aucun. `auto` = détection v2 (voie > +6 dB au-dessus de SA propre base, voix muette) — OFF par défaut |
+| `set_vfocus` | `on` 0/1 · `amount` 0..100 | « Place à la voix » : creusement dynamique 250 Hz–4 kHz de la musique quand la voix chante. Réponse : `active`, `cuts_db[5]`, `max_cut_db` |
+| `set_vspatial` | `on` 0/1 · `amount` 0..100 · `delay_ms` 3..40 | Spatializer voix (widener Lauridsen LEAD+CHŒURS, compensé loudness, mono-compatible). OFF par défaut |
+| `master_eq` | `low_db/low_hz/mid_db/mid_hz/mid_q/air_db/air_hz` | EQ master 3 biquads (crossfade sans clic) ; sans champ = LECTURE seule (+ `makeup_db`, `lufs`). Persisté `/var/lib/mixer-pro/master_eq` |
+| `get_drift` / `reset_drift_stats` | — | Compteurs transport/RT : xruns, famines ring, corrections drift, jitter réveil, histogrammes d'itération |
 
 ### Sources internes
 | Op | Rôle |

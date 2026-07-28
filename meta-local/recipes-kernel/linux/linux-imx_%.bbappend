@@ -45,9 +45,6 @@ SRC_URI += "file://logo_ala_clut224.ppm"
 # jusqu'au reg 0x7F de sa page, le regmap rejetait le dernier octet (EIO)
 SRC_URI += "file://apply-tac5212-bq12-maxreg.py"
 
-# V7.0-E7.4.b — patch simple-card.c to support N codec phandles per DAI link
-# (upstream hardcodes num_codecs=1, blocking multi-TAC TDM binding)
-SRC_URI += "file://apply-simple-card-multicodec.py"
 # V7.0-E7.4.b — patch imx-card.c to leave link->id at sequential default
 # (upstream forces link->id from cpu DT args, breaks SOF topology matching)
 SRC_URI += "file://apply-imx-card-linkid.py"
@@ -94,10 +91,8 @@ do_patch:append() {
     python3 ${WORKDIR}/apply-panel-max-brightness.py ${S}
     # V10-N6e logo boot kernel A.L.A.
     cp ${WORKDIR}/logo_ala_clut224.ppm ${S}/drivers/video/logo/logo_linux_clut224.ppm
-    # V7.0-E7.4.b simple-card multi-codec support (idempotent, backward-compat)
     # V11-AL fix BQ12 (MAX_REG 0x7E→0x7F)
     python3 ${WORKDIR}/apply-tac5212-bq12-maxreg.py ${S}
-    python3 ${WORKDIR}/apply-simple-card-multicodec.py ${S}
     # V7.0-E7.4.b imx-card link_id : keep sequential default for SOF tplg match
     python3 ${WORKDIR}/apply-imx-card-linkid.py ${S}
 }
@@ -140,6 +135,16 @@ do_configure:append() {
         sed -i 's/^CONFIG_USB_GADGET_DEBUG=y/# CONFIG_USB_GADGET_DEBUG is not set/' "$cfg" 
 
         oe_runmake -C ${S} O=${B} olddefconfig
+
+        # Revue code 2026-07-28 (F2.1.1) : les sed ci-dessus sont des no-ops
+        # SILENCIEUX si le defconfig NXP change de forme — on ASSERT le
+        # résultat final au lieu d'espérer (règle : échouer visiblement).
+        if ! grep -q "^CONFIG_PREEMPT_RT=y" "$cfg"; then
+            bbfatal "PREEMPT_RT absent du .config final — le defconfig NXP a changé, adapter do_configure:append (linux-imx bbappend)"
+        fi
+        if grep -q "^CONFIG_USB_GADGET_DEBUG=y" "$cfg"; then
+            bbfatal "CONFIG_USB_GADGET_DEBUG=y toujours actif (poison printk UAC2, cf. V10-P4a) — adapter le sed"
+        fi
     fi
 }
 

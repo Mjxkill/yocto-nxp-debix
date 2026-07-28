@@ -2166,7 +2166,11 @@ static struct {
 } g_mk = { .makeup_mq = 1000, .lufs_c = -12000 };
 
 /* K-weighting ITU-R BS.1770 @ 48 kHz — coefficients canoniques (forme
- * transposée II, a0=1). Stage 1 = pré-filtre shelf tête ; stage 2 = RLB HP. */
+ * transposée II, a0=1). Stage 1 = pré-filtre shelf tête ; stage 2 = RLB HP.
+ * SOURCE (revue code 2026-07-28, F20) : Rec. UIT-R BS.1770-4 (10/2015),
+ * §1 Annexe 1, Tableaux 1 et 2 — valeurs EXACTES de la norme pour fs=48 kHz
+ * (reprises telles quelles par libebur128). Ne PAS les recalculer : toute
+ * dérivation maison doit être validée contre ces valeurs de référence. */
 #define K1_B0   1.53512485958697f
 #define K1_B1  (-2.69169618940638f)
 #define K1_B2   1.19839281085285f
@@ -2300,6 +2304,11 @@ static struct {
 	 * lt_ms par groupe). Agit sur presence_gain, le makeup LUFS tient −14. */
 	int    balance_on;                /* balance auto active */
 	float  bal_lufs_tgt;              /* cible LUFS master (−14) */
+	/* bal_e_tgt / bal_c_tgt = CIBLES d'écart de loudness « groupe − musique »
+	 * en dB, PAS des erreurs : valeur POSITIVE = le groupe est voulu AU-DESSUS
+	 * du lit musique (design validé oreille : voix +3, chœurs +1,5). Plage
+	 * [−6..+12] : négatif autorisé pour reculer un groupe si besoin. Op
+	 * set_balance {lufs_tgt, e_tgt, c_tgt} — cf. MIXER_PRO_REFERENCE.md. */
 	float  bal_e_tgt;                 /* cible écart voix lead−musique (+3 dB) */
 	float  bal_c_tgt;                 /* cible écart chœurs−musique (+1,5 dB) */
 	float  g_voice_db;                /* gain groupe VOIX LEAD courant (dB) */
