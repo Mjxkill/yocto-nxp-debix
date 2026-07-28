@@ -29,7 +29,7 @@
 /* RÈGLE (revue code 2026-07-28, F4) : cette version DOIT être bumpée à
  * chaque évolution — c'est le repère de debug board (op get_state). Elle
  * était restée à v9.5.12 pendant 4 versions majeures. */
-#define MIXER_VERSION  "v13.9-automix-live"
+#define MIXER_VERSION  "v14.0-modules"
 
 /* E6.g Phase 2 + E6.h tuning : ring buffer SPSC entre thread audio (cap+mix)
  * et thread play DSP. Taille = N_RING_PERIODS périodes × 18 ch × 4 B.

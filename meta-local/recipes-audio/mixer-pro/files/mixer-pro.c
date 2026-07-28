@@ -43,122 +43,16 @@
 #include "mixer-pro.h"
 #include "effects.h"
 #include "analyzer.h"
+#include "state.h"    /* V14.0 étape 0 : struct mixer_state + extern g_st */
+#include "util.h"     /* V14.0 étape 0 : mlog, pcm_open, pcm_recover, s32↔f */
+#include "dsp_bq.h"   /* V14.0 étape 0 : biquads RBJ (eqx_bq, designers) */
 
 /* ============================== State ============================== */
+/* struct alsa_pcm + struct mixer_state : déplacées dans state.h (V14.0
+ * étape 0). L'instance globale reste définie ICI — state.h ne porte que
+ * les types et l'extern. */
 
-struct alsa_pcm {
-	const char *name;
-	snd_pcm_t  *pcm;
-	int         channels;
-	int         is_capture;
-};
-
-struct mixer_state {
-	/* ALSA streams */
-	struct alsa_pcm cap_dsp, cap_uac2, cap_phone;
-	struct alsa_pcm play_dsp, play_uac2, play_phone;
-
-	/* Matrices — gain courant (utilisé par le DSP), gain cible (set par socket) */
-	float send_gain[N_INPUT_TOTAL][N_BUS_FX_CH];
-	float send_target[N_INPUT_TOTAL][N_BUS_FX_CH];
-
-	float master_gain[N_INPUT_TOTAL][N_OUTPUT_TOTAL];
-	float master_target[N_INPUT_TOTAL][N_OUTPUT_TOTAL];
-
-	float fx_bus_gain[N_BUS_FX_CH];   /* gain bus output (post-effet, dry/wet implicite) */
-	float fx_bus_target[N_BUS_FX_CH];
-
-	/* E7.2 : strip gain par input (DAW channel fader). S'applique AVANT
-	 * sends + master, donc affecte uniformément FX sends et master routing.
-	 * Indexé 0..N_INPUT_TOTAL-1 = 18 inputs réels + 8 returns.
-	 */
-	float input_gain[N_INPUT_TOTAL];
-	float input_target[N_INPUT_TOTAL];
-
-	/* V12-AMX — automix Dugan (gain sharing). L'auto-gain COMPOSE avec
-	 * le fader (multiplicateur séparé, jamais input_target). Non-membre
-	 * ⇒ automix_gain ≡ 1.0 (chemin identique à avant). Énergie mesurée
-	 * POST-fader (E_i × ig²) : une tranche baissée ne vole pas de part
-	 * de gain aux micros actifs (raffinement critic). */
-	int   automix_on;                       /* global (écrit ctl, lu audio) */
-	float automix_resp_ms;                  /* slew des gains (déf. 100) */
-	float automix_floor;                    /* plancher lin (déf. −15 dB) */
-	int   automix_member[N_INPUT_TOTAL];
-	float automix_weight[N_INPUT_TOTAL];    /* lin (déf. 1.0) */
-	float automix_env[N_INPUT_TOTAL];       /* enveloppe énergie (audio) */
-	float automix_gain[N_INPUT_TOTAL];      /* lissé, appliqué (audio) */
-	float automix_gtarget[N_INPUT_TOTAL];   /* cible Dugan par bloc */
-	/* V13-BANDMIX : trim du keeper live (±3 dB, slew lent, jamais
-	 * les faders). Multiplié partout où automix_gain l'est. */
-	float keeper_gain[N_INPUT_TOTAL];
-	float keeper_target[N_INPUT_TOTAL];
-	/* V13.9 — BALANCE AUTO : gain de « présence » par voie (voix lead /
-	 * chœurs tenus à un écart cible au-dessus du lit musique). Multiplié
-	 * dans le master comme keeper_gain. 1.0 = neutre (instruments). */
-	float presence_gain[N_INPUT_TOTAL];
-	float presence_target[N_INPUT_TOTAL];
-
-	/* E6.e : 1 moteur d'effet par bus (4 bus × stéréo, géré par fx_engine).
-	 * Defaults : 0=compressor, 1=reverb, 2=delay, 3=eq.
-	 */
-	fx_engine_t fx_engines[N_BUS_FX];
-
-	uint32_t mute_mask;              /* bit i = mute src i (32 bits, 26 src réels < 32 OK) */
-
-	/* Smoothing : ramp counter par cellule = bof, on fait un ramp global frame-par-frame */
-	uint32_t ramp_pos;               /* 0..GAIN_RAMP_FRAMES, 0 = pas de ramp en cours */
-
-	/* Lock pour writes depuis le thread control */
-	pthread_mutex_t target_lock;
-
-	/* Stats */
-	atomic_ulong frames_processed;
-	atomic_ulong xrun_count;
-	atomic_int   running;
-
-	/* E6.f profiling : timings en microsecondes du dernier cycle complet.
-	 * Permet d'identifier le hotspot (cap_read vs mix vs play_write).
-	 */
-	atomic_long  last_cap_read_us;
-	atomic_long  last_mix_us;
-	atomic_long  last_play_write_us;
-	atomic_long  last_iter_us;
-
-	/* E6.g Phase 2 : ring buffer SPSC (single producer = thread audio,
-	 * single consumer = thread play DSP). Interleaved 8 ch S32_LE.
-	 * write_idx avance par thread audio, read_idx par thread play.
-	 * Lockfree : ARM64 atomic 32-bit suffit (uint32 aligned).
-	 */
-	int32_t      ring_buf[RING_FRAMES * N_OUTPUT_DSP];
-	atomic_uint  ring_write_idx;
-	atomic_uint  ring_read_idx;
-	atomic_ulong ring_drops;          /* nb de samples écrasés (ring full) */
-
-	/* E6.h : eventfd signalé par audio_thread après push, attendu par
-	 * play_thread → wakeup immédiat sans polling nanosleep.
-	 */
-	int          ring_event_fd;
-
-	/* E7.1 : peak meters par voie (uint32 raw abs S32_LE).
-	 * Calculés post-mix dans audio_thread, lus par control_thread (op get_meters).
-	 * memory_order_relaxed suffit : usage purement visuel, pas de synchro corrélée.
-	 * Decay backend ≈ 12 dB/s appliqué par bloc 2 ms (× 0.9375).
-	 */
-	atomic_uint  peak_in[N_INPUT_TOTAL];    /* 26 voies */
-	atomic_uint  peak_out[N_OUTPUT_TOTAL];  /* 18 voies */
-	atomic_uint  peak_fx[N_BUS_FX_CH];      /* 8 voies post-FX (returns) */
-};
-
-/* E6.f : sanity check atomicité (suggestion critic #2) :
- * sur ARM64 aligned 4-byte float load/store sont atomiques de facto.
- */
-_Static_assert(sizeof(float) == 4, "float must be 4 bytes for atomicity assumption");
-_Static_assert(_Alignof(float) <= 4, "float alignment compatible with atomicity");
-
-static struct mixer_state g_st;
-
-/* Forward decl pour les threads UAC2 (mlog défini plus bas) */
-static void mlog(const char *fmt, ...);
+struct mixer_state g_st;   /* instance unique — extern dans state.h */
 
 /* V8.1.b — Mesure passive du drift USB ↔ DSP (un seul drift, car même
  * horloge USB host pour cap et play). Le thread cap_uac2_thread compte
@@ -1214,97 +1108,10 @@ static _Atomic int g_assistant_mode   = 0;
 static _Atomic int g_assistant_source = 0;
 /* g_no_asrc déclaré plus haut près de g_shift_ppm */
 
-/* ============================== Logging ============================ */
-
-static void mlog(const char *fmt, ...)
-{
-	va_list ap;
-	va_start(ap, fmt);
-	vfprintf(stderr, fmt, ap);
-	fputc('\n', stderr);
-	va_end(ap);
-}
-
-/* ============================== ALSA helpers ======================= */
-
-static int pcm_open(struct alsa_pcm *p, const char *name, int channels,
-		    snd_pcm_stream_t dir)
-{
-	int err;
-	snd_pcm_hw_params_t *hw;
-
-	p->name = name;
-	p->channels = channels;
-	p->is_capture = (dir == SND_PCM_STREAM_CAPTURE);
-
-	err = snd_pcm_open(&p->pcm, name, dir, 0);
-	if (err < 0) {
-		mlog("open(%s, %s): %s", name,
-		     p->is_capture ? "capture" : "playback", snd_strerror(err));
-		return err;
-	}
-
-	snd_pcm_hw_params_alloca(&hw);
-	snd_pcm_hw_params_any(p->pcm, hw);
-	snd_pcm_hw_params_set_access(p->pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
-	snd_pcm_hw_params_set_format(p->pcm, hw, SND_PCM_FORMAT_S32_LE);
-	snd_pcm_hw_params_set_channels(p->pcm, hw, channels);
-	unsigned rate = SAMPLE_RATE;
-	snd_pcm_hw_params_set_rate_near(p->pcm, hw, &rate, NULL);
-	snd_pcm_uframes_t period = PERIOD_FRAMES, buffer = BUFFER_FRAMES;
-	snd_pcm_hw_params_set_period_size_near(p->pcm, hw, &period, NULL);
-	snd_pcm_hw_params_set_buffer_size_near(p->pcm, hw, &buffer);
-	err = snd_pcm_hw_params(p->pcm, hw);
-	if (err < 0) {
-		mlog("hw_params(%s): %s", name, snd_strerror(err));
-		return err;
-	}
-
-	/* sw_params : forcer start_threshold = 1 period pour que le PLAY démarre
-	 * dès le 1er write (sinon auto-start au buffer plein → jamais en mode
-	 * "write one period at a time"). Idem côté cap : avail_min = 1 period.
-	 */
-	snd_pcm_sw_params_t *sw;
-	snd_pcm_sw_params_alloca(&sw);
-	snd_pcm_sw_params_current(p->pcm, sw);
-	snd_pcm_sw_params_set_start_threshold(p->pcm, sw,
-		p->is_capture ? 1 : (snd_pcm_uframes_t)period);
-	snd_pcm_sw_params_set_avail_min(p->pcm, sw, (snd_pcm_uframes_t)period);
-	/* V8.26 — activer le HW timestamping pour mesurer drift précis
-	 * via snd_pcm_status_get_audio_htstamp(). */
-	snd_pcm_sw_params_set_tstamp_mode(p->pcm, sw, SND_PCM_TSTAMP_ENABLE);
-	snd_pcm_sw_params_set_tstamp_type(p->pcm, sw, SND_PCM_TSTAMP_TYPE_MONOTONIC);
-	err = snd_pcm_sw_params(p->pcm, sw);
-	if (err < 0) {
-		mlog("sw_params(%s): %s", name, snd_strerror(err));
-		return err;
-	}
-
-	mlog("opened %s : %s %dch S32_LE @ %u Hz period=%lu buffer=%lu",
-	     name, p->is_capture ? "cap" : "play", channels, rate,
-	     period, buffer);
-	return 0;
-}
-
-static int pcm_recover(snd_pcm_t *pcm, int err)
-{
-	atomic_fetch_add(&g_st.xrun_count, 1);
-	return snd_pcm_recover(pcm, err, 1);
-}
+/* Logging (mlog) + ALSA helpers (pcm_open, pcm_recover) + conversions
+ * s32↔float : déplacés dans util.c/util.h (V14.0 étape 0). */
 
 /* ============================== Mixer core ========================= */
-
-static inline float s32_to_f(int32_t s)
-{
-	return (float)s / 2147483648.0f;
-}
-
-static inline int32_t f_to_s32(float f)
-{
-	if (f >  0.999999f) f =  0.999999f;
-	if (f < -1.0f)      f = -1.0f;
-	return (int32_t)(f * 2147483648.0f);
-}
 
 /* ================= V12-SMP — sampleur (page PADS) =================
  * WAVs de /var/lib/ala/samples préchargés en RAM (control thread),
@@ -2069,7 +1876,8 @@ static const float COMP_OFF[BR_NROLES] = {
 /* 3 biquads par voix = parité avec les mics TAC (mode 3 Biquads/Ch) :
  * HPF + 2 cloches (présence/creusement + modelage). */
 #define EQX_BQ 3
-struct eqx_bq { float b0, b1, b2, a1, a2; };
+/* struct eqx_bq + designers RBJ (eqx_hpf, rbj_peak_core, eqx_peak,
+ * meq_shelf) : déplacés dans dsp_bq.c/dsp_bq.h (V14.0 étape 0). */
 static struct {
 	struct eqx_bq bq[2][N_EXP_CH][EQX_BQ];  /* double-buffer : bascule sans clic */
 	_Atomic int   bank[N_EXP_CH];           /* banque active par voie */
@@ -2098,33 +1906,6 @@ static const struct {
 	[BR_LINE]   = { 80,  0, 0, 0,  0, 0, 0 },
 };
 
-static void eqx_hpf(struct eqx_bq *q, float fc)
-{
-	if (fc <= 0.0f) { *q = (struct eqx_bq){ 1, 0, 0, 0, 0 }; return; }
-	float w = 2.0f * (float)M_PI * fc / (float)SAMPLE_RATE;
-	float cw = cosf(w), sw = sinf(w), al = sw / (2.0f * 0.707f);
-	float a0 = 1.0f + al;
-	q->b0 = (1.0f + cw) / 2.0f / a0;  q->b1 = -(1.0f + cw) / a0;
-	q->b2 = (1.0f + cw) / 2.0f / a0;
-	q->a1 = -2.0f * cw / a0;          q->a2 = (1.0f - al) / a0;
-}
-/* NOYAU peaking RBJ commun (revue 2026-07-28, lot 5b) : une seule formule
- * dans le moteur. Prend cos(w) et alpha déjà calculés pour servir aussi le
- * chemin RT du vfocus (cos/sin précalculés à l'init, appel par bloc). */
-static void rbj_peak_core(struct eqx_bq *q, float cw, float al, float A)
-{
-	float a0 = 1.0f + al / A;
-	q->b0 = (1.0f + al * A) / a0;  q->b1 = -2.0f * cw / a0;
-	q->b2 = (1.0f - al * A) / a0;
-	q->a1 = -2.0f * cw / a0;        q->a2 = (1.0f - al / A) / a0;
-}
-static void eqx_peak(struct eqx_bq *q, float fc, float gdb, float Q)
-{
-	if (fc <= 0.0f || gdb == 0.0f) { *q = (struct eqx_bq){ 1, 0, 0, 0, 0 }; return; }
-	float A = powf(10.0f, gdb / 40.0f);
-	float w = 2.0f * (float)M_PI * fc / (float)SAMPLE_RATE;
-	rbj_peak_core(q, cosf(w), sinf(w) / (2.0f * Q), A);
-}
 static void eqx_config(int i, int role)   /* control thread (rare) */
 {
 	/* calcule dans la banque INACTIVE puis bascule atomiquement : l'audio ne
@@ -2194,35 +1975,6 @@ static struct {
 #define K2_B2   1.0f
 #define K2_A1  (-1.99004745483398f)
 #define K2_A2   0.99007225036621f
-
-static void meq_shelf(struct eqx_bq *q, float fc, float gdb, int high)
-{
-	if (fc <= 0.0f || gdb == 0.0f) { *q = (struct eqx_bq){ 1, 0, 0, 0, 0 }; return; }
-	float A  = powf(10.0f, gdb / 40.0f);
-	float w  = 2.0f * (float)M_PI * fc / (float)SAMPLE_RATE;
-	float cw = cosf(w), sw = sinf(w);
-	float al = sw * 0.5f * 1.41421356f;          /* S=1 → alpha = sw/2·√2 */
-	float tsa = 2.0f * sqrtf(A) * al;
-	float ap1 = A + 1.0f, am1 = A - 1.0f;
-	float b0, b1, b2, a0, a1, a2;
-	if (high) {
-		b0 =  A * (ap1 + am1 * cw + tsa);
-		b1 = -2.0f * A * (am1 + ap1 * cw);
-		b2 =  A * (ap1 + am1 * cw - tsa);
-		a0 =        ap1 - am1 * cw + tsa;
-		a1 =  2.0f * (am1 - ap1 * cw);
-		a2 =        ap1 - am1 * cw - tsa;
-	} else {
-		b0 =  A * (ap1 - am1 * cw + tsa);
-		b1 =  2.0f * A * (am1 - ap1 * cw);
-		b2 =  A * (ap1 - am1 * cw - tsa);
-		a0 =        ap1 + am1 * cw + tsa;
-		a1 = -2.0f * (am1 + ap1 * cw);
-		a2 =        ap1 + am1 * cw - tsa;
-	}
-	q->b0 = b0 / a0; q->b1 = b1 / a0; q->b2 = b2 / a0;
-	q->a1 = a1 / a0; q->a2 = a2 / a0;
-}
 
 static void meq_compute(int bank)
 {

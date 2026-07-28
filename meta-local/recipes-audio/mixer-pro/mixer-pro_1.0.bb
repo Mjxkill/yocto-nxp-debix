@@ -12,6 +12,11 @@ LIC_FILES_CHKSUM = "file://mixer-pro.c;beginline=1;endline=2;md5=cfa333c28b94c54
 SRC_URI = " \
     file://mixer-pro.c \
     file://mixer-pro.h \
+    file://state.h \
+    file://util.c \
+    file://util.h \
+    file://dsp_bq.c \
+    file://dsp_bq.h \
     file://effects.c \
     file://effects.h \
     file://analyzer.c \

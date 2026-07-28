@@ -19,10 +19,14 @@ all: mixer-pro mixerctl ml_features_test
 # V9.5.12 — mixer-pro NE link plus tensorflow-lite (TFLite causait freeze
 # kernel via VX delegate + galcore + audio_thread RT99). L'inférence ML
 # est faite par le daemon mixer-ml-inference (process séparé).
+# V14.0 étape 0 — modules extraits : state.h (état partagé), util.c (log +
+# helpers ALSA), dsp_bq.c (biquads RBJ). ARCHI_V14_RESTRUCTURATION.md.
 mixer-pro: mixer-pro.c mixer-pro.h effects.c effects.h analyzer.c analyzer.h \
-           mixer_pro_shm_tap.c mixer_pro_shm_tap.h
+           mixer_pro_shm_tap.c mixer_pro_shm_tap.h \
+           state.h util.c util.h dsp_bq.c dsp_bq.h
 	$(CC) $(CFLAGS) $(LILV_CFLAGS) $(LDFLAGS) -o $@ \
 	    mixer-pro.c effects.c analyzer.c mixer_pro_shm_tap.c \
+	    util.c dsp_bq.c \
 	    $(LIBS) $(LILV_LIBS)
 
 mixerctl: mixerctl.c
