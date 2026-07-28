@@ -6,6 +6,11 @@ Requires=mixer-pro.service
 # Sans lui, Requires arrêtait le daemon (exit 0) à chaque restart de
 # mixer-pro SANS le redémarrer → mastering transparent (enveloppe NPU
 # figée à 0), constaté 2026-07-11.
+# V13.9 : mixer-pro a en plus Wants=mixer-ml-inference (le START le remonte
+# après un stop+start de déploiement — PartOf ne propage pas le start).
+# Le risque d'oscillation Wants+PartOf+Requires soulevé par la revue de code
+# 2026-07-28 a été TESTÉ empiriquement le 28/07 : 3 restarts de mixer-pro →
+# 3 cycles stop→start uniques et propres, NRestarts=0, aucun rebond.
 PartOf=mixer-pro.service
 
 [Service]

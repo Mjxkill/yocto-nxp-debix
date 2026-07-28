@@ -4996,8 +4996,11 @@ static void handle_cmd(int fd, const char *line)
 			g_bmx.solo_is_auto = 0;
 			g_bmx.solo_on_cnt = g_bmx.solo_off_cnt = 0;
 		}
-		if (json_get_int(line, "auto", &iv) >= 0)
+		if (json_get_int(line, "auto", &iv) >= 0) {
 			g_bmx.solo_auto = iv ? 1 : 0;
+			/* seul le choix auto est persisté (pas le solo ponctuel) */
+			atomic_store(&g_presets_dirty, 1);
+		}
 		dprintf(fd, "{\"ok\":true,\"op\":\"bandmix_solo\",\"src\":%d,"
 			"\"auto\":%d,\"is_auto\":%d}\n",
 			g_bmx.solo_src, g_bmx.solo_auto, g_bmx.solo_is_auto);
@@ -5641,6 +5644,8 @@ static void handle_cmd(int fd, const char *line)
 		             * pas de crossfade ni d'écriture flash sur un poll GUI) */
 			meq_recalc();
 			save_master_eq();
+			atomic_store(&g_presets_dirty, 1);   /* V13.9 : EQ aussi
+			                                      * dans l'état/scènes */
 		}
 		dprintf(fd, "{\"ok\":true,\"op\":\"master_eq\","
 			"\"low_db\":%.2f,\"low_hz\":%.1f,\"mid_db\":%.2f,"
@@ -5655,15 +5660,17 @@ static void handle_cmd(int fd, const char *line)
 		/* V13.9 — tunables automix réglables en LIVE (R&D) :
 		 * {"op":"automix_tune","freeze_db":..,"risk_decay":..,"risk_margin":..}
 		 * champs absents = inchangés ; sans champ = lecture. */
-		float v;
+		float v; int chg = 0;
 		if (json_get_float(line, "freeze_db",   &v) >= 0 && v >= 3.0f && v <= 40.0f)
-			g_bmx.freeze_db = v;
+			{ g_bmx.freeze_db = v; chg = 1; }
 		if (json_get_float(line, "risk_decay",  &v) >= 0 && v >= 0.0f && v <= 2.0f)
-			g_bmx.risk_decay = v;
+			{ g_bmx.risk_decay = v; chg = 1; }
 		if (json_get_float(line, "risk_margin", &v) >= 0 && v >= 0.0f && v <= 12.0f)
-			g_bmx.risk_margin = v;
+			{ g_bmx.risk_margin = v; chg = 1; }
 		if (json_get_float(line, "gate_db", &v) >= 0 && v >= 3.0f && v <= 30.0f)
-			g_bmx.gate_db = v;
+			{ g_bmx.gate_db = v; chg = 1; }
+		if (chg)   /* pollé en lecture par la GUI : dirty SEULEMENT si set */
+			atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"op\":\"automix_tune\",\"freeze_db\":%.1f,"
 			"\"risk_decay\":%.3f,\"risk_margin\":%.1f,\"gate_db\":%.1f}\n",
 			g_bmx.freeze_db, g_bmx.risk_decay, g_bmx.risk_margin,
@@ -5673,17 +5680,25 @@ static void handle_cmd(int fd, const char *line)
 		/* V13.9 — spatializer voix (widener Lauridsen LEAD+CHŒURS) :
 		 * {"op":"set_vspatial","on":0/1,"amount":0..100,"delay_ms":3..40}
 		 * champs absents = inchangés ; toujours renvoie l'état courant. */
-		int iv; float v;
-		if (json_get_int(line, "on", &iv) >= 0)
+		int iv; float v; int chg = 0;
+		if (json_get_int(line, "on", &iv) >= 0) {
 			atomic_store_explicit(&g_vspat.on, iv ? 1 : 0,
 					      memory_order_relaxed);
-		if (json_get_float(line, "amount", &v) >= 0 && v >= 0.0f && v <= 100.0f)
+			chg = 1;
+		}
+		if (json_get_float(line, "amount", &v) >= 0 && v >= 0.0f && v <= 100.0f) {
 			atomic_store_explicit(&g_vspat.amount_mq, (int)(v * 10.0f + 0.5f),
 					      memory_order_relaxed);
-		if (json_get_float(line, "delay_ms", &v) >= 0 && v >= 3.0f && v <= 40.0f)
+			chg = 1;
+		}
+		if (json_get_float(line, "delay_ms", &v) >= 0 && v >= 3.0f && v <= 40.0f) {
 			atomic_store_explicit(&g_vspat.delay_smp,
 					      (int)(v * SAMPLE_RATE / 1000.0f),
 					      memory_order_relaxed);
+			chg = 1;
+		}
+		if (chg)   /* pollé en lecture par la GUI : dirty SEULEMENT si set */
+			atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_vspatial\",\"on\":%d,"
 			"\"amount\":%.0f,\"delay_ms\":%.1f}\n",
 			atomic_load_explicit(&g_vspat.on, memory_order_relaxed),
@@ -5696,15 +5711,17 @@ static void handle_cmd(int fd, const char *line)
 		 * écart voix−musique = e_tgt en bougeant les gains de groupe.
 		 * {"op":"set_balance","on":0/1,"lufs_tgt":-30..-6,"e_tgt":-6..12}
 		 * absent=inchangé. Renvoie l'état + gains groupe + LUFS mesuré. */
-		int iv; float v;
+		int iv; float v; int chg = 0;
 		if (json_get_int(line, "on", &iv) >= 0)
-			g_bmx.balance_on = iv ? 1 : 0;
+			{ g_bmx.balance_on = iv ? 1 : 0; chg = 1; }
 		if (json_get_float(line, "lufs_tgt", &v) >= 0 && v >= -30.0f && v <= -6.0f)
-			g_bmx.bal_lufs_tgt = v;
+			{ g_bmx.bal_lufs_tgt = v; chg = 1; }
 		if (json_get_float(line, "e_tgt", &v) >= 0 && v >= -6.0f && v <= 12.0f)
-			g_bmx.bal_e_tgt = v;
+			{ g_bmx.bal_e_tgt = v; chg = 1; }
 		if (json_get_float(line, "c_tgt", &v) >= 0 && v >= -6.0f && v <= 12.0f)
-			g_bmx.bal_c_tgt = v;
+			{ g_bmx.bal_c_tgt = v; chg = 1; }
+		if (chg)   /* pollé en lecture par la GUI : dirty SEULEMENT si set */
+			atomic_store(&g_presets_dirty, 1);
 		dprintf(fd, "{\"ok\":true,\"op\":\"set_balance\",\"on\":%d,"
 			"\"lufs_tgt\":%.1f,\"e_tgt\":%.1f,\"c_tgt\":%.1f,"
 			"\"voice_db\":%.1f,\"choir_db\":%.1f,\"music_db\":%.1f,"
@@ -6316,6 +6333,21 @@ static void save_state_to(const char *path)
 		g_bmx.autolive);   /* V13.5 : 3e champ autolive (rétro-compat) */
 	fprintf(f, "vfocus %d %.0f %.1f\n", g_vf.on,
 		g_vf.amount * 100.0f, g_vf.max_cut_db);
+	/* V13.9 (revue F15 + fiabilisation n°4) : persistance des réglages
+	 * V13.7-V13.9 — EQ master, tunables automix, balance, spatializer,
+	 * solo auto. Lignes ignorées par les anciens loaders (rétro-compat). */
+	fprintf(f, "master_eq %.1f %.1f %.1f %.1f %.2f %.1f %.1f\n",
+		g_meq_p.low_hz, g_meq_p.low_db, g_meq_p.mid_hz, g_meq_p.mid_db,
+		g_meq_p.mid_q, g_meq_p.air_hz, g_meq_p.air_db);
+	fprintf(f, "automix_tune %.1f %.3f %.1f %.1f\n", g_bmx.freeze_db,
+		g_bmx.risk_decay, g_bmx.risk_margin, g_bmx.gate_db);
+	fprintf(f, "balance %d %.1f %.1f %.1f\n", g_bmx.balance_on,
+		g_bmx.bal_lufs_tgt, g_bmx.bal_e_tgt, g_bmx.bal_c_tgt);
+	fprintf(f, "vspatial %d %d %d\n",
+		(int)atomic_load(&g_vspat.on),
+		(int)atomic_load(&g_vspat.amount_mq),
+		(int)atomic_load(&g_vspat.delay_smp));
+	fprintf(f, "solo_auto %d\n", g_bmx.solo_auto);
 	/* V13.1 : matrice des sends par tranche (départs FX) — trouvé absent
 	 * par la campagne de validation. En FIN de fichier, une ligne par
 	 * tranche, parsé par la boucle fgets des loaders (états antérieurs
@@ -6475,6 +6507,39 @@ tail:
 					g_vf.amount = atk / 100.0f;
 				if (rel >= 0.0f && rel <= 12.0f)
 					g_vf.max_cut_db = rel;
+			/* V13.9 (revue F15 + fiabilisation n°4) : restauration des
+			 * réglages V13.7-V13.9 — mêmes plages de validation que les
+			 * ops live ; meq_recalc = bascule crossfadée sans clic. */
+			} else if (sscanf(bl, "master_eq %f %f %f %f %f %f %f",
+					  &sv[0], &sv[1], &sv[2], &sv[3],
+					  &sv[4], &sv[5], &sv[6]) == 7) {
+				g_meq_p.low_hz = sv[0]; g_meq_p.low_db = sv[1];
+				g_meq_p.mid_hz = sv[2]; g_meq_p.mid_db = sv[3];
+				g_meq_p.mid_q  = sv[4];
+				g_meq_p.air_hz = sv[5]; g_meq_p.air_db = sv[6];
+				meq_recalc();
+				save_master_eq();   /* fichier dédié cohérent */
+			} else if (sscanf(bl, "automix_tune %f %f %f %f",
+					  &sv[0], &sv[1], &sv[2], &sv[3]) == 4) {
+				if (sv[0] >= 3.0f  && sv[0] <= 40.0f) g_bmx.freeze_db   = sv[0];
+				if (sv[1] >= 0.0f  && sv[1] <= 2.0f)  g_bmx.risk_decay  = sv[1];
+				if (sv[2] >= 0.0f  && sv[2] <= 12.0f) g_bmx.risk_margin = sv[2];
+				if (sv[3] >= 3.0f  && sv[3] <= 30.0f) g_bmx.gate_db     = sv[3];
+			} else if (sscanf(bl, "balance %d %f %f %f",
+					  &on, &sv[0], &sv[1], &sv[2]) == 4) {
+				g_bmx.balance_on = on ? 1 : 0;
+				if (sv[0] >= -30.0f && sv[0] <= -6.0f) g_bmx.bal_lufs_tgt = sv[0];
+				if (sv[1] >= -6.0f  && sv[1] <= 12.0f) g_bmx.bal_e_tgt   = sv[1];
+				if (sv[2] >= -6.0f  && sv[2] <= 12.0f) g_bmx.bal_c_tgt   = sv[2];
+			} else if (sscanf(bl, "vspatial %d %d %d",
+					  &on, &src, &role) == 3) {
+				atomic_store(&g_vspat.on, on ? 1 : 0);
+				if (src >= 0 && src <= 1000)
+					atomic_store(&g_vspat.amount_mq, src);
+				if (role >= 144 && role <= 1920)   /* 3..40 ms @48k */
+					atomic_store(&g_vspat.delay_smp, role);
+			} else if (sscanf(bl, "solo_auto %d", &on) == 1) {
+				g_bmx.solo_auto = on ? 1 : 0;
 			} else if (sscanf(bl, "sends %d %f %f %f %f %f %f %f %f",
 					  &src, &sv[0], &sv[1], &sv[2], &sv[3],
 					  &sv[4], &sv[5], &sv[6], &sv[7]) == 9 &&
@@ -6678,6 +6743,39 @@ static void load_mixer_state(void)
 					g_vf.amount = atk / 100.0f;
 				if (rel >= 0.0f && rel <= 12.0f)
 					g_vf.max_cut_db = rel;
+			/* V13.9 (revue F15 + fiabilisation n°4) : restauration des
+			 * réglages V13.7-V13.9 — mêmes plages de validation que les
+			 * ops live ; meq_recalc = bascule crossfadée sans clic. */
+			} else if (sscanf(bl, "master_eq %f %f %f %f %f %f %f",
+					  &sv[0], &sv[1], &sv[2], &sv[3],
+					  &sv[4], &sv[5], &sv[6]) == 7) {
+				g_meq_p.low_hz = sv[0]; g_meq_p.low_db = sv[1];
+				g_meq_p.mid_hz = sv[2]; g_meq_p.mid_db = sv[3];
+				g_meq_p.mid_q  = sv[4];
+				g_meq_p.air_hz = sv[5]; g_meq_p.air_db = sv[6];
+				meq_recalc();
+				save_master_eq();   /* fichier dédié cohérent */
+			} else if (sscanf(bl, "automix_tune %f %f %f %f",
+					  &sv[0], &sv[1], &sv[2], &sv[3]) == 4) {
+				if (sv[0] >= 3.0f  && sv[0] <= 40.0f) g_bmx.freeze_db   = sv[0];
+				if (sv[1] >= 0.0f  && sv[1] <= 2.0f)  g_bmx.risk_decay  = sv[1];
+				if (sv[2] >= 0.0f  && sv[2] <= 12.0f) g_bmx.risk_margin = sv[2];
+				if (sv[3] >= 3.0f  && sv[3] <= 30.0f) g_bmx.gate_db     = sv[3];
+			} else if (sscanf(bl, "balance %d %f %f %f",
+					  &on, &sv[0], &sv[1], &sv[2]) == 4) {
+				g_bmx.balance_on = on ? 1 : 0;
+				if (sv[0] >= -30.0f && sv[0] <= -6.0f) g_bmx.bal_lufs_tgt = sv[0];
+				if (sv[1] >= -6.0f  && sv[1] <= 12.0f) g_bmx.bal_e_tgt   = sv[1];
+				if (sv[2] >= -6.0f  && sv[2] <= 12.0f) g_bmx.bal_c_tgt   = sv[2];
+			} else if (sscanf(bl, "vspatial %d %d %d",
+					  &on, &src, &role) == 3) {
+				atomic_store(&g_vspat.on, on ? 1 : 0);
+				if (src >= 0 && src <= 1000)
+					atomic_store(&g_vspat.amount_mq, src);
+				if (role >= 144 && role <= 1920)   /* 3..40 ms @48k */
+					atomic_store(&g_vspat.delay_smp, role);
+			} else if (sscanf(bl, "solo_auto %d", &on) == 1) {
+				g_bmx.solo_auto = on ? 1 : 0;
 			} else if (sscanf(bl, "sends %d %f %f %f %f %f %f %f %f",
 					  &src, &sv[0], &sv[1], &sv[2], &sv[3],
 					  &sv[4], &sv[5], &sv[6], &sv[7]) == 9 &&
