@@ -7,11 +7,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Yocto BSP build for the Debix Model AB board (NXP i.MX 8M Plus). The image targets an embedded audio/multimedia workstation with Flutter UI, Ardour DAW, DSP firmware, and ML inference (TFLite/NPU). Based on NXP's L6.12.3 release (Yocto 5.0 Scarthgap).
+Yocto BSP build for the Debix Model AB board (NXP i.MX 8M Plus) — the
+**A.L.A. console** (Audio Live Assistant, Electrosens R&D) : console de mixage
+live autonome. Pile : firmware DSP SOF custom (matrix 16×8, DMA 2 ms), moteur
+audio temps réel `mixer-pro` (C, AUTOMIX LIVE), console native Qt6/eglfs sur
+écran DSI, GUI web pour PC distants (`mixer-gui-http`, autonome sans internet),
+mastering ML sur NPU (TFLite). Based on NXP's L6.6.36 release (Yocto 5.0
+Scarthgap), branche `L6.6.36-2.1.0-debix_model_ab`.
+
+Historique : l'UI Flutter et Ardour ont été RETIRÉS (2026-07 — console native
+Qt6 = la cible, Ardour n'est pas un objectif). Chromium/kiosk retirés de
+l'image (revue 2026-07-28) : l'écran est servi par mixer-console (Qt6), le web
+par mixer-gui-http.
 
 ## Build Commands
 
-Initialize the build environment (required once per shell session):
+Initialize the build environment (required once per shell session — TOUJOURS
+depuis la racine du repo, piège cwd) :
 ```bash
 EULA=1 DISTRO=fsl-imx-xwayland MACHINE=imx8mpevk source imx-setup-release.sh -b Model_AB_Infinity
 ```
@@ -23,17 +35,13 @@ bitbake imx-image-full
 
 Rebuild a single recipe (e.g. after editing a .bb or .bbappend):
 ```bash
-bitbake <recipe>                  # e.g. bitbake flutter-embedded-runner
-bitbake -c cleanall <recipe>      # full clean before rebuild
+bitbake <recipe>                  # e.g. bitbake mixer-pro
+bitbake -c cleansstate <recipe>   # JAMAIS cleanall (casse les fetch git)
 bitbake -c devshell <recipe>      # interactive debug shell in recipe sysroot
 ```
 
-Generate the cross-compilation SDK (includes Flutter + Dart host tools):
-```bash
-bitbake imx-image-full -c populate_sdk
-```
-
 Image artifacts land in `Model_AB_Infinity/tmp/deploy/images/imx8mpevk/`.
+Après build : vérifier md5/mtime du binaire avant scp (piège binaire stale).
 
 ## Architecture
 
@@ -41,7 +49,7 @@ Image artifacts land in `Model_AB_Infinity/tmp/deploy/images/imx8mpevk/`.
 
 - **`sources/`** -- upstream vendor layers (poky, meta-imx, meta-openembedded, meta-freescale, etc.). Do not edit; treat as read-only.
 - **`meta-local/`** -- all project customizations live here. Highest priority layer (BBFILE_PRIORITY = 1). Must mirror standard Yocto directory layout (`recipes-<category>/<package>/`).
-- **`sources/meta-musicians/`** -- git submodule (`schnitzeltony/meta-musicians`) providing the OE audio/DAW recipe ecosystem (LV2, Jack, etc.).
+- **`sources/meta-musicians/`** -- git submodule (`schnitzeltony/meta-musicians`) providing the OE audio recipe ecosystem (LV2, etc.).
 
 `bblayers.conf` references ~40 layers. Only `meta-local/` should be modified for project work.
 
@@ -49,13 +57,17 @@ Image artifacts land in `Model_AB_Infinity/tmp/deploy/images/imx8mpevk/`.
 
 | Path | What it does |
 |------|-------------|
-| `recipes-core/images/imx-image-full.bbappend` | Adds Flutter, Dart, Ardour to the image |
-| `recipes-fsl/images/imx-image-full.bbappend` | Adds audio tools (sox, ALSA, DSP firmware), ML stack |
-| `recipes-kernel/linux/linux-imx_%.bbappend` | Audio/MIPI board patch + SPDIF config fragment |
-| `recipes-bsp/u-boot-imx/` | U-Boot SPL FIT load address patch |
-| `recipes-graphics/flutter/` | Flutter embedder (Sony), SDK, systemd runner |
-| `recipes-devtools/flutter/` and `dart/` | Flutter SDK 3.13.9, Dart SDK 3.7.0 |
-| `recipes-musicians/` | Ardour 6.9 + full dependency chain (LV2, aubio, rubberband, etc.) |
+| `recipes-audio/mixer-pro/` | Moteur audio RT (26 in / 4 bus FX / 18 out, AUTOMIX LIVE, cores 2-3) |
+| `recipes-audio/mixer-gui-http/` | Serveur web GUI (libmicrohttpd, beta.html autonome zéro CDN) |
+| `recipes-audio/mixer-ml-inference/` | Daemon mastering NPU (TFLite, PartOf mixer-pro) |
+| `recipes-audio/anti-larsen/` | AFS notchs (DISABLED — écritures TAC en live = plops, refonte v2 logicielle à faire) |
+| `recipes-graphics/mixer-console/` | Console native Qt6/eglfs (écran DSI, page AUTO MIX) |
+| `recipes-fsl/images/imx-image-full.bbappend` | Contenu image (audio, ML, LV2 utilisés par l'insert) |
+| `recipes-kernel/linux/linux-imx_%.bbappend` | PREEMPT_RT + patches DT (TAC5212, NPU tap, tactile) avec assertions |
+| `recipes-kernel/imx-audio-tap/` | Module kernel tap NPU (/dev/imx-audio-tap-in/-out) |
+| `recipes-bsp/imx-mkimage/` | flash.bin prébuildé versionné (garde-fou md5) |
+| `recipes-support/tac5212-service/` | tac-reset (propriété unique) |
+| `recipes-musicians/` | Plugins LV2 utilisés par l'insert mixer (calf, mda, x42…) |
 
 ### Build directory
 
@@ -63,20 +75,25 @@ Image artifacts land in `Model_AB_Infinity/tmp/deploy/images/imx8mpevk/`.
 
 ### Target hardware
 
-NXP i.MX 8M Plus (Cortex-A53 + Cortex-M7, Vivante GPU, ISP, NPU). Audio interfaces: SPDIF, I2S/SAI. Display: MIPI-DSI.
+NXP i.MX 8M Plus (Cortex-A53 ×4 + Cortex-M7, Vivante GPU, NPU). Audio : 4×
+TAC5212 (TDM 8 slots via SAI7, piloté par le DSP SOF), USB gadget UAC2 8×8.
+Écran : MIPI-DSI 800×1280 (scène Qt 1280×800 rotée). Carte : 192.168.0.198.
 
 ## Conventions
 
-- Commit messages: `area: imperative action` (e.g. `meta-local: add Flutter/Dart integration`)
+- Commit messages: `area: imperative action` (français OK, style `V13.9 : …`)
 - BitBake variables: `UPPER_SNAKE_CASE`; functions/tasks: `lower_snake_case`
 - Recipe files: `<package>_<version>.bb`; overrides: `<package>_%.bbappend`
-- Patches go in a `files/` subdirectory alongside the recipe
+- Patches go in a `files/` subdirectory alongside the recipe (`.patch` SRC_URI standard, pas de sed-python sur les sources kernel)
 - Indent with 4 spaces; align continued lines with trailing `\`
+- `MIXER_VERSION` (mixer-pro.h) DOIT être bumpé à chaque évolution du moteur
+- Fiches de test : `docs/TESTS/TESTS_V<x>_*.md` pour chaque étape validée board
+- Règles moteur : pas de signal → aucun gain ne bouge ; un reset n'écrase
+  jamais un réglage opérateur ; automation non validée = OFF par défaut ;
+  effets TAC statiques (jamais écrits pendant le live)
 
 ## Key Constraints
 
 - The `downloads/` and `sstate-cache/` directories are untracked and large; never commit them.
-- `flash.bin` at root is a patched U-Boot binary that must stay in sync with u-boot-imx recipe changes.
-- Ardour is built ALSA-only (PulseAudio backend disabled via patch) since PulseAudio is removed from this NXP release.
-- Flutter SDK recipes support offline builds: pre-cached engine artifacts can be placed in `downloads/`.
-- Expect >120 GB disk usage for a full build; raise `ulimit -n 4098` for Chromium-based stacks.
+- `flash.bin` : source de vérité = `meta-local/recipes-bsp/imx-mkimage/files/flash.bin` (binaire U-Boot patché, md5 vérifié au build). NE PAS recompiler u-boot-imx (ne boote pas sur cette carte).
+- Expect >120 GB disk usage for a full build.
