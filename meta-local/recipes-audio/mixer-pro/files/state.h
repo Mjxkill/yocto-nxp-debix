@@ -141,4 +141,19 @@ extern struct mixer_state g_st;   /* définie dans mixer-pro.c */
  * mixer-pro.c ; rejoindra persist.c à l'étape 2e. */
 extern atomic_int g_presets_dirty;
 
+/* V9.5.21 — remap des 8 mics DSP + trims de sortie + spec insert : état
+ * transversal (écrit par les ops, lu par l'audio ET la persistance).
+ * Définis dans mixer-pro.c ; l'insert rejoindra son module à l'étape 3/4. */
+extern atomic_int g_mic_map[8];
+extern atomic_int g_out_gain_m[N_OUTPUT_TOTAL];
+extern char g_insert_spec_engine[FX_CHAIN_MAX][32];
+extern char g_insert_spec_uri[FX_CHAIN_MAX][256];
+extern int  g_insert_spec_n;
+extern fx_engine_t g_insert_chain;
+extern atomic_int  g_insert_active;
+extern atomic_int  g_insert_bypass;   /* V13-SCENES : bypass runtime */
+/* V9.5.12 — mode Mixer Assistant (0=passthrough, 1=mastering) */
+extern _Atomic int g_assistant_mode;
+extern _Atomic int g_assistant_source;   /* 0=HW IN, 1=USB IN */
+
 #endif /* MIXER_STATE_H */

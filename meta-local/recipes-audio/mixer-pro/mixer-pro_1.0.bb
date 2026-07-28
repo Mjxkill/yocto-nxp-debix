@@ -32,6 +32,8 @@ SRC_URI = " \
     file://voice.c \
     file://voice.h \
     file://dsp_block.h \
+    file://persist.c \
+    file://persist.h \
     file://effects.c \
     file://effects.h \
     file://analyzer.c \
