@@ -25,6 +25,8 @@ SRC_URI = " \
     file://midix.h \
     file://strip_dyn.c \
     file://strip_dyn.h \
+    file://master.c \
+    file://master.h \
     file://effects.c \
     file://effects.h \
     file://analyzer.c \

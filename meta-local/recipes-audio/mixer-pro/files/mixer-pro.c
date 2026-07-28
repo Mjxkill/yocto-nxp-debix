@@ -50,6 +50,7 @@
 #include "looper.h"   /* V14.0 étape 1 : loopstation V12-LOOP-PRO */
 #include "midix.h"    /* V14.0 étape 1 : expandeur MIDI V12-MIDIX */
 #include "strip_dyn.h" /* V14.0 étape 2 : gate + comp de tranche + lien stéréo */
+#include "master.h"    /* V14.0 étape 2 : EQ mastering + makeup LUFS */
 
 /* ============================== State ============================== */
 /* struct alsa_pcm + struct mixer_state : déplacées dans state.h (V14.0
@@ -1295,107 +1296,9 @@ static void eqx_config(int i, int role)   /* control thread (rare) */
 	g_eqx.role_of[i] = role;
 }
 
-/* ============ V13.7 — MASTER : EQ mastering + makeup LUFS (BS.1770) ========
- * Étage master dans l'audio_thread, AVANT l'insert (spectral_env/exciter/
- * limiter_native) pour que le limiteur EXISTANT tienne les crêtes :
- *   out 0/1 → EQ master (3 biquads) → makeup (piloté LUFS) → insert → out_gain
- * Mètre short-term LUFS K-pondéré (K-weighting ITU-R BS.1770) sur la sortie
- * réelle, lu par bmx_tick qui asservit le makeup vers MASTER_LUFS_TGT.
- * Lié à AUTOMIX LIVE (g_master_on). ARCHI_V13.7_MASTER_LUFS_EQ.md */
-#define MASTER_LUFS_TGT   (-14.0f)
-#define MASTER_MK_MAX_DB   (36.0f)   /* makeup = gain-staging global (stems faibles) */
-#define MASTER_MK_MIN_DB   (-6.0f)
-#define LUFS_ST_A          (1.0f / (3.0f * (float)SAMPLE_RATE))   /* short-term ~3 s */
-
-static void save_master_eq(void);        /* déf. plus bas (persistance) */
-static _Atomic int g_master_on;          /* étage master actif (autolive) */
-
-/* --- EQ master : 3 biquads RBJ (low shelf / -500 bell / high shelf), double
- *     buffer pour bascule sans lock depuis le control thread --- */
-static struct eqx_bq g_meq_bank[2][3];
-static _Atomic int    g_meq_active;         /* banque active (steady) */
-static _Atomic int    g_meq_pending = -1;   /* banque à fondre (-1 = aucune) */
-static float          g_meq_st[2][2][3][2]; /* [banque][L/R][biquad][z] */
-#define MEQ_XF_LEN 2400                     /* crossfade coefs ~50 ms (anti-clic) */
-static int            g_meq_fading;         /* audio-owned : fondu en cours */
-static int            g_meq_xf;             /* audio-owned : position du fondu */
-static struct {                          /* params (control thread) */
-	float low_hz, low_db;
-	float mid_hz, mid_db, mid_q;
-	float air_hz, air_db;
-} g_meq_p = { 60.0f, +3.0f, 500.0f, -2.5f, 1.0f, 10000.0f, +3.0f };
-
-/* --- makeup LUFS --- */
-static struct {
-	float k1[2][2], k2[2][2];   /* K-weighting : 2 biquads BS.1770 × L/R */
-	float ms;                   /* EWMA puissance K-pondérée (short-term) */
-	float mk_db;                /* makeup courant en dB (état bmx_tick) */
-	_Atomic int makeup_mq;      /* cible makeup ×1000 linéaire (→ audio) */
-	float makeup_cur;           /* gain lissé (audio_thread) */
-	_Atomic int lufs_c;         /* LUFS short-term ×100 publié (→ bmx_tick) */
-} g_mk = { .makeup_mq = 1000, .lufs_c = -12000 };
-
-/* K-weighting ITU-R BS.1770 @ 48 kHz — coefficients canoniques (forme
- * transposée II, a0=1). Stage 1 = pré-filtre shelf tête ; stage 2 = RLB HP.
- * SOURCE (revue code 2026-07-28, F20) : Rec. UIT-R BS.1770-4 (10/2015),
- * §1 Annexe 1, Tableaux 1 et 2 — valeurs EXACTES de la norme pour fs=48 kHz
- * (reprises telles quelles par libebur128). Ne PAS les recalculer : toute
- * dérivation maison doit être validée contre ces valeurs de référence. */
-#define K1_B0   1.53512485958697f
-#define K1_B1  (-2.69169618940638f)
-#define K1_B2   1.19839281085285f
-#define K1_A1  (-1.69065929318241f)
-#define K1_A2   0.73248077421585f
-#define K2_B0   1.0f
-#define K2_B1  (-2.0f)
-#define K2_B2   1.0f
-#define K2_A1  (-1.99004745483398f)
-#define K2_A2   0.99007225036621f
-
-static void meq_compute(int bank)
-{
-	meq_shelf(&g_meq_bank[bank][0], g_meq_p.low_hz, g_meq_p.low_db, 0);
-	eqx_peak (&g_meq_bank[bank][1], g_meq_p.mid_hz, g_meq_p.mid_db, g_meq_p.mid_q);
-	meq_shelf(&g_meq_bank[bank][2], g_meq_p.air_hz, g_meq_p.air_db, 1);
-}
-
-/* CHANGEMENT LIVE : calcule dans la banque inactive (états frais) et signale
- * un crossfade à l'audio → l'ancien et le nouveau filtre sont mélangés en
- * fondu sur ~50 ms. Zéro clic, même en passant par un gain 0 (passe-tout). */
-static void meq_recalc(void)
-{
-	int nb = !atomic_load_explicit(&g_meq_active, memory_order_relaxed);
-	meq_compute(nb);
-	/* états : PAS de reset à zéro (sinon la cloche sonne un transitoire à sa
-	 * fréquence = pop). L'audio copie l'état chaud de l'ancienne banque au
-	 * démarrage du fondu → les deux filtres partent du même état. */
-	atomic_store_explicit(&g_meq_pending, nb, memory_order_release);
-}
-
-/* BOOT / ENABLE : pose les coefs direct dans la banque active, pas de fondu
- * (pas d'audio en cours ou reset volontaire). */
-static void meq_init(void)
-{
-	int a = atomic_load_explicit(&g_meq_active, memory_order_relaxed);
-	meq_compute(a);
-	atomic_store_explicit(&g_meq_pending, -1, memory_order_relaxed);
-}
-
-/* traite les 3 biquads d'une banque pour 1 échantillon (états mis à jour) */
-static inline float meq_chain(int bank, int ch, float in)
-{
-	float x = in;
-	for (int b = 0; b < 3; b++) {
-		struct eqx_bq *q = &g_meq_bank[bank][b];
-		float z1 = g_meq_st[bank][ch][b][0];
-		float z2 = g_meq_st[bank][ch][b][1];
-		float y = q->b0 * x + z1;
-		g_meq_st[bank][ch][b][0] = q->b1 * x - q->a1 * y + z2;
-		g_meq_st[bank][ch][b][1] = q->b2 * x - q->a2 * y;
-		x = y;
-	}
-	return x;
-}
+/* V13.7 MASTER — EQ mastering + makeup LUFS : déplacé dans master.c/h
+ * (V14.0 étape 2). save_master_eq reste ici (persistance, étape 2e). */
+static void save_master_eq(void);
 
 struct bmx_meas {
 	int    done;
