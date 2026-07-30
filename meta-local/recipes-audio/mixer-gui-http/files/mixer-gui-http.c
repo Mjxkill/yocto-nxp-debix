@@ -9,7 +9,7 @@
  *     de N sockets Unix persistants (round-robin sous mutex).
  *
  * Routes :
- *   GET  /                  → /var/www/mixer-gui/index.html
+ *   GET  /                  → /var/www/mixer-gui/beta.html (console A.L.A.)
  *   GET  /static/<path>     → /var/www/mixer-gui/static/<path>
  *   GET  /api/state         → proxy {"op":"get_state"}
  *   POST /api/cmd           → forward body JSON vers mixer-pro
@@ -904,10 +904,10 @@ static enum MHD_Result on_request(void *cls, struct MHD_Connection *conn,
 
 	/* === Routes GET === */
 	if (!strcmp(method, "GET")) {
-		if (!strcmp(url, "/") || !strcmp(url, "/index.html"))
-			return send_file(conn, WWW_ROOT "/index.html", "text/html; charset=utf-8");
-		/* V10-P0 : nouveau design en preview ; /panel = cible kiosk 1024x600 */
-		if (!strcmp(url, "/beta") || !strcmp(url, "/panel"))
+		/* V14.0 : beta.html = LA console (l'ancienne GUI V7 index.html est
+		 * supprimée). / et les anciens alias servent tous la même page. */
+		if (!strcmp(url, "/") || !strcmp(url, "/index.html") ||
+		    !strcmp(url, "/beta") || !strcmp(url, "/panel"))
 			return send_file(conn, WWW_ROOT "/beta.html", "text/html; charset=utf-8");
 
 		if (!strcmp(url, "/health")) {
