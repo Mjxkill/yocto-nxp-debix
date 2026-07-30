@@ -43,8 +43,15 @@ SRC_URI = " \
     file://fx_ops.c \
     file://tac_ops.c \
     file://control.h \
-    file://effects.c \
     file://effects.h \
+    file://fx_dynamics.c \
+    file://fx_space.c \
+    file://fx_eq.c \
+    file://fx_chain.c \
+    file://lv2_host.c \
+    file://lv2_load.c \
+    file://fx_lv2.h \
+    file://fx_internal.h \
     file://analyzer.c \
     file://analyzer.h \
     file://ml_features.c \

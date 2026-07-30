@@ -21,7 +21,9 @@ all: mixer-pro mixerctl ml_features_test
 # est faite par le daemon mixer-ml-inference (process séparé).
 # V14.0 étape 0 — modules extraits : state.h (état partagé), util.c (log +
 # helpers ALSA), dsp_bq.c (biquads RBJ). ARCHI_V14_RESTRUCTURATION.md.
-mixer-pro: mixer-pro.c mixer-pro.h effects.c effects.h analyzer.c analyzer.h \
+mixer-pro: mixer-pro.c mixer-pro.h effects.h analyzer.c analyzer.h \
+           fx_dynamics.c fx_space.c fx_eq.c fx_chain.c \
+           lv2_host.c lv2_load.c fx_lv2.h fx_internal.h \
            mixer_pro_shm_tap.c mixer_pro_shm_tap.h \
            state.h util.c util.h dsp_bq.c dsp_bq.h sampler.c sampler.h \
            looper.c looper.h midix.c midix.h strip_dyn.c strip_dyn.h \
@@ -29,7 +31,8 @@ mixer-pro: mixer-pro.c mixer-pro.h effects.c effects.h analyzer.c analyzer.h \
            persist.c persist.h uac2_ring.c uac2_ring.h \
            audio_loop.c audio_loop.h automix_ops.c control.c control.h fx_ops.c tac_ops.c
 	$(CC) $(CFLAGS) $(LILV_CFLAGS) $(LDFLAGS) -o $@ \
-	    mixer-pro.c effects.c analyzer.c mixer_pro_shm_tap.c \
+	    mixer-pro.c analyzer.c mixer_pro_shm_tap.c \
+	    fx_dynamics.c fx_space.c fx_eq.c fx_chain.c lv2_host.c lv2_load.c \
 	    util.c dsp_bq.c sampler.c looper.c midix.c strip_dyn.c master.c automix.c voice.c persist.c uac2_ring.c audio_loop.c automix_ops.c control.c fx_ops.c tac_ops.c \
 	    $(LIBS) $(LILV_LIBS)
 
