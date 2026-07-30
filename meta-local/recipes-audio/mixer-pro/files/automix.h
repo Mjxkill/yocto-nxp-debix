@@ -155,4 +155,9 @@ void eqx_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES]);
 /* recalcul des coefs d'une tranche au changement de rôle (control thread) */
 void eqx_config(int i, int role);
 
+
+/* V14.0 étape 4 : ops control du module (dispatcher control.c).
+ * Retourne 1 si l'op est traitée, 0 sinon. */
+int automix_handle_op(int fd, const char *line);
+
 #endif /* MIXER_AUTOMIX_H */

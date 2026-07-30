@@ -15,6 +15,10 @@
 #include "dsp_block.h"   /* mac_block_n4 (somme voix NEON) */
 #include "automix.h"     /* g_bmx.role (sidechain voix / cibles musique) */
 #include "voice.h"
+#include "control.h"    /* handlers d'ops (V14.0 étape 4) */
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 /* ========= V13-VFOCUS — « place à la voix » (unmasking spectral) =========
  * Dynamic EQ sidechainé : la musique (tranches rôle instrument du
@@ -234,3 +238,79 @@ void vspat_render(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 	}
 }
 
+
+/* V14.0 étape 4 : ops du module — appelées par le dispatcher control.
+ * Corps déplacés tels quels depuis handle_cmd (extraction pure) ;
+ * retourne 1 si l'op est traitée, 0 sinon. */
+int voice_handle_op(int fd, const char *line)
+{
+	if (json_has_op(line, "set_vfocus")) {
+		/* V13-VFOCUS : {"op":"set_vfocus", on?, amount?(0-100),
+		 * max_cut_db?} — updates partiels */
+		int on = g_vf.on;
+		float am = -1.0f, mc = -1.0f;
+		(void)json_get_int(line, "on", &on);
+		(void)json_get_float(line, "amount", &am);
+		(void)json_get_float(line, "max_cut_db", &mc);
+		pthread_mutex_lock(&g_st.target_lock);
+		g_vf.on = on ? 1 : 0;
+		if (am >= 0.0f && am <= 100.0f)
+			g_vf.amount = am / 100.0f;
+		if (mc >= 0.0f && mc <= 12.0f)
+			g_vf.max_cut_db = mc;
+		pthread_mutex_unlock(&g_st.target_lock);
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_vfocus\",\"on\":%d}\n",
+			g_vf.on);
+		return 1;
+	}
+	if (json_has_op(line, "get_vfocus")) {
+		int n = snprintf(g_ctl_reply, sizeof(g_ctl_reply),
+			"{\"ok\":true,\"on\":%d,\"amount\":%.0f,"
+			"\"max_cut_db\":%.1f,\"active\":%d,\"cuts_db\":[",
+			g_vf.on, g_vf.amount * 100.0f, g_vf.max_cut_db,
+			atomic_load_explicit(&g_vf.active,
+					     memory_order_relaxed));
+		for (int b = 0; b < VF_BANDS; b++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%.2f",
+				      b ? "," : "",
+				      atomic_load_explicit(&g_vf.pub_cut[b],
+							   memory_order_relaxed)
+					/ 1000.0f);
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, n);
+		return 1;
+	}
+	if (json_has_op(line, "set_vspatial")) {
+		/* V13.9 — spatializer voix (widener Lauridsen LEAD+CHŒURS) :
+		 * {"op":"set_vspatial","on":0/1,"amount":0..100,"delay_ms":3..40}
+		 * champs absents = inchangés ; toujours renvoie l'état courant. */
+		int iv; float v; int chg = 0;
+		if (json_get_int(line, "on", &iv) >= 0) {
+			atomic_store_explicit(&g_vspat.on, iv ? 1 : 0,
+					      memory_order_relaxed);
+			chg = 1;
+		}
+		if (json_get_float(line, "amount", &v) >= 0 && v >= 0.0f && v <= 100.0f) {
+			atomic_store_explicit(&g_vspat.amount_mq, (int)(v * 10.0f + 0.5f),
+					      memory_order_relaxed);
+			chg = 1;
+		}
+		if (json_get_float(line, "delay_ms", &v) >= 0 && v >= 3.0f && v <= 40.0f) {
+			atomic_store_explicit(&g_vspat.delay_smp,
+					      (int)(v * SAMPLE_RATE / 1000.0f),
+					      memory_order_relaxed);
+			chg = 1;
+		}
+		if (chg)   /* pollé en lecture par la GUI : dirty SEULEMENT si set */
+			atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_vspatial\",\"on\":%d,"
+			"\"amount\":%.0f,\"delay_ms\":%.1f}\n",
+			atomic_load_explicit(&g_vspat.on, memory_order_relaxed),
+			atomic_load_explicit(&g_vspat.amount_mq, memory_order_relaxed) / 10.0,
+			atomic_load_explicit(&g_vspat.delay_smp, memory_order_relaxed)
+				* 1000.0 / SAMPLE_RATE);
+		return 1;
+	}
+	return 0;
+}

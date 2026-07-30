@@ -44,4 +44,9 @@ void smp_scan(int locked);
  * mixe les slots actifs dans les tranches P1/P2 (in_block[16/17]). */
 void smp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES]);
 
+
+/* V14.0 étape 4 : ops control du module (dispatcher control.c).
+ * Retourne 1 si l'op est traitée, 0 sinon. */
+int sampler_handle_op(int fd, const char *line);
+
 #endif /* MIXER_SAMPLER_H */

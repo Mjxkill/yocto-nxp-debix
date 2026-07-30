@@ -34,7 +34,16 @@ void save_state_to(const char *path);   /* scènes : chemin arbitraire */
 void save_mixer_state(void);            /* → MIXER_STATE_PATH */
 void load_mixer_state(void);            /* boot (avant les threads) */
 
-/* V13-SCENES : rappel de profil sans coupure audio (control thread) */
+/* V13-SCENES : profils complets */
+#define SCENE_SLOTS 6
+#define SCENE_DIR   "/var/lib/mixer-pro/scenes"
+
+/* rappel de profil sans coupure audio (control thread) */
 int scene_apply(const char *path);
+
+
+/* V14.0 étape 4 : ops control du module (dispatcher control.c).
+ * Retourne 1 si l'op est traitée, 0 sinon. */
+int persist_handle_op(int fd, const char *line);
 
 #endif /* MIXER_PERSIST_H */

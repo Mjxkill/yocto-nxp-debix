@@ -11,6 +11,10 @@
 #include "state.h"     /* g_st.input_gain / automix_gain / keeper_gain */
 #include "util.h"      /* mlog */
 #include "looper.h"
+#include "control.h"    /* handlers d'ops (V14.0 étape 4) */
+#include <stdio.h>
+#include <math.h>
+#include <unistd.h>
 
 const char *const TR_NAMES[] = { "empty", "rec", "play", "armed" };
 
@@ -181,4 +185,201 @@ void loop_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 	} else if (mlen == 0 && any_rec) {
 		/* piste maître en cours d'enreg : rien à avancer (rec_head local) */
 	}
+}
+
+/* V14.0 étape 4 : ops du module — appelées par le dispatcher control.
+ * Corps déplacés tels quels depuis handle_cmd (extraction pure) ;
+ * retourne 1 si l'op est traitée, 0 sinon. */
+int looper_handle_op(int fd, const char *line)
+{
+	if (json_has_op(line, "looper_track_ctl")) {
+		/* V12-LOOP-PRO : {"op":"looper_track_ctl","track":N,
+		 * "action":"rec|play|mute|unmute|clear"} */
+		int t = -1; char act[16] = "";
+		(void)json_get_int(line, "track", &t);
+		(void)json_get_str(line, "action", act, sizeof(act));
+		if (t < 0 || t >= LOOP_TRACKS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad track\"}\n");
+			return 1;
+		}
+		struct loop_track *tr = &g_tr[t];
+		int st = atomic_load(&tr->state);
+		uint32_t mlen = atomic_load(&g_master_len);
+
+		if (!strcmp(act, "rec")) {
+			/* V13.2 : re-tap REC sur une piste ARMÉE = désarme */
+			if (st == TR_ARMED) {
+				atomic_store_explicit(&tr->state, TR_EMPTY,
+						      memory_order_release);
+				dprintf(fd, "{\"ok\":true,\"track\":%d,"
+					    "\"armed\":0}\n", t);
+				return 1;
+			}
+			/* un seul REC ACTIF simultané (l'armement est libre) */
+			int busy = 0;
+			for (int i = 0; i < LOOP_TRACKS; i++)
+				if (atomic_load(&g_tr[i].state) == TR_REC) busy = 1;
+			if (st != TR_EMPTY) {
+				dprintf(fd, "{\"ok\":false,\"err\":\"not empty\"}\n");
+				return 1;
+			}
+			/* memset de la piste VIDE (non lue par l'audio) → silence
+			 * des zones non ré-enregistrées, aucun glitch. */
+			memset(tr->buf, 0, (size_t)LOOP_MAX_FRAMES * 2 * sizeof(float));
+			tr->rec_head = 0;
+			tr->rec_done = 0;
+			atomic_store(&tr->rec_start, REC_START_NONE);
+			atomic_store(&tr->len, 0);
+			atomic_store(&tr->muted, 0);
+			if (mlen == 0 && !busy) {
+				/* pas encore de boucle maître : REC libre
+				 * immédiat (définit la longueur au PLAY) */
+				atomic_store_explicit(&tr->state, TR_REC,
+						      memory_order_release);
+			} else {
+				/* V13.2 : boucle maître présente (ou en cours
+				 * d'enregistrement) → ARMÉ, départ quantifié
+				 * au prochain début de boucle, un tour exact
+				 * puis PLAY (loop_render). */
+				atomic_store(&g_loop_run, 1);
+				atomic_store_explicit(&tr->state, TR_ARMED,
+						      memory_order_release);
+			}
+		} else if (!strcmp(act, "play")) {
+			if (st == TR_REC) {
+				if (mlen == 0) {
+					/* piste MAÎTRE : fige master_len = rec_head */
+					uint32_t h = tr->rec_head;
+					if (h == 0) {
+						dprintf(fd, "{\"ok\":false,\"err\":\"empty rec\"}\n");
+						return 1;
+					}
+					atomic_store_explicit(&tr->len, h, memory_order_release);
+					atomic_store(&tr->state, TR_PLAY);
+					atomic_store(&g_master_len, h);
+					atomic_store(&g_lpos, 0);
+					atomic_store(&g_loop_run, 1);
+				} else {
+					/* piste alignée : fige à mlen (zones non
+					 * enregistrées = silence memsetté) */
+					atomic_store_explicit(&tr->len, mlen, memory_order_release);
+					atomic_store(&tr->state, TR_PLAY);
+				}
+			}
+			/* si déjà PLAY : no-op (transport global via looper_ctl) */
+		} else if (!strcmp(act, "mute")) {
+			atomic_store(&tr->muted, 1);
+		} else if (!strcmp(act, "unmute")) {
+			atomic_store(&tr->muted, 0);
+		} else if (!strcmp(act, "clear")) {
+			atomic_store_explicit(&tr->state, TR_EMPTY, memory_order_release);
+			atomic_store(&tr->len, 0);
+			atomic_store(&tr->muted, 0);
+			atomic_store(&tr->peak, 0);
+			tr->rec_head = 0;
+			tr->rec_done = 0;
+			/* si plus aucune piste n'a de contenu ni n'enregistre →
+			 * réinitialise l'horloge maître (nouveau départ). */
+			int alive = 0;
+			for (int i = 0; i < LOOP_TRACKS; i++) {
+				int s = atomic_load(&g_tr[i].state);
+				if (s == TR_REC || (s == TR_PLAY && atomic_load(&g_tr[i].len)))
+					alive = 1;
+			}
+			if (!alive) {
+				atomic_store(&g_master_len, 0);
+				atomic_store(&g_lpos, 0);
+				atomic_store(&g_loop_run, 0);
+				/* V13.2 : plus de boucle maître → les pistes
+				 * ARMÉES n'ont plus de départ possible */
+				for (int i = 0; i < LOOP_TRACKS; i++)
+					if (atomic_load(&g_tr[i].state) == TR_ARMED)
+						atomic_store(&g_tr[i].state, TR_EMPTY);
+			}
+		} else {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad action\"}\n");
+			return 1;
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"looper_track_ctl\",\"track\":%d,"
+			"\"state\":\"%s\"}\n", t, TR_NAMES[atomic_load(&tr->state)]);
+		return 1;
+	}
+	if (json_has_op(line, "looper_track_cfg")) {
+		/* {"op":"looper_track_cfg","track":N,"src_a":N,"src_b":N|-1,
+		 * "gain_db":F} — refusé pendant REC de cette piste */
+		int t = -1;
+		(void)json_get_int(line, "track", &t);
+		if (t < 0 || t >= LOOP_TRACKS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad track\"}\n");
+			return 1;
+		}
+		struct loop_track *tr = &g_tr[t];
+		if (atomic_load(&tr->state) == TR_REC) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"busy rec\"}\n");
+			return 1;
+		}
+		int a = -2, b = -2;
+		float gdb = 1000.0f;
+		(void)json_get_int(line, "src_a", &a);
+		(void)json_get_int(line, "src_b", &b);
+		(void)json_get_float(line, "gain_db", &gdb);
+		if (a >= 0 && a < N_INPUT_REAL) tr->src_a = a;
+		if (b >= -1 && b < N_INPUT_REAL) tr->src_b = b;
+		if (gdb > -60.0f && gdb <= 12.0f) tr->gain = powf(10.0f, gdb / 20.0f);
+		dprintf(fd, "{\"ok\":true,\"op\":\"looper_track_cfg\",\"track\":%d}\n", t);
+		return 1;
+	}
+	if (json_has_op(line, "looper_ctl")) {
+		/* transport global : {"op":"looper_ctl","action":"play_all|stop_all|clear_all"} */
+		char act[16] = "";
+		(void)json_get_str(line, "action", act, sizeof(act));
+		if (!strcmp(act, "play_all")) {
+			if (atomic_load(&g_master_len)) atomic_store(&g_loop_run, 1);
+		} else if (!strcmp(act, "stop_all")) {
+			atomic_store(&g_loop_run, 0);
+		} else if (!strcmp(act, "clear_all")) {
+			for (int i = 0; i < LOOP_TRACKS; i++) {
+				atomic_store_explicit(&g_tr[i].state, TR_EMPTY,
+						      memory_order_release);
+				atomic_store(&g_tr[i].len, 0);
+				atomic_store(&g_tr[i].muted, 0);
+				atomic_store(&g_tr[i].peak, 0);
+				g_tr[i].rec_head = 0;
+				g_tr[i].rec_done = 0;
+			}
+			atomic_store(&g_master_len, 0);
+			atomic_store(&g_lpos, 0);
+			atomic_store(&g_loop_run, 0);
+		} else {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad action\"}\n");
+			return 1;
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"looper_ctl\",\"action\":\"%s\"}\n", act);
+		return 1;
+	}
+	if (json_has_op(line, "looper_status")) {
+		uint32_t mlen = atomic_load(&g_master_len);
+		int n = snprintf(g_ctl_reply, sizeof(g_ctl_reply),
+			"{\"ok\":true,\"master_len_s\":%.2f,\"pos_s\":%.2f,"
+			"\"run\":%d,\"max_s\":%u,\"master_peak\":%u,\"tracks\":[",
+			mlen / 48000.0f, atomic_load(&g_lpos) / 48000.0f,
+			atomic_load(&g_loop_run), LOOP_MAX_FRAMES / 48000u,
+			atomic_load(&g_loop_mpeak));
+		for (int t = 0; t < LOOP_TRACKS; t++) {
+			struct loop_track *tr = &g_tr[t];
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n,
+				"%s{\"track\":%d,\"state\":\"%s\",\"len_s\":%.2f,"
+				"\"muted\":%d,\"src_a\":%d,\"src_b\":%d,"
+				"\"gain_db\":%.1f,\"peak\":%u}",
+				t ? "," : "", t, TR_NAMES[atomic_load(&tr->state)],
+				atomic_load(&tr->len) / 48000.0f,
+				atomic_load(&tr->muted), tr->src_a, tr->src_b,
+				20.0f * log10f(tr->gain > 1e-6f ? tr->gain : 1e-6f),
+				atomic_load(&tr->peak));
+		}
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
+		return 1;
+	}
+	return 0;
 }

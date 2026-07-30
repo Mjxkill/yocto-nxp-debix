@@ -60,4 +60,9 @@ void loop_init(void);
 /* Rendu (audio_thread, SOUS target_lock, après le convert S32→float) */
 void loop_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES]);
 
+
+/* V14.0 étape 4 : ops control du module (dispatcher control.c).
+ * Retourne 1 si l'op est traitée, 0 sinon. */
+int looper_handle_op(int fd, const char *line);
+
 #endif /* MIXER_LOOPER_H */

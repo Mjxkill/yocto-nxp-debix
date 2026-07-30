@@ -70,4 +70,9 @@ extern struct vspat_state {
 void vspat_render(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		  float out_block[N_OUTPUT_TOTAL][PERIOD_FRAMES], int N);
 
+
+/* V14.0 étape 4 : ops control du module (dispatcher control.c).
+ * Retourne 1 si l'op est traitée, 0 sinon. */
+int voice_handle_op(int fd, const char *line);
+
 #endif /* MIXER_VOICE_H */

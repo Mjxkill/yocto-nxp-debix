@@ -19,6 +19,9 @@
 #include "master.h"      /* g_meq_p, meq_recalc, g_master_on */
 #include "voice.h"       /* g_vf, g_vspat */
 #include "persist.h"
+#include "control.h"    /* handlers d'ops (V14.0 étape 4) */
+#include <unistd.h>
+#include <dirent.h>
 
 #define PRESETS_PATH "/var/lib/mixer-pro/presets.json"
 /* ============================== Persistence presets ================ */
@@ -595,3 +598,76 @@ done:
 	mlog("state: mixer_state restauré (assistant=%d/%d mute=0x%x)", am, as, mm);
 }
 
+
+/* V14.0 étape 4 : ops du module — appelées par le dispatcher control.
+ * Corps déplacés tels quels depuis handle_cmd (extraction pure) ;
+ * retourne 1 si l'op est traitée, 0 sinon. */
+int persist_handle_op(int fd, const char *line)
+{
+	if (json_has_op(line, "scene_save")) {
+		/* V13-SCENES : {"op":"scene_save","slot":0-5,"name":"..."} */
+		int slot = -1;
+		char nm[48] = "";
+		(void)json_get_int(line, "slot", &slot);
+		(void)json_get_str(line, "name", nm, sizeof(nm));
+		if (slot < 0 || slot >= SCENE_SLOTS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad slot\"}\n");
+			return 1;
+		}
+		mkdir(SCENE_DIR, 0755);
+		char p[128];
+		snprintf(p, sizeof(p), SCENE_DIR "/scene%d", slot);
+		save_state_to(p);
+		if (nm[0]) {
+			snprintf(p, sizeof(p), SCENE_DIR "/scene%d.name", slot);
+			FILE *nf = fopen(p, "w");
+			if (nf) { fprintf(nf, "%s\n", nm); fclose(nf); }
+		}
+		dprintf(fd, "{\"ok\":true,\"op\":\"scene_save\",\"slot\":%d}\n",
+			slot);
+		return 1;
+	}
+	if (json_has_op(line, "scene_recall")) {
+		int slot = -1;
+		(void)json_get_int(line, "slot", &slot);
+		if (slot < 0 || slot >= SCENE_SLOTS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad slot\"}\n");
+			return 1;
+		}
+		char p[128];
+		snprintf(p, sizeof(p), SCENE_DIR "/scene%d", slot);
+		if (scene_apply(p) == 0)
+			dprintf(fd, "{\"ok\":true,\"op\":\"scene_recall\","
+				"\"slot\":%d}\n", slot);
+		else
+			dprintf(fd, "{\"ok\":false,\"err\":\"scene vide\"}\n");
+		return 1;
+	}
+	if (json_has_op(line, "scene_list")) {
+		int n = snprintf(g_ctl_reply, sizeof(g_ctl_reply),
+				 "{\"ok\":true,\"scenes\":[");
+		for (int s = 0; s < SCENE_SLOTS; s++) {
+			char p[128], nm[48] = "";
+			snprintf(p, sizeof(p), SCENE_DIR "/scene%d", s);
+			int used = access(p, R_OK) == 0;
+			snprintf(p, sizeof(p), SCENE_DIR "/scene%d.name", s);
+			FILE *nf = fopen(p, "r");
+			if (nf) {
+				if (fgets(nm, sizeof(nm), nf)) {
+					char *e = strchr(nm, '\n');
+					if (e) *e = '\0';
+				}
+				fclose(nf);
+			}
+			if (!nm[0])
+				snprintf(nm, sizeof(nm), "Scène %d", s + 1);
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n,
+				"%s{\"slot\":%d,\"used\":%d,\"name\":\"%s\"}",
+				s ? "," : "", s, used, nm);
+		}
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, n);
+		return 1;
+	}
+	return 0;
+}

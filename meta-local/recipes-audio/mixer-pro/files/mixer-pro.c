@@ -56,6 +56,7 @@
 #include "persist.h"   /* V14.0 étape 2e : sérialisation état + scènes */
 #include "uac2_ring.h" /* V14.0 étape 3 : isolation USB UAC2 (rings+threads+drift) */
 #include "audio_loop.h" /* V14.0 étape 3b : audio_thread + play_thread */
+#include "control.h"    /* V14.0 étape 4 : dispatcher ops + helpers JSON */
 
 /* ============================== State ============================== */
 /* struct alsa_pcm + struct mixer_state : déplacées dans state.h (V14.0
@@ -117,8 +118,7 @@ atomic_int  g_insert_active = 0;
 atomic_int  g_insert_bypass = 0;
 
 /* V13-SCENES : profils complets (définis après save_state_to) */
-#define SCENE_SLOTS 6
-#define SCENE_DIR   "/var/lib/mixer-pro/scenes"
+/* SCENE_SLOTS / SCENE_DIR : persist.h (V14.0 étape 4) */
 /* V9.5.12 — état Mixer Assistant (consommé par daemon mixer-ml-inference
  * via socket get_assistant). mixer-pro ne fait PAS d'inférence TFLite
  * (process séparé pour éviter conflit galcore + audio_thread RT99).
@@ -141,7 +141,7 @@ _Atomic int g_assistant_source = 0;
  * Très minimaliste — pas un parser JSON complet, juste `"key":<number>`.
  */
 /* Extrait une string entre guillemets pour une clé "key":"..." */
-static int json_get_str(const char *s, const char *key, char *out, int max)
+int json_get_str(const char *s, const char *key, char *out, int max)
 {
 	char pattern[64];
 	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
@@ -157,7 +157,7 @@ static int json_get_str(const char *s, const char *key, char *out, int max)
 	return (*p == '"') ? 0 : -1;
 }
 
-static int json_get_int(const char *s, const char *key, int *out)
+int json_get_int(const char *s, const char *key, int *out)
 {
 	char pattern[64];
 	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
@@ -169,7 +169,7 @@ static int json_get_int(const char *s, const char *key, int *out)
 	return 0;
 }
 
-static int json_get_float(const char *s, const char *key, float *out)
+int json_get_float(const char *s, const char *key, float *out)
 {
 	char pattern[64];
 	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
@@ -181,7 +181,7 @@ static int json_get_float(const char *s, const char *key, float *out)
 	return 0;
 }
 
-static int json_has_op(const char *s, const char *op)
+int json_has_op(const char *s, const char *op)
 {
 	char pattern[64];
 	snprintf(pattern, sizeof(pattern), "\"op\"");
@@ -197,8 +197,15 @@ static int json_has_op(const char *s, const char *op)
 
 static void handle_cmd(int fd, const char *line)
 {
-	/* V9.3.3 : 16 KB pour get_fx avec params + ranges (NPU). */
-	static char reply[49152];
+
+	/* V14.0 étape 4 : chaque module possède ses ops (noms disjoints →
+	 * l'ordre des essais est sans effet). Cœur (matrices/fx/insert/
+	 * meters/diag) traité ci-dessous. */
+	if (sampler_handle_op(fd, line)   || looper_handle_op(fd, line) ||
+	    midix_handle_op(fd, line)     || strip_dyn_handle_op(fd, line) ||
+	    automix_handle_op(fd, line)   || master_handle_op(fd, line) ||
+	    voice_handle_op(fd, line)     || persist_handle_op(fd, line))
+		return;
 
 	if (json_has_op(line, "set_send")) {
 		int in, bus;
@@ -215,10 +222,10 @@ static void handle_cmd(int fd, const char *line)
 		g_st.send_target[in][bus] = gain;
 		pthread_mutex_unlock(&g_st.target_lock);
 		atomic_store(&g_presets_dirty, 1);   /* V13.1 : persistance sends */
-		snprintf(reply, sizeof(reply),
+		snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 			 "{\"ok\":true,\"op\":\"set_send\",\"in\":%d,\"bus\":%d,\"gain\":%.4f}\n",
 			 in, bus, gain);
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "set_master")) {
 		int src, out;
@@ -235,10 +242,10 @@ static void handle_cmd(int fd, const char *line)
 		g_st.master_target[src][out] = gain;
 		pthread_mutex_unlock(&g_st.target_lock);
 		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
-		snprintf(reply, sizeof(reply),
+		snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 			 "{\"ok\":true,\"op\":\"set_master\",\"src\":%d,\"out\":%d,\"gain\":%.4f}\n",
 			 src, out, gain);
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "set_fx_bus")) {
 		int bus;
@@ -253,10 +260,10 @@ static void handle_cmd(int fd, const char *line)
 		g_st.fx_bus_target[bus] = gain;
 		pthread_mutex_unlock(&g_st.target_lock);
 		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
-		snprintf(reply, sizeof(reply),
+		snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 			 "{\"ok\":true,\"op\":\"set_fx_bus\",\"bus\":%d,\"gain\":%.4f}\n",
 			 bus, gain);
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "set_input_gain")) {
 		int src;
@@ -276,10 +283,10 @@ static void handle_cmd(int fd, const char *line)
 			pthread_mutex_unlock(&g_st.target_lock);
 		}
 		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
-		snprintf(reply, sizeof(reply),
+		snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 			 "{\"ok\":true,\"op\":\"set_input_gain\",\"src\":%d,\"gain\":%.4f}\n",
 			 src, gain);
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "set_mute")) {
 		int src, mute;
@@ -302,37 +309,10 @@ static void handle_cmd(int fd, const char *line)
 			pthread_mutex_unlock(&g_st.target_lock);
 		}
 		atomic_store(&g_presets_dirty, 1);   /* V9.5.21b : persistance */
-		snprintf(reply, sizeof(reply),
+		snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 			 "{\"ok\":true,\"op\":\"set_mute\",\"src\":%d,\"mute\":%d}\n",
 			 src, mute);
-		write(fd, reply, strlen(reply));
-
-	} else if (json_has_op(line, "set_link")) {
-		/* V13.3 : {"op":"set_link","pair":0-7,"on":0|1} — lie les
-		 * tranches (2k,2k+1). Ne modifie rien d'autre : le premier
-		 * geste (fader/mute/...) resynchronise la paire. */
-		int pair = -1, on = 0;
-		if (json_get_int(line, "pair", &pair) < 0 ||
-		    json_get_int(line, "on", &on) < 0 ||
-		    pair < 0 || pair >= N_LINK_PAIRS) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_link args\"}\n");
-			return;
-		}
-		atomic_store_explicit(&g_link[pair], on ? 1 : 0,
-				      memory_order_relaxed);
-		atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"op\":\"set_link\",\"pair\":%d,"
-			    "\"on\":%d}\n", pair, on ? 1 : 0);
-
-	} else if (json_has_op(line, "get_links")) {
-		int n = snprintf(reply, sizeof(reply),
-				 "{\"ok\":true,\"links\":[");
-		for (int i = 0; i < N_LINK_PAIRS; i++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%d",
-				      i ? "," : "",
-				      atomic_load(&g_link[i]));
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "get_strip_routing")) {
 		/* E7.3a : retourne l'état routing complet pour 1 input strip :
@@ -347,22 +327,22 @@ static void handle_cmd(int fd, const char *line)
 			dprintf(fd, "{\"ok\":false,\"err\":\"bad get_strip_routing src\"}\n");
 			return;
 		}
-		int n = snprintf(reply, sizeof(reply),
+		int n = snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 				 "{\"ok\":true,\"src\":%d,\"sends\":[", src);
 		pthread_mutex_lock(&g_st.target_lock);
-		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(reply); b++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%.4f",
+		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(g_ctl_reply); b++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%.4f",
 				      b ? "," : "", g_st.send_target[src][b]);
-		n += snprintf(reply + n, sizeof(reply) - n, "],\"master\":[");
-		for (int o = 0; o < N_OUTPUT_TOTAL && n < (int)sizeof(reply); o++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%.4f",
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "],\"master\":[");
+		for (int o = 0; o < N_OUTPUT_TOTAL && n < (int)sizeof(g_ctl_reply); o++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%.4f",
 				      o ? "," : "", g_st.master_target[src][o]);
-		n += snprintf(reply + n, sizeof(reply) - n,
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n,
 			      "],\"gain\":%.4f,\"mute\":%d}\n",
 			      g_st.input_target[src],
 			      (g_st.mute_mask >> src) & 1);
 		pthread_mutex_unlock(&g_st.target_lock);
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "get_state")) {
 		/* snd_pcm_delay : nb de frames entre le pointeur applicatif et le hw.
@@ -373,7 +353,7 @@ static void handle_cmd(int fd, const char *line)
 		snd_pcm_sframes_t cap_d = 0, play_d = 0;
 		snd_pcm_delay(g_st.cap_dsp.pcm,  &cap_d);
 		snd_pcm_delay(g_st.play_dsp.pcm, &play_d);
-		snprintf(reply, sizeof(reply),
+		snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 			 "{\"ok\":true,\"version\":\"%s\",\"frames\":%lu,\"xrun\":%lu,"
 			 "\"mute_mask\":%u,\"cap_delay_frames\":%ld,\"play_delay_frames\":%ld,"
 			 "\"latency_us_one_way\":%ld,"
@@ -393,7 +373,7 @@ static void handle_cmd(int fd, const char *line)
 			 (unsigned long)atomic_load(&g_st.ring_drops),
 			 (unsigned)(atomic_load(&g_st.ring_write_idx) -
 				    atomic_load(&g_st.ring_read_idx)));
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "set_fx_param")) {
 		int bus;
@@ -413,11 +393,11 @@ static void handle_cmd(int fd, const char *line)
 			dprintf(fd, "{\"ok\":false,\"err\":\"unknown fx param\"}\n");
 		} else {
 			atomic_store(&g_presets_dirty, 1);  /* V9.3.5 */
-			snprintf(reply, sizeof(reply),
+			snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 				 "{\"ok\":true,\"op\":\"set_fx_param\",\"bus\":%d,"
 				 "\"param\":\"%s\",\"value\":%.4f}\n",
 				 bus, param, value);
-			write(fd, reply, strlen(reply));
+			write(fd, g_ctl_reply, strlen(g_ctl_reply));
 		}
 
 	} else if (json_has_op(line, "get_fx")) {
@@ -431,9 +411,9 @@ static void handle_cmd(int fd, const char *line)
 		 * a ~200 params × ~30 chars = 6 KB + ranges 6 KB → 12 KB sécurité. */
 		static char body[49152];
 		g_st.fx_engines[bus].get_state(&g_st.fx_engines[bus], body, sizeof(body));
-		snprintf(reply, sizeof(reply),
+		snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 			 "{\"ok\":true,\"bus\":%d,%s}\n", bus, body);
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "set_fx_engine")) {
 		/* V9.2 — Change l'engine d'un bus FX. Engines builtin (compressor,
@@ -477,11 +457,11 @@ static void handle_cmd(int fd, const char *line)
 		fx_free(&old_eng);
 		atomic_store(&g_presets_dirty, 1);  /* V9.3.5 */
 
-		snprintf(reply, sizeof(reply),
+		snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 			 "{\"ok\":true,\"op\":\"set_fx_engine\",\"bus\":%d,"
 			 "\"engine\":\"%s\",\"uri\":\"%s\"}\n",
 			 bus, engine, uri);
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "set_insert")) {
 		/* V9.4 — Configure la chaîne insert post-master.
@@ -681,607 +661,6 @@ static void handle_cmd(int fd, const char *line)
 		        mode ? "mastering" : "passthrough",
 		        src  ? "usb"       : "hw");
 
-	} else if (json_has_op(line, "looper_track_ctl")) {
-		/* V12-LOOP-PRO : {"op":"looper_track_ctl","track":N,
-		 * "action":"rec|play|mute|unmute|clear"} */
-		int t = -1; char act[16] = "";
-		(void)json_get_int(line, "track", &t);
-		(void)json_get_str(line, "action", act, sizeof(act));
-		if (t < 0 || t >= LOOP_TRACKS) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad track\"}\n");
-			return;
-		}
-		struct loop_track *tr = &g_tr[t];
-		int st = atomic_load(&tr->state);
-		uint32_t mlen = atomic_load(&g_master_len);
-
-		if (!strcmp(act, "rec")) {
-			/* V13.2 : re-tap REC sur une piste ARMÉE = désarme */
-			if (st == TR_ARMED) {
-				atomic_store_explicit(&tr->state, TR_EMPTY,
-						      memory_order_release);
-				dprintf(fd, "{\"ok\":true,\"track\":%d,"
-					    "\"armed\":0}\n", t);
-				return;
-			}
-			/* un seul REC ACTIF simultané (l'armement est libre) */
-			int busy = 0;
-			for (int i = 0; i < LOOP_TRACKS; i++)
-				if (atomic_load(&g_tr[i].state) == TR_REC) busy = 1;
-			if (st != TR_EMPTY) {
-				dprintf(fd, "{\"ok\":false,\"err\":\"not empty\"}\n");
-				return;
-			}
-			/* memset de la piste VIDE (non lue par l'audio) → silence
-			 * des zones non ré-enregistrées, aucun glitch. */
-			memset(tr->buf, 0, (size_t)LOOP_MAX_FRAMES * 2 * sizeof(float));
-			tr->rec_head = 0;
-			tr->rec_done = 0;
-			atomic_store(&tr->rec_start, REC_START_NONE);
-			atomic_store(&tr->len, 0);
-			atomic_store(&tr->muted, 0);
-			if (mlen == 0 && !busy) {
-				/* pas encore de boucle maître : REC libre
-				 * immédiat (définit la longueur au PLAY) */
-				atomic_store_explicit(&tr->state, TR_REC,
-						      memory_order_release);
-			} else {
-				/* V13.2 : boucle maître présente (ou en cours
-				 * d'enregistrement) → ARMÉ, départ quantifié
-				 * au prochain début de boucle, un tour exact
-				 * puis PLAY (loop_render). */
-				atomic_store(&g_loop_run, 1);
-				atomic_store_explicit(&tr->state, TR_ARMED,
-						      memory_order_release);
-			}
-		} else if (!strcmp(act, "play")) {
-			if (st == TR_REC) {
-				if (mlen == 0) {
-					/* piste MAÎTRE : fige master_len = rec_head */
-					uint32_t h = tr->rec_head;
-					if (h == 0) {
-						dprintf(fd, "{\"ok\":false,\"err\":\"empty rec\"}\n");
-						return;
-					}
-					atomic_store_explicit(&tr->len, h, memory_order_release);
-					atomic_store(&tr->state, TR_PLAY);
-					atomic_store(&g_master_len, h);
-					atomic_store(&g_lpos, 0);
-					atomic_store(&g_loop_run, 1);
-				} else {
-					/* piste alignée : fige à mlen (zones non
-					 * enregistrées = silence memsetté) */
-					atomic_store_explicit(&tr->len, mlen, memory_order_release);
-					atomic_store(&tr->state, TR_PLAY);
-				}
-			}
-			/* si déjà PLAY : no-op (transport global via looper_ctl) */
-		} else if (!strcmp(act, "mute")) {
-			atomic_store(&tr->muted, 1);
-		} else if (!strcmp(act, "unmute")) {
-			atomic_store(&tr->muted, 0);
-		} else if (!strcmp(act, "clear")) {
-			atomic_store_explicit(&tr->state, TR_EMPTY, memory_order_release);
-			atomic_store(&tr->len, 0);
-			atomic_store(&tr->muted, 0);
-			atomic_store(&tr->peak, 0);
-			tr->rec_head = 0;
-			tr->rec_done = 0;
-			/* si plus aucune piste n'a de contenu ni n'enregistre →
-			 * réinitialise l'horloge maître (nouveau départ). */
-			int alive = 0;
-			for (int i = 0; i < LOOP_TRACKS; i++) {
-				int s = atomic_load(&g_tr[i].state);
-				if (s == TR_REC || (s == TR_PLAY && atomic_load(&g_tr[i].len)))
-					alive = 1;
-			}
-			if (!alive) {
-				atomic_store(&g_master_len, 0);
-				atomic_store(&g_lpos, 0);
-				atomic_store(&g_loop_run, 0);
-				/* V13.2 : plus de boucle maître → les pistes
-				 * ARMÉES n'ont plus de départ possible */
-				for (int i = 0; i < LOOP_TRACKS; i++)
-					if (atomic_load(&g_tr[i].state) == TR_ARMED)
-						atomic_store(&g_tr[i].state, TR_EMPTY);
-			}
-		} else {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad action\"}\n");
-			return;
-		}
-		dprintf(fd, "{\"ok\":true,\"op\":\"looper_track_ctl\",\"track\":%d,"
-			"\"state\":\"%s\"}\n", t, TR_NAMES[atomic_load(&tr->state)]);
-
-	} else if (json_has_op(line, "looper_track_cfg")) {
-		/* {"op":"looper_track_cfg","track":N,"src_a":N,"src_b":N|-1,
-		 * "gain_db":F} — refusé pendant REC de cette piste */
-		int t = -1;
-		(void)json_get_int(line, "track", &t);
-		if (t < 0 || t >= LOOP_TRACKS) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad track\"}\n");
-			return;
-		}
-		struct loop_track *tr = &g_tr[t];
-		if (atomic_load(&tr->state) == TR_REC) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"busy rec\"}\n");
-			return;
-		}
-		int a = -2, b = -2;
-		float gdb = 1000.0f;
-		(void)json_get_int(line, "src_a", &a);
-		(void)json_get_int(line, "src_b", &b);
-		(void)json_get_float(line, "gain_db", &gdb);
-		if (a >= 0 && a < N_INPUT_REAL) tr->src_a = a;
-		if (b >= -1 && b < N_INPUT_REAL) tr->src_b = b;
-		if (gdb > -60.0f && gdb <= 12.0f) tr->gain = powf(10.0f, gdb / 20.0f);
-		dprintf(fd, "{\"ok\":true,\"op\":\"looper_track_cfg\",\"track\":%d}\n", t);
-
-	} else if (json_has_op(line, "looper_ctl")) {
-		/* transport global : {"op":"looper_ctl","action":"play_all|stop_all|clear_all"} */
-		char act[16] = "";
-		(void)json_get_str(line, "action", act, sizeof(act));
-		if (!strcmp(act, "play_all")) {
-			if (atomic_load(&g_master_len)) atomic_store(&g_loop_run, 1);
-		} else if (!strcmp(act, "stop_all")) {
-			atomic_store(&g_loop_run, 0);
-		} else if (!strcmp(act, "clear_all")) {
-			for (int i = 0; i < LOOP_TRACKS; i++) {
-				atomic_store_explicit(&g_tr[i].state, TR_EMPTY,
-						      memory_order_release);
-				atomic_store(&g_tr[i].len, 0);
-				atomic_store(&g_tr[i].muted, 0);
-				atomic_store(&g_tr[i].peak, 0);
-				g_tr[i].rec_head = 0;
-				g_tr[i].rec_done = 0;
-			}
-			atomic_store(&g_master_len, 0);
-			atomic_store(&g_lpos, 0);
-			atomic_store(&g_loop_run, 0);
-		} else {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad action\"}\n");
-			return;
-		}
-		dprintf(fd, "{\"ok\":true,\"op\":\"looper_ctl\",\"action\":\"%s\"}\n", act);
-
-	} else if (json_has_op(line, "looper_status")) {
-		uint32_t mlen = atomic_load(&g_master_len);
-		int n = snprintf(reply, sizeof(reply),
-			"{\"ok\":true,\"master_len_s\":%.2f,\"pos_s\":%.2f,"
-			"\"run\":%d,\"max_s\":%u,\"master_peak\":%u,\"tracks\":[",
-			mlen / 48000.0f, atomic_load(&g_lpos) / 48000.0f,
-			atomic_load(&g_loop_run), LOOP_MAX_FRAMES / 48000u,
-			atomic_load(&g_loop_mpeak));
-		for (int t = 0; t < LOOP_TRACKS; t++) {
-			struct loop_track *tr = &g_tr[t];
-			n += snprintf(reply + n, sizeof(reply) - n,
-				"%s{\"track\":%d,\"state\":\"%s\",\"len_s\":%.2f,"
-				"\"muted\":%d,\"src_a\":%d,\"src_b\":%d,"
-				"\"gain_db\":%.1f,\"peak\":%u}",
-				t ? "," : "", t, TR_NAMES[atomic_load(&tr->state)],
-				atomic_load(&tr->len) / 48000.0f,
-				atomic_load(&tr->muted), tr->src_a, tr->src_b,
-				20.0f * log10f(tr->gain > 1e-6f ? tr->gain : 1e-6f),
-				atomic_load(&tr->peak));
-		}
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, strlen(reply));
-
-	} else if (json_has_op(line, "sampler_list")) {
-		/* V12-SMP : slots (nom, durée s, playing, position s) */
-		int n = snprintf(reply, sizeof(reply), "{\"ok\":true,\"slots\":[");
-		for (int i = 0; i < SMP_SLOTS; i++) {
-			struct smp_slot *s = &g_smp[i];
-			n += snprintf(reply + n, sizeof(reply) - n,
-				"%s{\"slot\":%d,\"name\":\"%s\",\"len_s\":%.1f,"
-				"\"playing\":%d,\"pos_s\":%.1f}",
-				i ? "," : "", i, s->buf ? s->name : "",
-				s->frames / 48000.0f,
-				atomic_load(&s->playing),
-				atomic_load(&s->pos) / 48000.0f);
-		}
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, n);
-
-	} else if (json_has_op(line, "sampler_trigger")) {
-		/* {"op":"sampler_trigger","slot":N,"gain_db":F} — retrigger OK */
-		int slot;
-		float gdb = 0.0f;
-		if (json_get_int(line, "slot", &slot) < 0 ||
-		    slot < 0 || slot >= SMP_SLOTS || !g_smp[slot].buf) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad slot\"}\n");
-			return;
-		}
-		(void)json_get_float(line, "gain_db", &gdb);
-		g_smp[slot].gain = powf(10.0f, gdb / 20.0f);
-		atomic_store(&g_smp[slot].pos, 0);
-		atomic_store_explicit(&g_smp[slot].playing, 1,
-				      memory_order_release);
-		dprintf(fd, "{\"ok\":true,\"op\":\"sampler_trigger\",\"slot\":%d}\n",
-			slot);
-
-	} else if (json_has_op(line, "sampler_stop")) {
-		/* {"op":"sampler_stop","slot":N|-1} — -1 = tous */
-		int slot = -1;
-		(void)json_get_int(line, "slot", &slot);
-		for (int i = 0; i < SMP_SLOTS; i++)
-			if (slot < 0 || slot == i)
-				atomic_store(&g_smp[i].playing, 0);
-		dprintf(fd, "{\"ok\":true,\"op\":\"sampler_stop\"}\n");
-
-	} else if (json_has_op(line, "sampler_reload")) {
-		smp_scan(1);
-		int loaded = 0;
-		for (int i = 0; i < SMP_SLOTS; i++)
-			if (g_smp[i].buf)
-				loaded++;
-		dprintf(fd, "{\"ok\":true,\"op\":\"sampler_reload\",\"loaded\":%d}\n",
-			loaded);
-
-	} else if (json_has_op(line, "set_automix")) {
-		/* V12-AMX : adhésion + poids par tranche.
-		 * {"op":"set_automix","src":N,"on":0|1,"weight_db":F} */
-		int src, on = 0;
-		float wdb = 0.0f;
-		if (json_get_int(line, "src", &src) < 0 ||
-		    src < 0 || src >= N_INPUT_REAL) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_automix src\"}\n");
-			return;
-		}
-		/* updates PARTIELS : toggler « A » sans weight_db ne doit pas
-		 * écraser le poids, et régler le poids ne touche pas l'adhésion */
-		int has_on = json_get_int(line, "on", &on) == 0;
-		int has_w  = json_get_float(line, "weight_db", &wdb) == 0;
-		{
-			const int lp = link_partner(src);   /* V13.3 */
-			pthread_mutex_lock(&g_st.target_lock);
-			if (has_on) {
-				g_st.automix_member[src] = on ? 1 : 0;
-				if (!on)
-					g_st.automix_gtarget[src] = 1.0f;
-				if (lp >= 0) {
-					g_st.automix_member[lp] = on ? 1 : 0;
-					if (!on)
-						g_st.automix_gtarget[lp] = 1.0f;
-				}
-			}
-			if (has_w && wdb >= -20.0f && wdb <= 20.0f) {
-				g_st.automix_weight[src] = powf(10.0f, wdb / 20.0f);
-				if (lp >= 0)
-					g_st.automix_weight[lp] =
-						g_st.automix_weight[src];
-			}
-			pthread_mutex_unlock(&g_st.target_lock);
-		}
-		atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"op\":\"set_automix\",\"src\":%d,"
-			    "\"on\":%d}\n", src, g_st.automix_member[src]);
-
-	} else if (json_has_op(line, "set_automix_cfg")) {
-		/* {"op":"set_automix_cfg","on":0|1,"resp_ms":F,"floor_db":F} */
-		int on = -1;
-		float resp = -1.0f, floordb = 1.0f;
-		(void)json_get_int(line, "on", &on);
-		(void)json_get_float(line, "resp_ms", &resp);
-		(void)json_get_float(line, "floor_db", &floordb);
-		pthread_mutex_lock(&g_st.target_lock);
-		if (on >= 0)
-			g_st.automix_on = on ? 1 : 0;
-		if (resp >= 10.0f && resp <= 2000.0f)
-			g_st.automix_resp_ms = resp;
-		if (floordb <= 0.0f && floordb >= -40.0f)
-			g_st.automix_floor = powf(10.0f, floordb / 20.0f);
-		pthread_mutex_unlock(&g_st.target_lock);
-		atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"op\":\"set_automix_cfg\",\"on\":%d}\n",
-			g_st.automix_on);
-
-	} else if (json_has_op(line, "get_automix")) {
-		/* état + gains courants (dB) pour la GUI */
-		int n = snprintf(reply, sizeof(reply),
-			"{\"ok\":true,\"on\":%d,\"resp_ms\":%.0f,"
-			"\"floor_db\":%.1f,\"members\":[",
-			g_st.automix_on, g_st.automix_resp_ms,
-			20.0f * log10f(g_st.automix_floor + 1e-9f));
-		for (int i = 0; i < N_INPUT_REAL; i++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%d",
-				      i ? "," : "", g_st.automix_member[i]);
-		n += snprintf(reply + n, sizeof(reply) - n, "],\"gains_db\":[");
-		for (int i = 0; i < N_INPUT_REAL; i++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%.1f",
-				      i ? "," : "",
-				      20.0f * log10f(g_st.automix_gain[i] + 1e-9f));
-		/* V12-AMX-UI : poids par tranche (dB) pour le panneau réglages */
-		n += snprintf(reply + n, sizeof(reply) - n, "],\"weights_db\":[");
-		for (int i = 0; i < N_INPUT_REAL; i++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%.1f",
-				      i ? "," : "",
-				      20.0f * log10f(g_st.automix_weight[i] + 1e-9f));
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, n);
-
-	} else if (json_has_op(line, "set_expander")) {
-		/* V12-EXP : {"op":"set_expander","src":N, on?, threshold_db?,
-		 * ratio?, attack_ms?, release_ms?, range_db?, hold_ms?} —
-		 * updates partiels : les champs absents gardent leur valeur. */
-		int src = -1;
-		if (json_get_int(line, "src", &src) < 0 ||
-		    src < 0 || src >= N_EXP_CH) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad src\"}\n");
-			return;
-		}
-		struct exp_ch *e = &g_exp[src];
-		int on = e->on;
-		float thr = e->thr_db, ratio = e->ratio, atk = e->atk_ms,
-		      rel = e->rel_ms, rng = e->range_db, hold = e->hold_ms;
-		(void)json_get_int(line, "on", &on);
-		(void)json_get_float(line, "threshold_db", &thr);
-		(void)json_get_float(line, "ratio", &ratio);
-		(void)json_get_float(line, "attack_ms", &atk);
-		(void)json_get_float(line, "release_ms", &rel);
-		(void)json_get_float(line, "range_db", &rng);
-		(void)json_get_float(line, "hold_ms", &hold);
-		{
-			const int lp = link_partner(src);   /* V13.3 */
-			pthread_mutex_lock(&g_st.target_lock);
-			exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
-			if (lp >= 0 && lp < N_EXP_CH)
-				exp_configure(lp, on, thr, ratio, atk, rel,
-					      rng, hold);
-			pthread_mutex_unlock(&g_st.target_lock);
-		}
-		atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"op\":\"set_expander\",\"src\":%d,"
-			"\"on\":%d}\n", src, g_exp[src].on);
-
-	} else if (json_has_op(line, "bandmix_role")) {
-		/* V13 : {"op":"bandmix_role","src":N,"role":"lead|choir|..."} */
-		int src = -1;
-		char rn[16] = "";
-		(void)json_get_int(line, "src", &src);
-		(void)json_get_str(line, "role", rn, sizeof(rn));
-		int role = -1;
-		for (int r = 0; r < BR_NROLES; r++)
-			if (!strcmp(rn, BR_NAMES[r])) role = r;
-		if (src < 0 || src >= N_EXP_CH || role < 0) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad role\"}\n");
-			return;
-		}
-		g_bmx.role[src] = role;
-		atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"src\":%d,\"role\":\"%s\"}\n",
-			src, BR_NAMES[role]);
-
-	} else if (json_has_op(line, "bandmix_measure")) {
-		/* {"op":"bandmix_measure","src":N} — 12 s, auto-stop.
-		 * src:-1 = annuler. */
-		int src = -2;
-		(void)json_get_int(line, "src", &src);
-		if (src == -1) {
-			atomic_store(&g_bmx.meas_src, -1);
-			dprintf(fd, "{\"ok\":true,\"measuring\":-1}\n");
-			return;
-		}
-		if (src < 0 || src >= N_EXP_CH ||
-		    atomic_load(&g_bmx.meas_src) >= 0) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"busy or bad src\"}\n");
-			return;
-		}
-		g_bmx.acc_ms = 0; g_bmx.nblk_s = 0;
-		g_bmx.peak_max = 0; g_bmx.sm = 0;
-		g_bmx.minsm = 1e9f; g_bmx.warm = 0;
-		clock_gettime(CLOCK_MONOTONIC, &g_bmx.meas_t0);
-		atomic_store(&g_bmx.meas_src, src);
-		dprintf(fd, "{\"ok\":true,\"measuring\":%d,\"secs\":12}\n", src);
-
-	} else if (json_has_op(line, "bandmix_calc")) {
-		bmx_calc();
-		dprintf(fd, "{\"ok\":true,\"op\":\"bandmix_calc\"}\n");
-
-	} else if (json_has_op(line, "bandmix_lock")) {
-		memset(g_bmx.lock_acc, 0, sizeof(g_bmx.lock_acc));
-		g_bmx.lock_ticks = 0;
-		g_bmx.locking = 1;
-		dprintf(fd, "{\"ok\":true,\"op\":\"bandmix_lock\",\"secs\":30}\n");
-
-	} else if (json_has_op(line, "bandmix_live")) {
-		int on = 0;
-		(void)json_get_int(line, "on", &on);
-		g_bmx.live = on ? 1 : 0;
-		if (!g_bmx.live) {
-			/* retour doux à 0 dB */
-			memset(g_bmx.kdb, 0, sizeof(g_bmx.kdb));
-			pthread_mutex_lock(&g_st.target_lock);
-			for (int i = 0; i < N_INPUT_TOTAL; i++)
-				g_st.keeper_target[i] = 1.0f;
-			pthread_mutex_unlock(&g_st.target_lock);
-		}
-		atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"live\":%d}\n", g_bmx.live);
-
-	} else if (json_has_op(line, "bandmix_autolive")) {
-		/* V13.5 : automix continu — un seul interrupteur, aucun
-		 * soundcheck/verrouillage. {"op":"bandmix_autolive","on":0|1} */
-		int on = 0;
-		(void)json_get_int(line, "on", &on);
-		g_bmx.autolive = on ? 1 : 0;
-		if (g_bmx.autolive) {
-			for (int i = 0; i < N_EXP_CH; i++)
-				g_bmx.al_ref[i] = g_bmx.risk[i] = -120.0f;   /* recale les peak-holds */
-			g_bmx.al_anchor = -120.0f;           /* ré-init de l'ancre */
-			/* V13.9 — reset balance auto : les GAINS DE GROUPE sont
-			 * CONSERVÉS (même groupe, même salle → volume plein dès
-			 * la 1re seconde, exigence scène) ; on ne recale que le
-			 * peak-hold programme, le staging (petites corrections
-			 * rapides) et les compteurs d'activité. */
-			g_bmx.prog_peak = -120.0f;
-			g_bmx.bal_staged = 0;
-			memset(g_bmx.act_ticks, 0, sizeof(g_bmx.act_ticks));
-			/* V13.9 — reset solo (l'auto se re-déclenchera si mérité) */
-			g_bmx.solo_src = -1;
-			g_bmx.solo_is_auto = 0;
-			g_bmx.solo_on_cnt = g_bmx.solo_off_cnt = 0;
-			for (int i = 0; i < N_EXP_CH; i++)
-				g_bmx.solo_base[i] = -999.0f;   /* base v2 à réapprendre */
-			/* V13.6 : EQ de placement.
-			 * V13.9 : le vfocus n'est PLUS forcé ici — un reset ne doit
-			 * JAMAIS écraser un réglage posé par l'opérateur (le bouton
-			 * PLACE À LA VOIX semblait « cassé » : choix OFF silencieuse-
-			 * ment ré-armé à chaque lancement de morceau). */
-			for (int i = 0; i < N_EXP_CH; i++)
-				g_eqx.role_of[i] = -1;       /* force le recalcul coefs */
-			atomic_store(&g_eqx.on, 1);
-			/* V13.7 — étage master : EQ mastering + makeup LUFS */
-			memset(g_meq_st, 0, sizeof(g_meq_st));
-			g_meq_fading = 0;
-			meq_init();   /* pose l'EQ direct (pas de fondu à l'activation) */
-			memset(g_mk.k1, 0, sizeof(g_mk.k1));
-			memset(g_mk.k2, 0, sizeof(g_mk.k2));
-			g_mk.ms = 0.0f;
-			g_mk.mk_db = 0.0f;
-			g_mk.makeup_cur = 1.0f;
-			atomic_store(&g_mk.makeup_mq, 1000);
-			atomic_store(&g_mk.lufs_c, -12000);   /* gelé au démarrage */
-			atomic_store(&g_master_on, 1);
-		} else {
-			memset(g_bmx.kdb, 0, sizeof(g_bmx.kdb));
-			atomic_store(&g_eqx.on, 0);
-			atomic_store(&g_master_on, 0);
-			atomic_store(&g_mk.makeup_mq, 1000);
-			pthread_mutex_lock(&g_st.target_lock);
-			for (int i = 0; i < N_INPUT_TOTAL; i++)
-				g_st.keeper_target[i] = 1.0f;
-			/* V13.6 : coupe les comps auto (rôle ≠ off) posés par l'automix */
-			for (int i = 0; i < N_EXP_CH; i++)
-				if (g_bmx.role[i] != BR_OFF && g_cmp[i].on &&
-				    BMX_P[g_bmx.role[i]].comp_on)
-					cmp_configure(i, 0, g_cmp[i].thr_db,
-						g_cmp[i].ratio, g_cmp[i].atk_ms,
-						g_cmp[i].rel_ms, g_cmp[i].makeup_db);
-			/* V13.9 : coupe aussi les GATES AUTO posées par l'automix */
-			for (int i = 0; i < N_EXP_CH; i++)
-				if (g_bmx.role[i] != BR_OFF && g_exp[i].on &&
-				    BMX_P[g_bmx.role[i]].gate_on)
-					exp_configure(i, 0, g_exp[i].thr_db,
-						g_exp[i].ratio, g_exp[i].atk_ms,
-						g_exp[i].rel_ms, g_exp[i].range_db,
-						g_exp[i].hold_ms);
-			pthread_mutex_unlock(&g_st.target_lock);
-		}
-		atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"autolive\":%d}\n", g_bmx.autolive);
-
-	} else if (json_has_op(line, "bandmix_solo")) {
-		/* V13.9 — SOLO : {"op":"bandmix_solo","src":-1..15,"auto":0/1}
-		 * src = voie à soloer (−1 = aucun), pose un solo MANUEL (que
-		 * l'auto ne relâche pas). auto = détection automatique on/off. */
-		int iv;
-		if (json_get_int(line, "src", &iv) >= 0 && iv >= -1 && iv < N_EXP_CH) {
-			g_bmx.solo_src = iv;
-			g_bmx.solo_is_auto = 0;
-			g_bmx.solo_on_cnt = g_bmx.solo_off_cnt = 0;
-		}
-		if (json_get_int(line, "auto", &iv) >= 0) {
-			g_bmx.solo_auto = iv ? 1 : 0;
-			/* seul le choix auto est persisté (pas le solo ponctuel) */
-			atomic_store(&g_presets_dirty, 1);
-		}
-		dprintf(fd, "{\"ok\":true,\"op\":\"bandmix_solo\",\"src\":%d,"
-			"\"auto\":%d,\"is_auto\":%d}\n",
-			g_bmx.solo_src, g_bmx.solo_auto, g_bmx.solo_is_auto);
-
-	} else if (json_has_op(line, "bandmix_status")) {
-		int ms = atomic_load(&g_bmx.meas_src);
-		int elapsed = 0;
-		if (ms >= 0) {
-			struct timespec now;
-			clock_gettime(CLOCK_MONOTONIC, &now);
-			elapsed = (int)(now.tv_sec - g_bmx.meas_t0.tv_sec);
-		}
-		int n = snprintf(reply, sizeof(reply),
-			"{\"ok\":true,\"live\":%d,\"ref_valid\":%d,"
-			"\"autolive\":%d,"
-			"\"locking\":%d,\"measuring\":%d,\"meas_elapsed\":%d,"
-			"\"solo\":%d,\"solo_auto\":%d,\"solo_is_auto\":%d,"
-			"\"chans\":[",
-			g_bmx.live, g_bmx.ref_valid, g_bmx.autolive,
-			g_bmx.locking, ms, elapsed,
-			g_bmx.solo_src, g_bmx.solo_auto, g_bmx.solo_is_auto);
-		for (int i = 0; i < N_EXP_CH; i++) {
-			n += snprintf(reply + n, sizeof(reply) - n,
-				"%s{\"src\":%d,\"role\":\"%s\",\"done\":%d,"
-				"\"rms_db\":%.1f,\"floor_db\":%.1f,"
-				"\"keeper_db\":%.2f}",
-				i ? "," : "", i, BR_NAMES[g_bmx.role[i]],
-				g_bmx.m[i].done,
-				g_bmx.m[i].done ? g_bmx.m[i].rms_avg_db : -99.0f,
-				g_bmx.m[i].done ? g_bmx.m[i].floor_db : -99.0f,
-				g_bmx.kdb[i]);
-		}
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, n);
-
-	} else if (json_has_op(line, "scene_save")) {
-		/* V13-SCENES : {"op":"scene_save","slot":0-5,"name":"..."} */
-		int slot = -1;
-		char nm[48] = "";
-		(void)json_get_int(line, "slot", &slot);
-		(void)json_get_str(line, "name", nm, sizeof(nm));
-		if (slot < 0 || slot >= SCENE_SLOTS) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad slot\"}\n");
-			return;
-		}
-		mkdir(SCENE_DIR, 0755);
-		char p[128];
-		snprintf(p, sizeof(p), SCENE_DIR "/scene%d", slot);
-		save_state_to(p);
-		if (nm[0]) {
-			snprintf(p, sizeof(p), SCENE_DIR "/scene%d.name", slot);
-			FILE *nf = fopen(p, "w");
-			if (nf) { fprintf(nf, "%s\n", nm); fclose(nf); }
-		}
-		dprintf(fd, "{\"ok\":true,\"op\":\"scene_save\",\"slot\":%d}\n",
-			slot);
-
-	} else if (json_has_op(line, "scene_recall")) {
-		int slot = -1;
-		(void)json_get_int(line, "slot", &slot);
-		if (slot < 0 || slot >= SCENE_SLOTS) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad slot\"}\n");
-			return;
-		}
-		char p[128];
-		snprintf(p, sizeof(p), SCENE_DIR "/scene%d", slot);
-		if (scene_apply(p) == 0)
-			dprintf(fd, "{\"ok\":true,\"op\":\"scene_recall\","
-				"\"slot\":%d}\n", slot);
-		else
-			dprintf(fd, "{\"ok\":false,\"err\":\"scene vide\"}\n");
-
-	} else if (json_has_op(line, "scene_list")) {
-		int n = snprintf(reply, sizeof(reply),
-				 "{\"ok\":true,\"scenes\":[");
-		for (int s = 0; s < SCENE_SLOTS; s++) {
-			char p[128], nm[48] = "";
-			snprintf(p, sizeof(p), SCENE_DIR "/scene%d", s);
-			int used = access(p, R_OK) == 0;
-			snprintf(p, sizeof(p), SCENE_DIR "/scene%d.name", s);
-			FILE *nf = fopen(p, "r");
-			if (nf) {
-				if (fgets(nm, sizeof(nm), nf)) {
-					char *e = strchr(nm, '\n');
-					if (e) *e = '\0';
-				}
-				fclose(nf);
-			}
-			if (!nm[0])
-				snprintf(nm, sizeof(nm), "Scène %d", s + 1);
-			n += snprintf(reply + n, sizeof(reply) - n,
-				"%s{\"slot\":%d,\"used\":%d,\"name\":\"%s\"}",
-				s ? "," : "", s, used, nm);
-		}
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, n);
-
 	} else if (json_has_op(line, "set_insert_bypass")) {
 		/* V13-SCENES : bouton MASTERING ON/OFF (chaîne gardée chaude) */
 		int on = 0;
@@ -1296,188 +675,6 @@ static void handle_cmd(int fd, const char *line)
 			atomic_load(&g_insert_bypass),
 			atomic_load(&g_insert_active) &&
 			!atomic_load(&g_insert_bypass));
-
-	} else if (json_has_op(line, "set_vfocus")) {
-		/* V13-VFOCUS : {"op":"set_vfocus", on?, amount?(0-100),
-		 * max_cut_db?} — updates partiels */
-		int on = g_vf.on;
-		float am = -1.0f, mc = -1.0f;
-		(void)json_get_int(line, "on", &on);
-		(void)json_get_float(line, "amount", &am);
-		(void)json_get_float(line, "max_cut_db", &mc);
-		pthread_mutex_lock(&g_st.target_lock);
-		g_vf.on = on ? 1 : 0;
-		if (am >= 0.0f && am <= 100.0f)
-			g_vf.amount = am / 100.0f;
-		if (mc >= 0.0f && mc <= 12.0f)
-			g_vf.max_cut_db = mc;
-		pthread_mutex_unlock(&g_st.target_lock);
-		atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"op\":\"set_vfocus\",\"on\":%d}\n",
-			g_vf.on);
-
-	} else if (json_has_op(line, "get_vfocus")) {
-		int n = snprintf(reply, sizeof(reply),
-			"{\"ok\":true,\"on\":%d,\"amount\":%.0f,"
-			"\"max_cut_db\":%.1f,\"active\":%d,\"cuts_db\":[",
-			g_vf.on, g_vf.amount * 100.0f, g_vf.max_cut_db,
-			atomic_load_explicit(&g_vf.active,
-					     memory_order_relaxed));
-		for (int b = 0; b < VF_BANDS; b++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%.2f",
-				      b ? "," : "",
-				      atomic_load_explicit(&g_vf.pub_cut[b],
-							   memory_order_relaxed)
-					/ 1000.0f);
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, n);
-
-	} else if (json_has_op(line, "set_comp")) {
-		/* V13-COMP : updates partiels comme set_expander */
-		int src = -1;
-		if (json_get_int(line, "src", &src) < 0 ||
-		    src < 0 || src >= N_EXP_CH) {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad src\"}\n");
-			return;
-		}
-		struct cmp_ch *c = &g_cmp[src];
-		int on = c->on;
-		float thr = c->thr_db, ratio = c->ratio, atk = c->atk_ms,
-		      rel = c->rel_ms, mk = c->makeup_db;
-		(void)json_get_int(line, "on", &on);
-		(void)json_get_float(line, "threshold_db", &thr);
-		(void)json_get_float(line, "ratio", &ratio);
-		(void)json_get_float(line, "attack_ms", &atk);
-		(void)json_get_float(line, "release_ms", &rel);
-		(void)json_get_float(line, "makeup_db", &mk);
-		{
-			const int lp = link_partner(src);   /* V13.3 */
-			pthread_mutex_lock(&g_st.target_lock);
-			cmp_configure(src, on, thr, ratio, atk, rel, mk);
-			if (lp >= 0 && lp < N_EXP_CH)
-				cmp_configure(lp, on, thr, ratio, atk, rel, mk);
-			pthread_mutex_unlock(&g_st.target_lock);
-		}
-		atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"op\":\"set_comp\",\"src\":%d,"
-			"\"on\":%d}\n", src, g_cmp[src].on);
-
-	} else if (json_has_op(line, "get_comp")) {
-		int n = snprintf(reply, sizeof(reply),
-				 "{\"ok\":true,\"channels\":[");
-		for (int i = 0; i < N_EXP_CH; i++) {
-			struct cmp_ch *c = &g_cmp[i];
-			n += snprintf(reply + n, sizeof(reply) - n,
-				"%s{\"src\":%d,\"on\":%d,\"threshold_db\":%.1f,"
-				"\"ratio\":%.1f,\"attack_ms\":%.1f,"
-				"\"release_ms\":%.0f,\"makeup_db\":%.1f,"
-				"\"gr_db\":%.1f}",
-				i ? "," : "", i, c->on, c->thr_db, c->ratio,
-				c->atk_ms, c->rel_ms, c->makeup_db,
-				atomic_load_explicit(&c->gr_mdb,
-						     memory_order_relaxed)
-					/ -1000.0f);
-		}
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, n);
-
-	} else if (json_has_op(line, "get_expander")) {
-		/* état complet + GR courant (milli-dB → dB) pour la GUI */
-		int n = snprintf(reply, sizeof(reply),
-				 "{\"ok\":true,\"channels\":[");
-		for (int i = 0; i < N_EXP_CH; i++) {
-			struct exp_ch *e = &g_exp[i];
-			n += snprintf(reply + n, sizeof(reply) - n,
-				"%s{\"src\":%d,\"on\":%d,\"threshold_db\":%.1f,"
-				"\"ratio\":%.1f,\"attack_ms\":%.1f,"
-				"\"release_ms\":%.0f,\"range_db\":%.0f,"
-				"\"hold_ms\":%.0f,\"gr_db\":%.1f}",
-				i ? "," : "", i, e->on, e->thr_db, e->ratio,
-				e->atk_ms, e->rel_ms, e->range_db, e->hold_ms,
-				atomic_load_explicit(&e->gr_mdb,
-						     memory_order_relaxed)
-					/ -1000.0f);
-		}
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, n);
-
-	} else if (json_has_op(line, "get_midix")) {
-		/* V12-MIDIX : présence du module + santé pour la GUI */
-		struct midix_hdr *h = atomic_load(&g_midix.hdr);
-		dprintf(fd, "{\"ok\":true,\"present\":%d,\"underruns\":%u,"
-			"\"peak\":%u,\"gain\":%.2f}\n",
-			h ? 1 : 0,
-			atomic_load(&g_midix.underruns),
-			atomic_load(&g_midix.peak), g_midix.gain);
-
-	} else if (json_has_op(line, "set_midix")) {
-		/* {"op":"set_midix","gain":F} — trim du module dans P1/P2 */
-		float g = -1.0f;
-		(void)json_get_float(line, "gain", &g);
-		if (g >= 0.0f && g <= 4.0f)
-			g_midix.gain = g;
-		dprintf(fd, "{\"ok\":true,\"op\":\"set_midix\",\"gain\":%.2f}\n",
-			g_midix.gain);
-
-	} else if (json_has_op(line, "midix_ctl")) {
-		/* V12-MIDIX-GUI — proxy vers le daemon midi-expander (la GUI
-		 * n'a qu'un canal : ce socket). {"op":"midix_ctl","cmd":
-		 * "status"|"prog"|"gain"|"panic", chan?, num?, value?}.
-		 * Control thread uniquement (jamais l'audio) ; si le daemon
-		 * est absent, connect échoue immédiatement (pas de blocage). */
-		char cmd[16] = "", raw[192] = "";
-		int chan = -1, num = -1;
-		float val = -1.0f;
-		(void)json_get_str(line, "cmd", cmd, sizeof(cmd));
-		(void)json_get_str(line, "line", raw, sizeof(raw));
-		(void)json_get_int(line, "chan", &chan);
-		(void)json_get_int(line, "num", &num);
-		(void)json_get_float(line, "value", &val);
-		char req[224];
-		if (raw[0])   /* V12-SYNTH : passthrough générique (engine,
-			       * inst_list, patch_get/set/save…) */
-			snprintf(req, sizeof(req), "%s\n", raw);
-		else if (!strcmp(cmd, "status"))
-			snprintf(req, sizeof(req), "status\n");
-		else if (!strcmp(cmd, "prog") && chan >= 0 && chan < 16 &&
-			 num >= 0 && num < 128)
-			snprintf(req, sizeof(req), "prog %d %d\n", chan, num);
-		else if (!strcmp(cmd, "gain") && val >= 0.0f && val <= 10.0f)
-			snprintf(req, sizeof(req), "gain %.3f\n", val);
-		else if (!strcmp(cmd, "panic"))
-			snprintf(req, sizeof(req), "panic\n");
-		else {
-			dprintf(fd, "{\"ok\":false,\"err\":\"bad midix cmd\"}\n");
-			return;
-		}
-		int s = socket(AF_UNIX, SOCK_STREAM, 0);
-		struct sockaddr_un sa = { .sun_family = AF_UNIX };
-		snprintf(sa.sun_path, sizeof(sa.sun_path),
-			 "/run/midi-expander.sock");
-		struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };
-		setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-		setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-		/* réponses longues (inst_list ~8 Ko) : lecture en boucle
-		 * jusqu'au '\n' final. Thread ctl unique → static ok. */
-		static char resp[16384];
-		ssize_t rn = 0;
-		if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == 0 &&
-		    write(s, req, strlen(req)) > 0) {
-			while (rn < (ssize_t)sizeof(resp) - 1) {
-				ssize_t k = read(s, resp + rn,
-						 sizeof(resp) - 1 - (size_t)rn);
-				if (k <= 0)
-					break;
-				rn += k;
-				if (resp[rn - 1] == '\n')
-					break;
-			}
-		}
-		close(s);
-		if (rn > 0)
-			write(fd, resp, (size_t)rn);
-		else
-			dprintf(fd, "{\"ok\":false,\"err\":\"expander absent\"}\n");
 
 	} else if (json_has_op(line, "get_assistant")) {
 		/* Renvoie état Mixer Assistant. Le daemon mixer-ml-inference
@@ -1811,151 +1008,47 @@ static void handle_cmd(int fd, const char *line)
 			        atomic_load_explicit(&g_out_gain_m[o], memory_order_relaxed));
 		dprintf(fd, "]}\n");
 
-	} else if (json_has_op(line, "master_eq")) {
-		/* V13.7 — EQ de mastering master (3 bandes), réglable en direct :
-		 * {"op":"master_eq","low_db":..,"low_hz":..,"mid_db":..,"mid_hz":..,
-		 *  "mid_q":..,"air_db":..,"air_hz":..} — champs absents = inchangés.
-		 * Sans champ = simple lecture (makeup_db/lufs courants inclus). */
-		float v; int ch = 0;
-		if (json_get_float(line, "low_hz", &v) >= 0) { g_meq_p.low_hz = v; ch = 1; }
-		if (json_get_float(line, "low_db", &v) >= 0) { g_meq_p.low_db = v; ch = 1; }
-		if (json_get_float(line, "mid_hz", &v) >= 0) { g_meq_p.mid_hz = v; ch = 1; }
-		if (json_get_float(line, "mid_db", &v) >= 0) { g_meq_p.mid_db = v; ch = 1; }
-		if (json_get_float(line, "mid_q",  &v) >= 0) { g_meq_p.mid_q  = v; ch = 1; }
-		if (json_get_float(line, "air_hz", &v) >= 0) { g_meq_p.air_hz = v; ch = 1; }
-		if (json_get_float(line, "air_db", &v) >= 0) { g_meq_p.air_db = v; ch = 1; }
-		if (ch) {   /* seulement si un champ a changé (sinon = lecture pure,
-		             * pas de crossfade ni d'écriture flash sur un poll GUI) */
-			meq_recalc();
-			save_master_eq();
-			atomic_store(&g_presets_dirty, 1);   /* V13.9 : EQ aussi
-			                                      * dans l'état/scènes */
-		}
-		dprintf(fd, "{\"ok\":true,\"op\":\"master_eq\","
-			"\"low_db\":%.2f,\"low_hz\":%.1f,\"mid_db\":%.2f,"
-			"\"mid_hz\":%.1f,\"mid_q\":%.2f,\"air_db\":%.2f,"
-			"\"air_hz\":%.1f,\"makeup_db\":%.2f,\"lufs\":%.2f}\n",
-			g_meq_p.low_db, g_meq_p.low_hz, g_meq_p.mid_db,
-			g_meq_p.mid_hz, g_meq_p.mid_q, g_meq_p.air_db,
-			g_meq_p.air_hz, g_mk.mk_db,
-			atomic_load_explicit(&g_mk.lufs_c, memory_order_relaxed) * 0.01f);
-
-	} else if (json_has_op(line, "automix_tune")) {
-		/* V13.9 — tunables automix réglables en LIVE (R&D) :
-		 * {"op":"automix_tune","freeze_db":..,"risk_decay":..,"risk_margin":..}
-		 * champs absents = inchangés ; sans champ = lecture. */
-		float v; int chg = 0;
-		if (json_get_float(line, "freeze_db",   &v) >= 0 && v >= 3.0f && v <= 40.0f)
-			{ g_bmx.freeze_db = v; chg = 1; }
-		if (json_get_float(line, "risk_decay",  &v) >= 0 && v >= 0.0f && v <= 2.0f)
-			{ g_bmx.risk_decay = v; chg = 1; }
-		if (json_get_float(line, "risk_margin", &v) >= 0 && v >= 0.0f && v <= 12.0f)
-			{ g_bmx.risk_margin = v; chg = 1; }
-		if (json_get_float(line, "gate_db", &v) >= 0 && v >= 3.0f && v <= 30.0f)
-			{ g_bmx.gate_db = v; chg = 1; }
-		if (chg)   /* pollé en lecture par la GUI : dirty SEULEMENT si set */
-			atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"op\":\"automix_tune\",\"freeze_db\":%.1f,"
-			"\"risk_decay\":%.3f,\"risk_margin\":%.1f,\"gate_db\":%.1f}\n",
-			g_bmx.freeze_db, g_bmx.risk_decay, g_bmx.risk_margin,
-			g_bmx.gate_db);
-
-	} else if (json_has_op(line, "set_vspatial")) {
-		/* V13.9 — spatializer voix (widener Lauridsen LEAD+CHŒURS) :
-		 * {"op":"set_vspatial","on":0/1,"amount":0..100,"delay_ms":3..40}
-		 * champs absents = inchangés ; toujours renvoie l'état courant. */
-		int iv; float v; int chg = 0;
-		if (json_get_int(line, "on", &iv) >= 0) {
-			atomic_store_explicit(&g_vspat.on, iv ? 1 : 0,
-					      memory_order_relaxed);
-			chg = 1;
-		}
-		if (json_get_float(line, "amount", &v) >= 0 && v >= 0.0f && v <= 100.0f) {
-			atomic_store_explicit(&g_vspat.amount_mq, (int)(v * 10.0f + 0.5f),
-					      memory_order_relaxed);
-			chg = 1;
-		}
-		if (json_get_float(line, "delay_ms", &v) >= 0 && v >= 3.0f && v <= 40.0f) {
-			atomic_store_explicit(&g_vspat.delay_smp,
-					      (int)(v * SAMPLE_RATE / 1000.0f),
-					      memory_order_relaxed);
-			chg = 1;
-		}
-		if (chg)   /* pollé en lecture par la GUI : dirty SEULEMENT si set */
-			atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"op\":\"set_vspatial\",\"on\":%d,"
-			"\"amount\":%.0f,\"delay_ms\":%.1f}\n",
-			atomic_load_explicit(&g_vspat.on, memory_order_relaxed),
-			atomic_load_explicit(&g_vspat.amount_mq, memory_order_relaxed) / 10.0,
-			atomic_load_explicit(&g_vspat.delay_smp, memory_order_relaxed)
-				* 1000.0 / SAMPLE_RATE);
-
-	} else if (json_has_op(line, "set_balance")) {
-		/* V13.9 — BALANCE AUTO (table quadrants) : tient LUFS=lufs_tgt ET
-		 * écart voix−musique = e_tgt en bougeant les gains de groupe.
-		 * {"op":"set_balance","on":0/1,"lufs_tgt":-30..-6,"e_tgt":-6..12}
-		 * absent=inchangé. Renvoie l'état + gains groupe + LUFS mesuré. */
-		int iv; float v; int chg = 0;
-		if (json_get_int(line, "on", &iv) >= 0)
-			{ g_bmx.balance_on = iv ? 1 : 0; chg = 1; }
-		if (json_get_float(line, "lufs_tgt", &v) >= 0 && v >= -30.0f && v <= -6.0f)
-			{ g_bmx.bal_lufs_tgt = v; chg = 1; }
-		if (json_get_float(line, "e_tgt", &v) >= 0 && v >= -6.0f && v <= 12.0f)
-			{ g_bmx.bal_e_tgt = v; chg = 1; }
-		if (json_get_float(line, "c_tgt", &v) >= 0 && v >= -6.0f && v <= 12.0f)
-			{ g_bmx.bal_c_tgt = v; chg = 1; }
-		if (chg)   /* pollé en lecture par la GUI : dirty SEULEMENT si set */
-			atomic_store(&g_presets_dirty, 1);
-		dprintf(fd, "{\"ok\":true,\"op\":\"set_balance\",\"on\":%d,"
-			"\"lufs_tgt\":%.1f,\"e_tgt\":%.1f,\"c_tgt\":%.1f,"
-			"\"voice_db\":%.1f,\"choir_db\":%.1f,\"music_db\":%.1f,"
-			"\"lufs\":%.1f}\n",
-			g_bmx.balance_on, g_bmx.bal_lufs_tgt, g_bmx.bal_e_tgt,
-			g_bmx.bal_c_tgt, g_bmx.g_voice_db, g_bmx.g_choir_db,
-			g_bmx.g_music_db,
-			atomic_load_explicit(&g_mk.lufs_c, memory_order_relaxed) * 0.01);
-
 	} else if (json_has_op(line, "get_meters_lite")) {
 		/* V10-N2 : peaks seuls (in/out/fx), SANS le payload analyzer
 		 * (~4.8 KB) — pour l'app native mixer-console qui poll à 30 Hz
 		 * et n'affiche pas encore de spectre. */
 		int n = 0;
-		n += snprintf(reply + n, sizeof(reply) - n, "{\"ok\":true,\"in\":[");
-		for (int i = 0; i < N_INPUT_TOTAL && n < (int)sizeof(reply); i++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", i ? "," : "",
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "{\"ok\":true,\"in\":[");
+		for (int i = 0; i < N_INPUT_TOTAL && n < (int)sizeof(g_ctl_reply); i++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%u", i ? "," : "",
 				      atomic_load_explicit(&g_st.peak_in[i], memory_order_relaxed));
-		n += snprintf(reply + n, sizeof(reply) - n, "],\"out\":[");
-		for (int o = 0; o < N_OUTPUT_TOTAL && n < (int)sizeof(reply); o++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", o ? "," : "",
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "],\"out\":[");
+		for (int o = 0; o < N_OUTPUT_TOTAL && n < (int)sizeof(g_ctl_reply); o++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%u", o ? "," : "",
 				      atomic_load_explicit(&g_st.peak_out[o], memory_order_relaxed));
-		n += snprintf(reply + n, sizeof(reply) - n, "],\"fx\":[");
-		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(reply); b++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", b ? "," : "",
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "],\"fx\":[");
+		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(g_ctl_reply); b++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%u", b ? "," : "",
 				      atomic_load_explicit(&g_st.peak_fx[b], memory_order_relaxed));
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, n);
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, n);
 
 	} else if (json_has_op(line, "get_meters")) {
 		/* E7.1 + E7.5 : retourne peaks + analyzer (spectrum + scope) en
 		 * un seul round-trip, consommé par mixer-gui-http /api/stream.
 		 * Conversion dBFS peaks côté client : 20*log10(peak/2147483648).
 		 */
-		static char reply[16384];
+		static char g_ctl_reply[16384];
 		int n = 0;
-		n += snprintf(reply + n, sizeof(reply) - n, "{\"ok\":true,\"in\":[");
-		for (int i = 0; i < N_INPUT_TOTAL && n < (int)sizeof(reply); i++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", i ? "," : "",
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "{\"ok\":true,\"in\":[");
+		for (int i = 0; i < N_INPUT_TOTAL && n < (int)sizeof(g_ctl_reply); i++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%u", i ? "," : "",
 				      atomic_load_explicit(&g_st.peak_in[i], memory_order_relaxed));
-		n += snprintf(reply + n, sizeof(reply) - n, "],\"out\":[");
-		for (int o = 0; o < N_OUTPUT_TOTAL && n < (int)sizeof(reply); o++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", o ? "," : "",
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "],\"out\":[");
+		for (int o = 0; o < N_OUTPUT_TOTAL && n < (int)sizeof(g_ctl_reply); o++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%u", o ? "," : "",
 				      atomic_load_explicit(&g_st.peak_out[o], memory_order_relaxed));
-		n += snprintf(reply + n, sizeof(reply) - n, "],\"fx\":[");
-		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(reply); b++)
-			n += snprintf(reply + n, sizeof(reply) - n, "%s%u", b ? "," : "",
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "],\"fx\":[");
+		for (int b = 0; b < N_BUS_FX_CH && n < (int)sizeof(g_ctl_reply); b++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%u", b ? "," : "",
 				      atomic_load_explicit(&g_st.peak_fx[b], memory_order_relaxed));
-		n += snprintf(reply + n, sizeof(reply) - n, "],\"analyzer\":[");
-		for (int t = 0; t < N_TAPS && n < (int)sizeof(reply); t++) {
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "],\"analyzer\":[");
+		for (int t = 0; t < N_TAPS && n < (int)sizeof(g_ctl_reply); t++) {
 			int k = atomic_load_explicit(&g_taps[t].kind, memory_order_relaxed);
 			int aa = atomic_load_explicit(&g_taps[t].a, memory_order_relaxed);
 			int bb = atomic_load_explicit(&g_taps[t].b, memory_order_relaxed);
@@ -1967,20 +1060,20 @@ static void handle_cmd(int fd, const char *line)
 			memcpy(scope, g_taps[t].out_scope, sizeof(scope));
 			rms_dB = g_taps[t].out_rms_dB;
 			pthread_mutex_unlock(&g_taps[t].out_lock);
-			n += snprintf(reply + n, sizeof(reply) - n,
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n,
 				      "%s{\"k\":%d,\"a\":%d,\"b\":%d,\"rms\":%.1f,\"s\":[",
 				      t ? "," : "", k, aa, bb, rms_dB);
-			for (int i = 0; i < TAP_BINS_OUT && n < (int)sizeof(reply); i++)
-				n += snprintf(reply + n, sizeof(reply) - n, "%s%d",
+			for (int i = 0; i < TAP_BINS_OUT && n < (int)sizeof(g_ctl_reply); i++)
+				n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%d",
 					      i ? "," : "", (int)spec[i]);
-			n += snprintf(reply + n, sizeof(reply) - n, "],\"x\":[");
-			for (int i = 0; i < TAP_SCOPE_N * 2 && n < (int)sizeof(reply); i++)
-				n += snprintf(reply + n, sizeof(reply) - n, "%s%d",
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "],\"x\":[");
+			for (int i = 0; i < TAP_SCOPE_N * 2 && n < (int)sizeof(g_ctl_reply); i++)
+				n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%d",
 					      i ? "," : "", (int)scope[i]);
-			n += snprintf(reply + n, sizeof(reply) - n, "]}");
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}");
 		}
-		n += snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, strlen(reply));
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "set_tap")) {
 		int t, k, a, b;
@@ -2014,18 +1107,18 @@ static void handle_cmd(int fd, const char *line)
 			    "\"a\":%d,\"b\":%d}\n", t, k, a, b);
 
 	} else if (json_has_op(line, "get_taps")) {
-		char reply[256];
-		int n = snprintf(reply, sizeof(reply), "{\"ok\":true,\"taps\":[");
+		char g_ctl_reply[256];
+		int n = snprintf(g_ctl_reply, sizeof(g_ctl_reply), "{\"ok\":true,\"taps\":[");
 		for (int t = 0; t < N_TAPS; t++) {
-			n += snprintf(reply + n, sizeof(reply) - n,
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n,
 				      "%s{\"k\":%d,\"a\":%d,\"b\":%d}",
 				      t ? "," : "",
 				      atomic_load_explicit(&g_taps[t].kind, memory_order_relaxed),
 				      atomic_load_explicit(&g_taps[t].a,    memory_order_relaxed),
 				      atomic_load_explicit(&g_taps[t].b,    memory_order_relaxed));
 		}
-		snprintf(reply + n, sizeof(reply) - n, "]}\n");
-		write(fd, reply, strlen(reply));
+		snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "get_drift")) {
 		/* V8.1.b — drift USB↔DSP mesuré passivement par cap_uac2_thread.
@@ -2088,8 +1181,8 @@ static void handle_cmd(int fd, const char *line)
 		unsigned long it_30_50 = atomic_load(&g_iter_30_50);
 		unsigned long it_ge50  = atomic_load(&g_iter_ge50);
 
-		char reply[1200];
-		snprintf(reply, sizeof(reply),
+		char g_ctl_reply[1200];
+		snprintf(g_ctl_reply, sizeof(g_ctl_reply),
 		         "{\"ok\":true,\"drift_ppm\":%.2f,\"valid\":%d,"
 		         "\"shift_ppm\":%d,"
 		         "\"xruns_cap\":%lu,\"xruns_play\":%lu,\"drops_play\":%lu,"
@@ -2124,7 +1217,7 @@ static void handle_cmd(int fd, const char *line)
 		         rd_min, rd_max, rd_avg,
 		         wj_max, wj_avg,
 		         it_lt18, it_18_22, it_22_30, it_30_50, it_ge50);
-		write(fd, reply, strlen(reply));
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
 
 	} else if (json_has_op(line, "apply_drift_as_shift")) {
 		/* V8.14 — force shift_ppm = round(drift_ppm) en un coup,
@@ -2337,6 +1430,10 @@ static void *control_thread(void *arg)
 	unlink(MIXER_SOCK_PATH);
 	return NULL;
 }
+
+/* V9.3.3 : buffer de réponse control partagé (un seul thread) — extern
+ * dans control.h, utilisé par les handlers d'ops des modules. */
+char g_ctl_reply[49152];
 
 /* Persistance + scènes : déplacées dans persist.c/persist.h (V14.0 étape 2e). */
 

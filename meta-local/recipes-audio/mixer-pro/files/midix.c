@@ -15,6 +15,11 @@
 
 #include "util.h"      /* mlog */
 #include "midix.h"
+#include "control.h"    /* handlers d'ops (V14.0 étape 4) */
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #define MIDIX_SHM   "/ala-midix"
 
@@ -96,4 +101,93 @@ void midix_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 	atomic_store_explicit(&g_midix.peak,
 			      (uint32_t)(pk * g * 2147483647.0f),
 			      memory_order_relaxed);
+}
+
+/* V14.0 étape 4 : ops du module — appelées par le dispatcher control.
+ * Corps déplacés tels quels depuis handle_cmd (extraction pure) ;
+ * retourne 1 si l'op est traitée, 0 sinon. */
+int midix_handle_op(int fd, const char *line)
+{
+	if (json_has_op(line, "get_midix")) {
+		/* V12-MIDIX : présence du module + santé pour la GUI */
+		struct midix_hdr *h = atomic_load(&g_midix.hdr);
+		dprintf(fd, "{\"ok\":true,\"present\":%d,\"underruns\":%u,"
+			"\"peak\":%u,\"gain\":%.2f}\n",
+			h ? 1 : 0,
+			atomic_load(&g_midix.underruns),
+			atomic_load(&g_midix.peak), g_midix.gain);
+		return 1;
+	}
+	if (json_has_op(line, "set_midix")) {
+		/* {"op":"set_midix","gain":F} — trim du module dans P1/P2 */
+		float g = -1.0f;
+		(void)json_get_float(line, "gain", &g);
+		if (g >= 0.0f && g <= 4.0f)
+			g_midix.gain = g;
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_midix\",\"gain\":%.2f}\n",
+			g_midix.gain);
+		return 1;
+	}
+	if (json_has_op(line, "midix_ctl")) {
+		/* V12-MIDIX-GUI — proxy vers le daemon midi-expander (la GUI
+		 * n'a qu'un canal : ce socket). {"op":"midix_ctl","cmd":
+		 * "status"|"prog"|"gain"|"panic", chan?, num?, value?}.
+		 * Control thread uniquement (jamais l'audio) ; si le daemon
+		 * est absent, connect échoue immédiatement (pas de blocage). */
+		char cmd[16] = "", raw[192] = "";
+		int chan = -1, num = -1;
+		float val = -1.0f;
+		(void)json_get_str(line, "cmd", cmd, sizeof(cmd));
+		(void)json_get_str(line, "line", raw, sizeof(raw));
+		(void)json_get_int(line, "chan", &chan);
+		(void)json_get_int(line, "num", &num);
+		(void)json_get_float(line, "value", &val);
+		char req[224];
+		if (raw[0])   /* V12-SYNTH : passthrough générique (engine,
+			       * inst_list, patch_get/set/save…) */
+			snprintf(req, sizeof(req), "%s\n", raw);
+		else if (!strcmp(cmd, "status"))
+			snprintf(req, sizeof(req), "status\n");
+		else if (!strcmp(cmd, "prog") && chan >= 0 && chan < 16 &&
+			 num >= 0 && num < 128)
+			snprintf(req, sizeof(req), "prog %d %d\n", chan, num);
+		else if (!strcmp(cmd, "gain") && val >= 0.0f && val <= 10.0f)
+			snprintf(req, sizeof(req), "gain %.3f\n", val);
+		else if (!strcmp(cmd, "panic"))
+			snprintf(req, sizeof(req), "panic\n");
+		else {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad midix cmd\"}\n");
+			return 1;
+		}
+		int s = socket(AF_UNIX, SOCK_STREAM, 0);
+		struct sockaddr_un sa = { .sun_family = AF_UNIX };
+		snprintf(sa.sun_path, sizeof(sa.sun_path),
+			 "/run/midi-expander.sock");
+		struct timeval tv = { .tv_sec = 0, .tv_usec = 500000 };
+		setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+		setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+		/* réponses longues (inst_list ~8 Ko) : lecture en boucle
+		 * jusqu'au '\n' final. Thread ctl unique → static ok. */
+		static char resp[16384];
+		ssize_t rn = 0;
+		if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == 0 &&
+		    write(s, req, strlen(req)) > 0) {
+			while (rn < (ssize_t)sizeof(resp) - 1) {
+				ssize_t k = read(s, resp + rn,
+						 sizeof(resp) - 1 - (size_t)rn);
+				if (k <= 0)
+					break;
+				rn += k;
+				if (resp[rn - 1] == '\n')
+					break;
+			}
+		}
+		close(s);
+		if (rn > 0)
+			write(fd, resp, (size_t)rn);
+		else
+			dprintf(fd, "{\"ok\":false,\"err\":\"expander absent\"}\n");
+		return 1;
+	}
+	return 0;
 }

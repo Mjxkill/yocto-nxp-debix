@@ -8,6 +8,11 @@
 #include <stdint.h>
 
 #include "strip_dyn.h"
+#include "control.h"    /* handlers d'ops (V14.0 étape 4) */
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include "state.h"
 
 /* ============ V13.3 : LIEN STÉRÉO de paires de tranches ============
  * Paires fixes (2k, 2k+1) sur les 16 tranches réelles. Une paire liée :
@@ -214,3 +219,147 @@ void cmp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 	}
 }
 
+
+/* V14.0 étape 4 : ops du module — appelées par le dispatcher control.
+ * Corps déplacés tels quels depuis handle_cmd (extraction pure) ;
+ * retourne 1 si l'op est traitée, 0 sinon. */
+int strip_dyn_handle_op(int fd, const char *line)
+{
+	if (json_has_op(line, "set_expander")) {
+		/* V12-EXP : {"op":"set_expander","src":N, on?, threshold_db?,
+		 * ratio?, attack_ms?, release_ms?, range_db?, hold_ms?} —
+		 * updates partiels : les champs absents gardent leur valeur. */
+		int src = -1;
+		if (json_get_int(line, "src", &src) < 0 ||
+		    src < 0 || src >= N_EXP_CH) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad src\"}\n");
+			return 1;
+		}
+		struct exp_ch *e = &g_exp[src];
+		int on = e->on;
+		float thr = e->thr_db, ratio = e->ratio, atk = e->atk_ms,
+		      rel = e->rel_ms, rng = e->range_db, hold = e->hold_ms;
+		(void)json_get_int(line, "on", &on);
+		(void)json_get_float(line, "threshold_db", &thr);
+		(void)json_get_float(line, "ratio", &ratio);
+		(void)json_get_float(line, "attack_ms", &atk);
+		(void)json_get_float(line, "release_ms", &rel);
+		(void)json_get_float(line, "range_db", &rng);
+		(void)json_get_float(line, "hold_ms", &hold);
+		{
+			const int lp = link_partner(src);   /* V13.3 */
+			pthread_mutex_lock(&g_st.target_lock);
+			exp_configure(src, on, thr, ratio, atk, rel, rng, hold);
+			if (lp >= 0 && lp < N_EXP_CH)
+				exp_configure(lp, on, thr, ratio, atk, rel,
+					      rng, hold);
+			pthread_mutex_unlock(&g_st.target_lock);
+		}
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_expander\",\"src\":%d,"
+			"\"on\":%d}\n", src, g_exp[src].on);
+		return 1;
+	}
+	if (json_has_op(line, "get_expander")) {
+		/* état complet + GR courant (milli-dB → dB) pour la GUI */
+		int n = snprintf(g_ctl_reply, sizeof(g_ctl_reply),
+				 "{\"ok\":true,\"channels\":[");
+		for (int i = 0; i < N_EXP_CH; i++) {
+			struct exp_ch *e = &g_exp[i];
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n,
+				"%s{\"src\":%d,\"on\":%d,\"threshold_db\":%.1f,"
+				"\"ratio\":%.1f,\"attack_ms\":%.1f,"
+				"\"release_ms\":%.0f,\"range_db\":%.0f,"
+				"\"hold_ms\":%.0f,\"gr_db\":%.1f}",
+				i ? "," : "", i, e->on, e->thr_db, e->ratio,
+				e->atk_ms, e->rel_ms, e->range_db, e->hold_ms,
+				atomic_load_explicit(&e->gr_mdb,
+						     memory_order_relaxed)
+					/ -1000.0f);
+		}
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, n);
+		return 1;
+	}
+	if (json_has_op(line, "set_comp")) {
+		/* V13-COMP : updates partiels comme set_expander */
+		int src = -1;
+		if (json_get_int(line, "src", &src) < 0 ||
+		    src < 0 || src >= N_EXP_CH) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad src\"}\n");
+			return 1;
+		}
+		struct cmp_ch *c = &g_cmp[src];
+		int on = c->on;
+		float thr = c->thr_db, ratio = c->ratio, atk = c->atk_ms,
+		      rel = c->rel_ms, mk = c->makeup_db;
+		(void)json_get_int(line, "on", &on);
+		(void)json_get_float(line, "threshold_db", &thr);
+		(void)json_get_float(line, "ratio", &ratio);
+		(void)json_get_float(line, "attack_ms", &atk);
+		(void)json_get_float(line, "release_ms", &rel);
+		(void)json_get_float(line, "makeup_db", &mk);
+		{
+			const int lp = link_partner(src);   /* V13.3 */
+			pthread_mutex_lock(&g_st.target_lock);
+			cmp_configure(src, on, thr, ratio, atk, rel, mk);
+			if (lp >= 0 && lp < N_EXP_CH)
+				cmp_configure(lp, on, thr, ratio, atk, rel, mk);
+			pthread_mutex_unlock(&g_st.target_lock);
+		}
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_comp\",\"src\":%d,"
+			"\"on\":%d}\n", src, g_cmp[src].on);
+		return 1;
+	}
+	if (json_has_op(line, "get_comp")) {
+		int n = snprintf(g_ctl_reply, sizeof(g_ctl_reply),
+				 "{\"ok\":true,\"channels\":[");
+		for (int i = 0; i < N_EXP_CH; i++) {
+			struct cmp_ch *c = &g_cmp[i];
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n,
+				"%s{\"src\":%d,\"on\":%d,\"threshold_db\":%.1f,"
+				"\"ratio\":%.1f,\"attack_ms\":%.1f,"
+				"\"release_ms\":%.0f,\"makeup_db\":%.1f,"
+				"\"gr_db\":%.1f}",
+				i ? "," : "", i, c->on, c->thr_db, c->ratio,
+				c->atk_ms, c->rel_ms, c->makeup_db,
+				atomic_load_explicit(&c->gr_mdb,
+						     memory_order_relaxed)
+					/ -1000.0f);
+		}
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, n);
+		return 1;
+	}
+	if (json_has_op(line, "set_link")) {
+		/* V13.3 : {"op":"set_link","pair":0-7,"on":0|1} — lie les
+		 * tranches (2k,2k+1). Ne modifie rien d'autre : le premier
+		 * geste (fader/mute/...) resynchronise la paire. */
+		int pair = -1, on = 0;
+		if (json_get_int(line, "pair", &pair) < 0 ||
+		    json_get_int(line, "on", &on) < 0 ||
+		    pair < 0 || pair >= N_LINK_PAIRS) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad set_link args\"}\n");
+			return 1;
+		}
+		atomic_store_explicit(&g_link[pair], on ? 1 : 0,
+				      memory_order_relaxed);
+		atomic_store(&g_presets_dirty, 1);
+		dprintf(fd, "{\"ok\":true,\"op\":\"set_link\",\"pair\":%d,"
+			    "\"on\":%d}\n", pair, on ? 1 : 0);
+		return 1;
+	}
+	if (json_has_op(line, "get_links")) {
+		int n = snprintf(g_ctl_reply, sizeof(g_ctl_reply),
+				 "{\"ok\":true,\"links\":[");
+		for (int i = 0; i < N_LINK_PAIRS; i++)
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "%s%d",
+				      i ? "," : "",
+				      atomic_load(&g_link[i]));
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, strlen(g_ctl_reply));
+		return 1;
+	}
+	return 0;
+}

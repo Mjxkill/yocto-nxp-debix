@@ -16,6 +16,8 @@
 #include "state.h"     /* g_st.target_lock */
 #include "util.h"      /* mlog */
 #include "sampler.h"
+#include "control.h"    /* handlers d'ops (V14.0 étape 4) */
+#include <unistd.h>
 
 #define SMP_MAX_TOTAL (256u * 1024u * 1024u)   /* plafond RAM (critic) */
 
@@ -217,4 +219,67 @@ void smp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES])
 					      memory_order_relaxed);
 		}
 	}
+}
+
+/* V14.0 étape 4 : ops du module — appelées par le dispatcher control.
+ * Corps déplacés tels quels depuis handle_cmd (extraction pure) ;
+ * retourne 1 si l'op est traitée, 0 sinon. */
+int sampler_handle_op(int fd, const char *line)
+{
+	if (json_has_op(line, "sampler_list")) {
+		/* V12-SMP : slots (nom, durée s, playing, position s) */
+		int n = snprintf(g_ctl_reply, sizeof(g_ctl_reply), "{\"ok\":true,\"slots\":[");
+		for (int i = 0; i < SMP_SLOTS; i++) {
+			struct smp_slot *s = &g_smp[i];
+			n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n,
+				"%s{\"slot\":%d,\"name\":\"%s\",\"len_s\":%.1f,"
+				"\"playing\":%d,\"pos_s\":%.1f}",
+				i ? "," : "", i, s->buf ? s->name : "",
+				s->frames / 48000.0f,
+				atomic_load(&s->playing),
+				atomic_load(&s->pos) / 48000.0f);
+		}
+		n += snprintf(g_ctl_reply + n, sizeof(g_ctl_reply) - n, "]}\n");
+		write(fd, g_ctl_reply, n);
+		return 1;
+	}
+	if (json_has_op(line, "sampler_trigger")) {
+		/* {"op":"sampler_trigger","slot":N,"gain_db":F} — retrigger OK */
+		int slot;
+		float gdb = 0.0f;
+		if (json_get_int(line, "slot", &slot) < 0 ||
+		    slot < 0 || slot >= SMP_SLOTS || !g_smp[slot].buf) {
+			dprintf(fd, "{\"ok\":false,\"err\":\"bad slot\"}\n");
+			return 1;
+		}
+		(void)json_get_float(line, "gain_db", &gdb);
+		g_smp[slot].gain = powf(10.0f, gdb / 20.0f);
+		atomic_store(&g_smp[slot].pos, 0);
+		atomic_store_explicit(&g_smp[slot].playing, 1,
+				      memory_order_release);
+		dprintf(fd, "{\"ok\":true,\"op\":\"sampler_trigger\",\"slot\":%d}\n",
+			slot);
+		return 1;
+	}
+	if (json_has_op(line, "sampler_stop")) {
+		/* {"op":"sampler_stop","slot":N|-1} — -1 = tous */
+		int slot = -1;
+		(void)json_get_int(line, "slot", &slot);
+		for (int i = 0; i < SMP_SLOTS; i++)
+			if (slot < 0 || slot == i)
+				atomic_store(&g_smp[i].playing, 0);
+		dprintf(fd, "{\"ok\":true,\"op\":\"sampler_stop\"}\n");
+		return 1;
+	}
+	if (json_has_op(line, "sampler_reload")) {
+		smp_scan(1);
+		int loaded = 0;
+		for (int i = 0; i < SMP_SLOTS; i++)
+			if (g_smp[i].buf)
+				loaded++;
+		dprintf(fd, "{\"ok\":true,\"op\":\"sampler_reload\",\"loaded\":%d}\n",
+			loaded);
+		return 1;
+	}
+	return 0;
 }

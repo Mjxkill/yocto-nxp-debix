@@ -38,6 +38,8 @@ SRC_URI = " \
     file://uac2_ring.h \
     file://audio_loop.c \
     file://audio_loop.h \
+    file://automix_ops.c \
+    file://control.h \
     file://effects.c \
     file://effects.h \
     file://analyzer.c \

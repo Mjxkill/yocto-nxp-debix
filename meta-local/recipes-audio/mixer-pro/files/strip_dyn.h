@@ -82,4 +82,9 @@ void cmp_configure(int src, int on, float thr_db, float ratio,
  * + loi linéaire). Voir la note complète dans strip_dyn.c. */
 void cmp_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES]);
 
+
+/* V14.0 étape 4 : ops control du module (dispatcher control.c).
+ * Retourne 1 si l'op est traitée, 0 sinon. */
+int strip_dyn_handle_op(int fd, const char *line);
+
 #endif /* MIXER_STRIP_DYN_H */

@@ -95,4 +95,9 @@ static inline float meq_chain(int bank, int ch, float in)
 	return x;
 }
 
+
+/* V14.0 étape 4 : ops control du module (dispatcher control.c).
+ * Retourne 1 si l'op est traitée, 0 sinon. */
+int master_handle_op(int fd, const char *line);
+
 #endif /* MIXER_MASTER_H */
