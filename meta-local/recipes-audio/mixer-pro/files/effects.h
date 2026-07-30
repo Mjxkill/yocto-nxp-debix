@@ -104,4 +104,7 @@ int fx_init_chain(fx_engine_t *fx, float sample_rate,
 /* Cleanup (libère state). */
 void fx_free(fx_engine_t *fx);
 
+/* V14.0 étape 4b : ops control du domaine effets (fx_ops.c) */
+int fx_handle_op(int fd, const char *line);
+
 #endif /* __MIXER_EFFECTS_H__ */

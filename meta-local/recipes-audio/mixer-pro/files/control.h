@@ -27,4 +27,10 @@ int json_get_int(const char *s, const char *key, int *out);
 int json_get_float(const char *s, const char *key, float *out);
 int json_has_op(const char *s, const char *op);
 
+/* ops TAC/ALSA (tac_ops.c — domaine codec, pas un module moteur) */
+int tac_handle_op(int fd, const char *line);
+
+/* thread accept/dispatch (spawné par main) */
+void *control_thread(void *arg);
+
 #endif /* MIXER_CONTROL_H */

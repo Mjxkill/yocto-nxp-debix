@@ -39,6 +39,9 @@ SRC_URI = " \
     file://audio_loop.c \
     file://audio_loop.h \
     file://automix_ops.c \
+    file://control.c \
+    file://fx_ops.c \
+    file://tac_ops.c \
     file://control.h \
     file://effects.c \
     file://effects.h \
