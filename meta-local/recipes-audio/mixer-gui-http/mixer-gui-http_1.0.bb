@@ -20,6 +20,12 @@ SRC_URI = " \
     file://ala-fx-restore.sh \
     file://ala-fx-restore.service \
     file://www/beta.html \
+    file://www/beta.css \
+    file://www/js/beta_core.js \
+    file://www/js/beta_bridge.js \
+    file://www/js/beta_pages.js \
+    file://www/js/beta_fx.js \
+    file://www/js/beta_perf.js \
 "
 
 S = "${WORKDIR}"
@@ -39,7 +45,11 @@ do_install() {
 
     install -d ${D}/var/www/mixer-gui
     # V14.0 : beta.html = LA console, servie à la racine (index V7 supprimée)
+    # Étape 7 : CSS + JS extraits en fichiers locaux (zéro CDN inchangé)
     install -m 0644 ${WORKDIR}/www/beta.html ${D}/var/www/mixer-gui/beta.html
+    install -d ${D}/var/www/mixer-gui/static/js
+    install -m 0644 ${WORKDIR}/www/beta.css  ${D}/var/www/mixer-gui/static/beta.css
+    install -m 0644 ${WORKDIR}/www/js/*.js   ${D}/var/www/mixer-gui/static/js/
 
     # V10-N7b : restauration effets TAC/DSP au boot (post tac-reset)
     install -m 0755 ${WORKDIR}/ala-fx-restore.sh ${D}${bindir}/ala-fx-restore.sh
@@ -55,6 +65,7 @@ FILES:${PN} = " \
     ${bindir}/mixer-gui-http \
     ${bindir}/ala-fx-restore.sh \
     /var/www/mixer-gui/beta.html \
+    /var/www/mixer-gui/static \
     ${systemd_unitdir}/system/mixer-gui-http.service \
     ${systemd_unitdir}/system/ala-fx-restore.service \
 "
