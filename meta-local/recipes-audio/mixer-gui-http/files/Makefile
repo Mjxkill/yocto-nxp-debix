@@ -8,8 +8,10 @@ BINDIR  ?= $(PREFIX)/bin
 
 all: mixer-gui-http
 
-mixer-gui-http: mixer-gui-http.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
+# V14.0 étape 6 — 5 modules (voir gui_http.h)
+SRCS = http_core.c mixer_bridge.c sse_state.c alsa_ctl.c api_routes.c
+mixer-gui-http: $(SRCS) gui_http.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRCS) $(LIBS)
 
 install: mixer-gui-http
 	install -d $(DESTDIR)$(BINDIR)

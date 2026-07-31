@@ -6,10 +6,15 @@ Alpine.js + Tailwind via CDN) et bridge des appels REST vers le socket Unix \
 4 sockets Unix persistants pour réduire l'overhead côté mixer-pro."
 HOMEPAGE = "https://github.com/Mjxkill/yocto-nxp-debix"
 LICENSE = "GPL-2.0-or-later"
-LIC_FILES_CHKSUM = "file://mixer-gui-http.c;beginline=1;endline=2;md5=7eded808ddbf99a9e00fc0258990e9da"
+LIC_FILES_CHKSUM = "file://http_core.c;beginline=1;endline=2;md5=cfa333c28b94c54d228eecd95f238319"
 
 SRC_URI = " \
-    file://mixer-gui-http.c \
+    file://http_core.c \
+    file://mixer_bridge.c \
+    file://sse_state.c \
+    file://alsa_ctl.c \
+    file://api_routes.c \
+    file://gui_http.h \
     file://Makefile \
     file://mixer-gui-http.service \
     file://ala-fx-restore.sh \
