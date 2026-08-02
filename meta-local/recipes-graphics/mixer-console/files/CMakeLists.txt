@@ -31,6 +31,9 @@ qt_add_qml_module(mixer-console
         qml/PageSystem.qml
         qml/CalibrationOverlay.qml
         qml/StripFxDrawer.qml
+        qml/FxPlainRow.qml
+        qml/FxBqRow.qml
+        qml/FxDrcCard.qml
         qml/IntroOverlay.qml
         qml/stripfx.js
 )

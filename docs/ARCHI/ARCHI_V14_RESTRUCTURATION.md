@@ -1,7 +1,9 @@
 # ARCHI V14 — Restructuration en modules à API réutilisables
 
-Date : 2026-07-28. Statut : **VALIDÉ (GO utilisateur 2026-07-28) — en cours,
-étape 0.** Décision tac5212.c : **exception assumée** (convention kernel
+Date : 2026-07-28. Statut : **TERMINÉ 2026-08-02** — 8 étapes exécutées,
+validées board (fiches TESTS_V14.0_ETAPE0→8). Restes : arbitrage
+beta_fx.js (closure 1125 l., fiche étape 7), passe 2 (re-privatisation
+des externs), écoute globale utilisateur. Décision tac5212.c : **exception assumée** (convention kernel
 mono-fichier par codec, facilite les diffs avec un driver upstream).
 
 Règle produit (fixée par Michael, gravée skill methode-dev §5) :

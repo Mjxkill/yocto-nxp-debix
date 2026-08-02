@@ -32,6 +32,9 @@ SRC_URI = " \
     file://qml/PageSystem.qml \
     file://qml/CalibrationOverlay.qml \
     file://qml/StripFxDrawer.qml \
+    file://qml/FxPlainRow.qml \
+    file://qml/FxBqRow.qml \
+    file://qml/FxDrcCard.qml \
     file://qml/IntroOverlay.qml \
     file://mixer-console.service \
     file://qml/stripfx.js \
