@@ -192,11 +192,14 @@ int automix_handle_op(int fd, const char *line)
 			for (int i = 0; i < N_EXP_CH; i++)
 				g_bmx.al_ref[i] = g_bmx.risk[i] = -120.0f;   /* recale les peak-holds */
 			g_bmx.al_anchor = -120.0f;           /* ré-init de l'ancre */
-			/* V13.9 — reset balance auto : les GAINS DE GROUPE sont
-			 * CONSERVÉS (même groupe, même salle → volume plein dès
-			 * la 1re seconde, exigence scène) ; on ne recale que le
-			 * peak-hold programme, le staging (petites corrections
-			 * rapides) et les compteurs d'activité. */
+			/* V15.1 (mesure 2026-08-05, validé Michael) : les gains de
+			 * groupe repartent de 0 dB — l'héritage de la fin du morceau
+			 * précédent (+36 dB d'outro calme) faisait démarrer le
+			 * suivant TROP FORT pendant la phase où la balance est gelée.
+			 * Départ jamais plus fort que les stems, le staging 8 dB/s
+			 * remonte au niveau en ~2 s. (Remplace la décision V13.9
+			 * « gains conservés » — le trop-fort est pire que la montée.) */
+			g_bmx.g_voice_db = g_bmx.g_choir_db = g_bmx.g_music_db = 0.0f;
 			g_bmx.prog_peak = -120.0f;
 			g_bmx.bal_staged = 0;
 			memset(g_bmx.act_ticks, 0, sizeof(g_bmx.act_ticks));

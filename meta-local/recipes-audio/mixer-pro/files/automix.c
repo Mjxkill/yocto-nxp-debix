@@ -395,7 +395,14 @@ void bmx_tick(void)
 				 * puis vitesses douces 3/1 dB/s (anti-pompage). */
 				if (!g_bmx.bal_staged && fabsf(lerr) <= 2.0f)
 					g_bmx.bal_staged = 1;
-				float st = !g_bmx.bal_staged ? 8.0f
+				/* V15.1 : ATTERRISSAGE DOUX du staging — pas proportionnel
+				 * à l'erreur restante (8→1 dB/s en approche). Le mètre LUFS
+				 * short-term traîne ~3 s : à pas constant 8 dB/s il
+				 * continuait de corriger cible dépassée → plongée mesurée
+				 * à −21 LUFS au 1er couplet (2026-08-05). Post-lock
+				 * inchangé (3/1 dB/s validés). */
+				float st = !g_bmx.bal_staged
+					 ? fminf(8.0f, fmaxf(1.0f, fabsf(lerr) * 0.5f))
 					 : (fabsf(lerr) > 6.0f) ? 3.0f : 1.0f;
 				float dv = 0.0f, dm = 0.0f;
 				if (lerr < -DB) {              /* trop faible → MONTER */
@@ -421,6 +428,22 @@ void bmx_tick(void)
 				if (g_bmx.g_voice_db < -24.0f) g_bmx.g_voice_db = -24.0f;
 				if (g_bmx.g_music_db >  36.0f) g_bmx.g_music_db =  36.0f;
 				if (g_bmx.g_music_db < -24.0f) g_bmx.g_music_db = -24.0f;
+			} else if (hm && !hv && lufs > -50.0f) {
+				/* V15.1 : INTRO INSTRUMENTALE (musique active, pas encore
+				 * de voix) — la boucle complète exige hv&&hm et restait
+				 * gelée : mesuré 10 s de « trop fort » sur les gains
+				 * hérités (2026-08-05). Ici : DESCENTE SEULEMENT vers la
+				 * cible LUFS (jamais de montée → la règle « pas de signal
+				 * → rien ne monte » et le gel des creux restent entiers).
+				 * Même atterrissage doux que le staging. */
+				float lerr = lufs - g_bmx.bal_lufs_tgt;
+				if (lerr > 1.0f) {
+					float st = fminf(8.0f,
+							 fmaxf(1.0f, lerr * 0.5f));
+					g_bmx.g_music_db -= st;
+					if (g_bmx.g_music_db < -24.0f)
+						g_bmx.g_music_db = -24.0f;
+				}
 			}
 			/* CHŒURS : asservissement d'écart subordonné — tient les
 			 * chœurs à musique + bal_c_tgt (boucle fermée, slew ≤1 dB/
