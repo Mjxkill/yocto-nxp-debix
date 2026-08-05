@@ -1,6 +1,9 @@
 # ARCHI V15 — ANTI-LARSEN v2 logiciel (notchs mixer-pro + preuve par la boucle)
 
-Date : 2026-08-04. Statut : **PROPOSITION — en attente de validation Michael.**
+Date : 2026-08-04. Statut : **IMPLÉMENTÉ 2026-08-05** (validé Michael :
+4 notchs/voie, sonde −12/plafond −24/Q 8, verdict 300 ms réglable,
+fonctionnalité complète). Fiche : TESTS_V15_ANTILARSEN_V2.md —
+validation larsen RÉEL avec Michael requise.
 
 ## 1. Pourquoi une v2
 

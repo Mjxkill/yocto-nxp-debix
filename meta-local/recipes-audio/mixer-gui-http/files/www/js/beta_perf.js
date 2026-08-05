@@ -578,16 +578,42 @@ setInterval(scnPoll,600);
 setInterval(()=>{if(window.CURPAGE==="SCENE")scnList();},3000);
 scnRender();scnList();
 
-/* ---------------- ANTI-LARSEN (page SYSTÈME) ---------------- */
+/* ---------------- ANTI-LARSEN v2 (page SYSTÈME) ----------------
+ * V15 : notchs LOGICIELS mixer-pro (plus jamais le TAC). Flags « source
+ * larsen possible » par micro (opérateur) via /api/cmd larsen_flag ;
+ * état machine (sonde/verdict) + notchs tenus via le daemon /api/larsen. */
+let alFlags=[];
+function alFlagsRender(){
+  const c=document.getElementById("al-flags");
+  if(!c)return;
+  c.innerHTML=alFlags.map((f,i)=>`<button class="wbtn" data-alf="${i}"
+    style="padding:3px 8px;font-size:10px;${f?"color:#e5a13c;border-color:#e5a13c;":""}">M${i+1}</button>`).join("");
+  c.querySelectorAll("[data-alf]").forEach(b=>b.addEventListener("click",()=>{
+    const i=+b.dataset.alf;
+    cmd({op:"larsen_flag",src:i,on:alFlags[i]?0:1}).then(alPoll);
+  }));
+}
 function alPoll(){
   if(window.CURPAGE&&window.CURPAGE!=="SYSTEME")return;
+  /* moteur : flags + notchs posés (source de vérité de l'actuation) */
+  cmd({op:"larsen_status"}).then(r=>{
+    if(!r.ok)return;
+    const nf=r.voices.slice(0,8).map(v=>v.flag);
+    if(JSON.stringify(nf)!==JSON.stringify(alFlags)){alFlags=nf;alFlagsRender();}
+    const nl=document.getElementById("al-notches");
+    if(!nl)return;
+    const rows=[];
+    r.voices.forEach(v=>v.notches.forEach(n=>
+      rows.push(`M${v.src+1} · <b style="color:#e05545">${n.freq.toFixed(0)} Hz</b> · ${n.depth.toFixed(0)} dB`)));
+    nl.innerHTML=rows.length?rows.join("<br>"):"aucun notch posé";
+  }).catch(()=>{});
+  /* daemon : enable + machine d'états (sonde en cours, verdicts) */
   fetch("/api/larsen").then(r=>r.json()).then(r=>{
-    const en=document.getElementById("al-en"),nl=document.getElementById("al-notches");
-    if(!en||!nl)return;
-    if(!r.ok){en.textContent="(daemon absent)";nl.textContent="—";return;}
-    en.textContent=r.enable?"actif":"désactivé (enable=0)";
-    nl.innerHTML=r.notches.length===0?"aucun notch posé — pas de larsen détecté"
-      :r.notches.map(n=>`CH${n.ch+1} · BQ${n.bq} · <b style="color:#e05545">${n.freq} Hz</b> · ${n.depth} dB · depuis ${n.age<120?n.age+" s":Math.round(n.age/60)+" min"}`).join("<br>");
+    const en=document.getElementById("al-en");
+    if(!en)return;
+    if(!r.ok){en.textContent="(daemon absent)";return;}
+    en.textContent=(r.enable?"actif":"désactivé")
+      +(r.state&&r.state!=="idle"?" · "+(r.state==="probe"?"SONDE":"COUPABLE ?")+" "+r.probe_hz+" Hz":"");
   }).catch(()=>{});
 }
 setInterval(alPoll,1000);alPoll();

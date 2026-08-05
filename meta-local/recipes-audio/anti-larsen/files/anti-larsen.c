@@ -1,29 +1,31 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  *
- * V11-AL E1b — anti-larsen automatique (AFS) pour la console A.L.A.
+ * V15 — anti-larsen v2 : détection + DÉCISION (la « preuve par la boucle »).
  *
- * Lit le tap FX (/dev/imx-audio-tap-out : play post-effets 8ch S32, le
- * signal exact qui part aux HP), détecte les raies de larsen par
- * heuristique classique (seuil + PNR + persistance/croissance +
- * non-harmonicité) et pose des notchs RBJ dans les biquads DAC du
- * TAC5212, PAR CANAL.
+ * Ce daemon ne touche plus JAMAIS au TAC (v1 : écrire les biquads TAC en
+ * live = plops, cause racine prouvée 2026-07-28). Il détecte et décide ;
+ * l'ACTUATION est le module antilarsen.c de mixer-pro (notchs logiciels
+ * par voie flaguée, ops socket). ARCHI_V15_ANTILARSEN_V2.md.
  *
- * Mapping biquads (datasheet TAC5212 SLASF23A Table 7-48, validé board
- * 2026-07-06 au casque) : allocation modulo 4 canaux (famille TAC5x1x
- * 4ch) → sur TAC5212 (2 canaux) seuls BQ1/5/9 (canal 1) et BQ2/6/10
- * (canal 2) sont dans le chemin ; BQ3/4/7/8/11/12 pilotent des canaux
- * INEXISTANTS. Le daemon force '3 Biquads/Ch' et utilise BQ5/9 (ch A)
- * et BQ6/10 (ch B) — BQ1/BQ2 restent à l'utilisateur (panneau BIQUADS).
+ * Principe (design Michael 2026-08-04) :
+ *  1. le larsen ne naît que dans des micros → seules les voies FLAGUÉES
+ *     par l'opérateur (larsen_flag, mixer-pro) sont concernées ;
+ *  2. verdict EMPIRIQUE : on pose le notch (la boucle casse) puis on
+ *     regarde l'ENTRÉE micro — f disparue = larsen (le micro n'entendait
+ *     que la sono) → confirmé ; f persiste = vraie source dans la salle
+ *     (note tenue) → retrait IMMÉDIAT + blacklist temporaire de f ;
+ *  3. confirmé → identification du COUPABLE : ré-ouverture des voies une
+ *     à une, celle dont la ré-ouverture fait repartir f garde son notch,
+ *     les autres sont libérées ;
+ *  4. récidive → approfondissement (step → max) ; release_s sans récidive
+ *     → libération.
  *
- * Coefficients : N0,N1,N2,D1,D2 en Q1.31 big-endian avec N1 et D1
- * stockés DIVISÉS PAR 2 (validé à l'oreille : le format plein sature
- * D1≈2cos(w0) pour les notchs graves → filtre inopérant).
- *
- * AUCUNE modification de mixer-pro/SOF/kernel.
- * ARCHI/ARCHI_V11_ANTILARSEN.md (critic ×3).
+ * Capteurs : tap FX (/dev/imx-audio-tap-out, sortie post-effets — les
+ * candidates) + tap RAW (/dev/imx-audio-tap-in, entrées micros brutes —
+ * les verdicts). L'heuristique v1 (seuil + PNR + persistance + non-
+ * harmonicité) ne sert plus que de DÉCLENCHEUR de sonde.
  */
 #define _GNU_SOURCE
-#include <alsa/asoundlib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <fftw3.h>
@@ -40,7 +42,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TAP_DEV        "/dev/imx-audio-tap-out"
+#define TAP_OUT_DEV    "/dev/imx-audio-tap-out"
+#define TAP_IN_DEV     "/dev/imx-audio-tap-in"
 #define TAP_TOTAL      0x40000u
 #define TAP_HDR        128u
 #define TAP_MAGIC      0x5441504Eu
@@ -52,97 +55,152 @@
 
 #define CONF_PATH      "/etc/mixer-pro/anti-larsen.conf"
 #define STATUS_SOCK    "/run/anti-larsen.sock"
-#define CARD_NAME      "softac5212tdm"
+#define MIXER_SOCK     "/run/mixer-pro.sock"
 
-#define SLOTS_PER_CH   2
-/* slots AFS par canal local du TAC (A=canal impair 1, B=canal 2).
- * BQ6/BQ12 exigent le fix kernel apply-tac5212-bq12-maxreg (MAX_REG
- * 0x7E→0x7F, déployé board 2026-07-06) — sans lui, EIO sur ces slots. */
-static const int SLOT_BQ[2][SLOTS_PER_CH] = { { 5, 9 }, { 6, 10 } };
-
-/* ---- config (défauts = ARCHI) ---- */
+/* ---- config (défauts = ARCHI V15) ---- */
 static struct {
     int   enable;
-    int   pair_en[4];              /* par TAC (paire de canaux) */
-    float thresh_db;
-    float pnr_db;
-    int   persist_n;
-    float notch_q;
-    float depth_start_db;
-    float depth_step_db;
-    float depth_max_db;
-    int   release_s;
-    int   coef_halved;             /* 1 = format TI validé board */
+    float thresh_db;        /* seuil de raie candidate (sortie) */
+    float pnr_db;           /* peak-to-neighbours ratio */
+    int   persist_n;        /* cycles consécutifs avant sonde */
+    float depth_start_db;   /* profondeur de sonde (−12) */
+    float depth_step_db;    /* approfondissement sur récidive (−3) */
+    float verdict_ms;       /* fenêtre de verdict (300, réglable) */
+    float refine_ms;        /* fenêtre de ré-ouverture par voie (400) */
+    float confirm_drop_db;  /* chute à l'entrée = larsen confirmé (15) */
+    float in_floor_db;      /* f « présente à l'entrée » au-dessus de (−70) */
+    int   blacklist_s;      /* gel de f après verdict INNOCENT (10) */
+    int   release_s;        /* libération sans récidive (60) */
 } g_cfg = {
-    .enable = 0, .pair_en = {1, 1, 1, 1},
-    .thresh_db = -45.0f, .pnr_db = 25.0f, .persist_n = 4,
-    .notch_q = 30.0f, .depth_start_db = -9.0f, .depth_step_db = -3.0f,
-    .depth_max_db = -18.0f, .release_s = 60, .coef_halved = 1,
+    .enable = 0, .thresh_db = -45.0f, .pnr_db = 25.0f, .persist_n = 4,
+    .depth_start_db = -12.0f, .depth_step_db = -3.0f,
+    .verdict_ms = 300.0f, .refine_ms = 400.0f, .confirm_drop_db = 15.0f,
+    .in_floor_db = -70.0f, .blacklist_s = 10, .release_s = 60,
 };
-
-/* ---- état ---- */
-struct notch {
-    int    used;
-    double f_hz;
-    float  depth_db;
-    time_t posed_at;
-    time_t last_hit;
-};
-struct candidate {
-    int    bin;
-    int    count;
-    double last_mag;
-};
-#define MAX_CAND 16
-static struct notch g_notch[NCHAN][SLOTS_PER_CH];
-static struct candidate g_cand[NCHAN][MAX_CAND];
 
 static volatile sig_atomic_t g_stop;
 static void on_sig(int s) { (void)s; g_stop = 1; }
 
-/* ================= tap FX ================= */
-static volatile uint8_t *g_tap;
-static uint32_t g_ring_size, g_rd;
+/* ================= taps (in + out) ================= */
+struct tap {
+    volatile uint8_t *map;
+    uint32_t ring_size, rd;
+};
+static struct tap g_tout, g_tin;
 
-static int tap_open(void)
+static int tap_open(struct tap *t, const char *dev)
 {
-    int fd = open(TAP_DEV, O_RDONLY);
+    int fd = open(dev, O_RDONLY);
     if (fd < 0)
         return -1;
     void *m = mmap(NULL, TAP_TOTAL, PROT_READ, MAP_SHARED, fd, 0);
     close(fd);
     if (m == MAP_FAILED)
         return -1;
-    g_tap = m;
+    t->map = m;
     return 0;
 }
 
-static inline uint32_t tap_u32(uint32_t off)
+static inline uint32_t tap_u32(struct tap *t, uint32_t off)
 {
-    return *(volatile uint32_t *)(g_tap + off);
+    return *(volatile uint32_t *)(t->map + off);
 }
 
-/* lit jusqu'à max frames BRUTES — curseur privé, jamais bloquant */
-static int tap_read(int32_t (*dst)[NCHAN], int max)
+static int tap_read(struct tap *t, int32_t (*dst)[NCHAN], int max)
 {
-    if (tap_u32(0) != TAP_MAGIC)
+    if (tap_u32(t, 0) != TAP_MAGIC)
         return 0;
-    g_ring_size = tap_u32(8);
-    uint32_t wr = tap_u32(20);
+    t->ring_size = tap_u32(t, 8);
+    uint32_t wr = tap_u32(t, 20);
     const uint32_t fsz = NCHAN * 4;
-    uint32_t avail = (wr - g_rd) % g_ring_size;
+    uint32_t avail = (wr - t->rd) % t->ring_size;
     int n = (int)(avail / fsz);
     if (n > max)
         n = max;
     for (int i = 0; i < n; i++) {
-        uint32_t off = TAP_HDR + (g_rd + i * fsz) % g_ring_size;
-        memcpy(dst[i], (const void *)(g_tap + off), fsz);
+        uint32_t off = TAP_HDR + (t->rd + i * fsz) % t->ring_size;
+        memcpy(dst[i], (const void *)(t->map + off), fsz);
     }
-    g_rd = (g_rd + n * fsz) % g_ring_size;
+    t->rd = (t->rd + n * fsz) % t->ring_size;
     return n;
 }
 
-/* gate : RMS rapide (1/16 éch.) — sous le seuil, pas de larsen possible */
+/* ================= client socket mixer-pro ================= */
+static int mixer_op(const char *req, char *out, size_t out_sz)
+{
+    int s = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (s < 0)
+        return -1;
+    struct sockaddr_un sa = { .sun_family = AF_UNIX };
+    strncpy(sa.sun_path, MIXER_SOCK, sizeof(sa.sun_path) - 1);
+    struct timeval tv = { 0, 500000 };
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    int r = -1;
+    if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == 0 &&
+        write(s, req, strlen(req)) > 0) {
+        ssize_t n = 0, k;
+        while (out && n < (ssize_t)out_sz - 1 &&
+               (k = read(s, out + n, out_sz - 1 - (size_t)n)) > 0) {
+            n += k;
+            if (out[n - 1] == '\n')
+                break;
+        }
+        if (out)
+            out[n > 0 ? n : 0] = '\0';
+        r = 0;
+    }
+    close(s);
+    if (r < 0)
+        fprintf(stderr, "al: mixer-pro injoignable (%s)\n", strerror(errno));
+    return r;
+}
+
+static void op_notch(int src, double f, float depth)
+{
+    char req[128], rep[256];
+    snprintf(req, sizeof(req),
+             "{\"op\":\"larsen_notch\",\"src\":%d,\"freq\":%.1f,"
+             "\"depth\":%.1f}\n", src, f, depth);
+    mixer_op(req, rep, sizeof(rep));
+}
+
+static void op_release(int src, double f)
+{
+    char req[128], rep[256];
+    snprintf(req, sizeof(req),
+             "{\"op\":\"larsen_release\",\"src\":%d,\"freq\":%.1f}\n",
+             src, f);
+    mixer_op(req, rep, sizeof(rep));
+}
+
+/* flags des voies micros (0..7), lus 1 Hz depuis larsen_status —
+ * l'opérateur les pose via la GUI, mixer-pro les persiste. */
+static int g_flag[NCHAN];
+static int g_engine_enable;
+
+static void poll_flags(void)
+{
+    char rep[4096];
+    if (mixer_op("{\"op\":\"larsen_status\"}\n", rep, sizeof(rep)) < 0)
+        return;
+    g_engine_enable = strstr(rep, "\"enable\":1") != NULL;
+    const char *p = rep;
+    for (int i = 0; i < NCHAN; i++) {
+        char key[32];
+        snprintf(key, sizeof(key), "{\"src\":%d,\"flag\":", i);
+        const char *q = strstr(p, key);
+        g_flag[i] = q && q[strlen(key)] == '1';
+    }
+}
+
+/* ================= FFT ================= */
+static float *g_fft_in;
+static fftwf_complex *g_fft_out;
+static fftwf_plan g_plan;
+static float g_win[NFFT];
+static float g_spec[NBINS];
+
 static int ch_active(int32_t (*frames)[NCHAN], int ch, float gate_db)
 {
     double acc = 0;
@@ -154,93 +212,8 @@ static int ch_active(int32_t (*frames)[NCHAN], int ch, float gate_db)
     return 10.0 * log10(acc / n + 1e-24) > gate_db;
 }
 
-/* ====== notch RBJ → blob TAC (Q1.31 BE, N1/D1 divisés par 2) ====== */
-static void q31be(double x, uint8_t *out)
+static void spectrum_ch(int32_t (*frames)[NCHAN], int ch)
 {
-    double c = x < -1.0 ? -1.0 : (x > 0.9999999995 ? 0.9999999995 : x);
-    int64_t v = llround(c * 2147483648.0);
-    if (v < -2147483648LL) v = -2147483648LL;
-    if (v > 2147483647LL)  v = 2147483647LL;
-    uint32_t u = (uint32_t)v;
-    out[0] = u >> 24; out[1] = u >> 16; out[2] = u >> 8; out[3] = u;
-}
-
-static void notch_blob(double f_hz, double q, uint8_t blob[20])
-{
-    double w0 = 2.0 * M_PI * f_hz / FS;
-    double cw = cos(w0), sw = sin(w0), al = sw / (2.0 * q);
-    double a0 = 1.0 + al;
-    double N0 = 1.0 / a0, N1 = -2.0 * cw / a0, N2 = 1.0 / a0;
-    double D1 = 2.0 * cw / a0, D2 = -(1.0 - al) / a0;
-    if (g_cfg.coef_halved) {
-        N1 /= 2.0;
-        D1 /= 2.0;
-    }
-    q31be(N0, blob); q31be(N1, blob + 4); q31be(N2, blob + 8);
-    q31be(D1, blob + 12); q31be(D2, blob + 16);
-}
-
-static const uint8_t FLAT_BLOB[20] = { 0x7F, 0xFF, 0xFF, 0xFF, 0 };
-
-/* ================= contrôles ALSA ================= */
-static snd_ctl_t *g_ctl;
-
-static int ctl_open(void)
-{
-    char dev[64];
-    snprintf(dev, sizeof(dev), "hw:%s", CARD_NAME);
-    return snd_ctl_open(&g_ctl, dev, 0);
-}
-
-static int bq_write(int tac, int bq, const uint8_t blob[20])
-{
-    char name[64];
-    snprintf(name, sizeof(name), "TAC%d DAC BQ%d Coefs", tac, bq);
-    snd_ctl_elem_id_t *id;
-    snd_ctl_elem_value_t *val;
-    snd_ctl_elem_id_alloca(&id);
-    snd_ctl_elem_value_alloca(&val);
-    snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
-    snd_ctl_elem_id_set_name(id, name);
-    snd_ctl_elem_value_set_id(val, id);
-    for (int i = 0; i < 20; i++)
-        snd_ctl_elem_value_set_byte(val, i, blob[i]);
-    int r = snd_ctl_elem_write(g_ctl, val);
-    if (r < 0)
-        fprintf(stderr, "al: cset %s: %s\n", name, snd_strerror(r));
-    return r;
-}
-
-/* force '3 Biquads/Ch' (item 3) — sinon BQ9/BQ10 hors chemin.
- * Fallback critic : échec ⇒ on reste sur les slots BQ5/BQ6 seuls. */
-static void bq_config3(int tac)
-{
-    char name[64];
-    snprintf(name, sizeof(name), "TAC%d DAC Biquad Config", tac);
-    snd_ctl_elem_id_t *id;
-    snd_ctl_elem_value_t *val;
-    snd_ctl_elem_id_alloca(&id);
-    snd_ctl_elem_value_alloca(&val);
-    snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
-    snd_ctl_elem_id_set_name(id, name);
-    snd_ctl_elem_value_set_id(val, id);
-    snd_ctl_elem_value_set_enumerated(val, 0, 3);
-    if (snd_ctl_elem_write(g_ctl, val) < 0)
-        fprintf(stderr, "al: %s -> 3/ch ECHEC (slots BQ9/10 indispo)\n",
-                name);
-}
-
-/* ================= détection ================= */
-static float *g_fft_in;
-static fftwf_complex *g_fft_out;
-static fftwf_plan g_plan;
-static float g_win[NFFT];
-static float g_spec[NBINS];
-
-static int spectrum_ch(int32_t (*frames)[NCHAN], int ch)
-{
-    if (!ch_active(frames, ch, g_cfg.thresh_db - 10.0f))
-        return 0;
     for (int i = 0; i < NFFT; i++)
         g_fft_in[i] = (float)frames[i][ch] * (1.0f / 2147483648.0f)
                       * g_win[i];
@@ -250,7 +223,17 @@ static int spectrum_ch(int32_t (*frames)[NCHAN], int ch)
         g_spec[b] = 10.0f * log10f((re * re + im * im) /
                                    ((float)NFFT * NFFT / 16.0f) + 1e-24f);
     }
-    return 1;
+}
+
+/* énergie (dB) à ±2 bins autour de b pour la voie ch du buffer donné */
+static float energy_at(int32_t (*frames)[NCHAN], int ch, int b)
+{
+    spectrum_ch(frames, ch);
+    float m = -160.0f;
+    for (int d = -2; d <= 2; d++)
+        if (b + d >= 0 && b + d < NBINS && g_spec[b + d] > m)
+            m = g_spec[b + d];
+    return m;
 }
 
 static float band_mean_db(const float *sp, int center, int lo_excl, int hi)
@@ -265,50 +248,19 @@ static float band_mean_db(const float *sp, int center, int lo_excl, int hi)
     return n ? acc / n : -160.0f;
 }
 
-static struct notch *slot_for(int ch, double f_hz)
-{
-    for (int s = 0; s < SLOTS_PER_CH; s++) {
-        struct notch *nt = &g_notch[ch][s];
-        if (nt->used && fabs(nt->f_hz - f_hz) < 3 * HZ_PER_BIN)
-            return nt;
-    }
-    for (int s = 0; s < SLOTS_PER_CH; s++)
-        if (!g_notch[ch][s].used)
-            return &g_notch[ch][s];
-    struct notch *old = &g_notch[ch][0];
-    for (int s = 1; s < SLOTS_PER_CH; s++)
-        if (g_notch[ch][s].posed_at < old->posed_at)
-            old = &g_notch[ch][s];
-    return old;
-}
+/* ================= détection (déclencheur, heuristique v1) ============ */
+struct candidate {
+    int    bin;
+    int    count;
+    double last_mag;
+};
+#define MAX_CAND 16
+static struct candidate g_cand[MAX_CAND];   /* fusion toutes sorties */
 
-static int slot_bq(int ch, const struct notch *nt)
-{
-    return SLOT_BQ[ch & 1][(int)(nt - g_notch[ch])];
-}
-
-static void apply_notch(int ch, struct notch *nt)
-{
-    uint8_t blob[20];
-    notch_blob(nt->f_hz, g_cfg.notch_q, blob);
-    if (bq_write(ch / 2, slot_bq(ch, nt), blob) == 0)
-        fprintf(stderr, "al: ch %d BQ%d NOTCH %.0f Hz %.0f dB\n",
-                ch, slot_bq(ch, nt), nt->f_hz, nt->depth_db);
-}
-
-static void clear_notch(int ch, struct notch *nt)
-{
-    if (bq_write(ch / 2, slot_bq(ch, nt), FLAT_BLOB) == 0)
-        fprintf(stderr, "al: ch %d BQ%d LIBÉRÉ (%.0f Hz)\n",
-                ch, slot_bq(ch, nt), nt->f_hz);
-    memset(nt, 0, sizeof(*nt));
-}
-
-static void analyse_ch(int ch)
+/* raies candidates sur UNE voie de sortie (spectre déjà dans g_spec) */
+static void detect_out_ch(void)
 {
     const float *sp = g_spec;
-    time_t now = time(NULL);
-
     int hits[MAX_CAND], n_hits = 0;
     for (int b = 8; b < NBINS - 8 && n_hits < MAX_CAND; b++) {
         if (sp[b] < g_cfg.thresh_db)
@@ -328,73 +280,250 @@ static void analyse_ch(int ch)
     }
 
     for (int c = 0; c < MAX_CAND; c++) {
-        struct candidate *cd = &g_cand[ch][c];
+        struct candidate *cd = &g_cand[c];
         if (!cd->count)
             continue;
-        int found = -1;
         for (int h = 0; h < n_hits; h++)
             if (hits[h] >= 0 && abs(hits[h] - cd->bin) <= 2) {
-                found = h;
+                if (sp[hits[h]] >= cd->last_mag - 1.0f)
+                    cd->count++;
+                cd->bin = hits[h];
+                cd->last_mag = sp[hits[h]];
+                hits[h] = -1;
                 break;
             }
-        if (found < 0) {
-            cd->count = 0;
-            continue;
-        }
-        int b = hits[found];
-        if (sp[b] >= cd->last_mag - 1.0f)
-            cd->count++;
-        cd->bin = b;
-        cd->last_mag = sp[b];
-        hits[found] = -1;
-
-        if (cd->count >= g_cfg.persist_n) {
-            double f = cd->bin * HZ_PER_BIN;
-            struct notch *nt = slot_for(ch, f);
-            if (nt->used && fabs(nt->f_hz - f) < 3 * HZ_PER_BIN) {
-                if (nt->depth_db > g_cfg.depth_max_db &&
-                    now - nt->posed_at >= 1) {
-                    nt->depth_db += g_cfg.depth_step_db;
-                    if (nt->depth_db < g_cfg.depth_max_db)
-                        nt->depth_db = g_cfg.depth_max_db;
-                    apply_notch(ch, nt);
-                }
-                nt->last_hit = now;
-            } else {
-                if (nt->used)
-                    clear_notch(ch, nt);
-                nt->used = 1;
-                nt->f_hz = f;
-                nt->depth_db = g_cfg.depth_start_db;
-                nt->posed_at = nt->last_hit = now;
-                apply_notch(ch, nt);
-            }
-            cd->count = 0;
-        }
     }
-
     for (int h = 0; h < n_hits; h++) {
         if (hits[h] < 0)
             continue;
-        for (int c = 0; c < MAX_CAND; c++) {
-            struct candidate *cd = &g_cand[ch][c];
-            if (cd->count)
-                continue;
-            cd->bin = hits[h];
-            cd->count = 1;
-            cd->last_mag = sp[hits[h]];
-            break;
-        }
-    }
-
-    for (int s = 0; s < SLOTS_PER_CH; s++) {
-        struct notch *nt = &g_notch[ch][s];
-        if (nt->used && now - nt->last_hit > g_cfg.release_s)
-            clear_notch(ch, nt);
+        for (int c = 0; c < MAX_CAND; c++)
+            if (!g_cand[c].count) {
+                g_cand[c].bin = hits[h];
+                g_cand[c].count = 1;
+                g_cand[c].last_mag = sp[hits[h]];
+                break;
+            }
     }
 }
 
-/* ================= statut socket ================= */
+/* ================= machine d'états (une sonde à la fois) ============== */
+enum { P_IDLE, P_PROBE, P_REFINE };
+static struct {
+    int     state;
+    int     bin;
+    double  f_hz;
+    struct timespec t0;          /* début de la phase courante */
+    float   pre_in_db[NCHAN];    /* énergie d'entrée avant sonde */
+    int     involved[NCHAN];     /* f présente à l'entrée avant sonde */
+    int     culprit[NCHAN];      /* voies confirmées coupables */
+    int     refine_ch;           /* voie en cours de ré-ouverture (−1 fini) */
+    float   out_pre_db;          /* niveau sortie à f avant ré-ouverture */
+} g_probe = { .state = P_IDLE };
+
+/* notchs confirmés (registre daemon : récidive + libération) */
+struct held {
+    int    used;
+    double f_hz;
+    float  depth_db;
+    int    voices[NCHAN];
+    time_t posed_at, last_hit;
+};
+#define MAX_HELD 8
+static struct held g_held[MAX_HELD];
+
+/* blacklist de fréquences jugées INNOCENTES (notes tenues) */
+static struct { int bin; time_t until; } g_black[8];
+
+static int blacklisted(int bin)
+{
+    time_t now = time(NULL);
+    for (unsigned i = 0; i < 8; i++)
+        if (g_black[i].until > now && abs(g_black[i].bin - bin) <= 3)
+            return 1;
+    return 0;
+}
+
+static void blacklist(int bin)
+{
+    time_t now = time(NULL);
+    for (unsigned i = 0; i < 8; i++)
+        if (g_black[i].until <= now) {
+            g_black[i].bin = bin;
+            g_black[i].until = now + g_cfg.blacklist_s;
+            return;
+        }
+    g_black[0].bin = bin;
+    g_black[0].until = now + g_cfg.blacklist_s;
+}
+
+static double ms_since(const struct timespec *t0)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - t0->tv_sec) * 1000.0 +
+           (now.tv_nsec - t0->tv_nsec) / 1e6;
+}
+
+static struct held *held_for(double f)
+{
+    for (int i = 0; i < MAX_HELD; i++)
+        if (g_held[i].used && fabs(g_held[i].f_hz - f) < 3 * HZ_PER_BIN)
+            return &g_held[i];
+    return NULL;
+}
+
+/* démarre une sonde sur la candidate b (pré-conditions déjà vérifiées) */
+static void probe_start(int b, int32_t (*in_frames)[NCHAN])
+{
+    g_probe.state = P_PROBE;
+    g_probe.bin = b;
+    g_probe.f_hz = b * HZ_PER_BIN;
+    clock_gettime(CLOCK_MONOTONIC, &g_probe.t0);
+    memset(g_probe.culprit, 0, sizeof(g_probe.culprit));
+    for (int ch = 0; ch < NCHAN; ch++) {
+        g_probe.pre_in_db[ch] = -160.0f;
+        g_probe.involved[ch] = 0;
+        if (!g_flag[ch])
+            continue;
+        g_probe.pre_in_db[ch] = energy_at(in_frames, ch, b);
+        g_probe.involved[ch] = g_probe.pre_in_db[ch] > g_cfg.in_floor_db;
+    }
+    op_notch(-1, g_probe.f_hz, g_cfg.depth_start_db);
+    fprintf(stderr, "al: SONDE %.0f Hz (notch %.0f dB sur voies flaguées)\n",
+            g_probe.f_hz, g_cfg.depth_start_db);
+}
+
+/* verdict après verdict_ms : larsen (f morte à l'entrée) ou note tenue */
+static void probe_verdict(int32_t (*in_frames)[NCHAN])
+{
+    int larsen = 1, checked = 0;
+    for (int ch = 0; ch < NCHAN; ch++) {
+        if (!g_probe.involved[ch])
+            continue;
+        checked++;
+        float post = energy_at(in_frames, ch, g_probe.bin);
+        if (g_probe.pre_in_db[ch] - post < g_cfg.confirm_drop_db)
+            larsen = 0;   /* f persiste ici : vraie source acoustique */
+    }
+    if (!checked)
+        larsen = 0;
+
+    if (!larsen) {
+        op_release(-1, g_probe.f_hz);
+        blacklist(g_probe.bin);
+        fprintf(stderr, "al: INNOCENT %.0f Hz (persiste à l'entrée) — "
+                "retrait immédiat, blacklist %d s\n",
+                g_probe.f_hz, g_cfg.blacklist_s);
+        g_probe.state = P_IDLE;
+        return;
+    }
+
+    fprintf(stderr, "al: CONFIRMÉ %.0f Hz — identification du coupable\n",
+            g_probe.f_hz);
+    g_probe.state = P_REFINE;
+    g_probe.refine_ch = -1;   /* avancé par refine_step */
+}
+
+/* ré-ouverture voie par voie : la voie dont la ré-ouverture fait repartir
+ * f à la SORTIE est coupable (re-notch) ; sinon elle reste ouverte. */
+static void refine_step(int32_t (*out_frames)[NCHAN],
+                        int32_t (*in_frames)[NCHAN])
+{
+    (void)in_frames;
+    /* verdict de la voie précédemment ré-ouverte */
+    if (g_probe.refine_ch >= 0) {
+        float out_now = energy_at(out_frames, 0, g_probe.bin);
+        float out_now2 = energy_at(out_frames, 1, g_probe.bin);
+        if (out_now2 > out_now)
+            out_now = out_now2;
+        int regrow = out_now > g_probe.out_pre_db + 6.0f ||
+                     out_now > g_cfg.thresh_db;
+        if (regrow) {
+            g_probe.culprit[g_probe.refine_ch] = 1;
+            op_notch(g_probe.refine_ch, g_probe.f_hz,
+                     g_cfg.depth_start_db);
+            fprintf(stderr, "al: voie %d COUPABLE (%.0f Hz repart) — "
+                    "re-notch\n", g_probe.refine_ch, g_probe.f_hz);
+        } else {
+            fprintf(stderr, "al: voie %d hors de cause (%.0f Hz)\n",
+                    g_probe.refine_ch, g_probe.f_hz);
+        }
+    }
+    /* voie suivante à tester */
+    int next = -1;
+    for (int ch = g_probe.refine_ch + 1; ch < NCHAN; ch++)
+        if (g_probe.involved[ch]) { next = ch; break; }
+    if (next < 0) {
+        /* terminé : registre. Si AUCUNE voie isolée coupable (couplage
+         * multi-micros), on garde le notch sur toutes les impliquées. */
+        int any = 0;
+        for (int ch = 0; ch < NCHAN; ch++)
+            any |= g_probe.culprit[ch];
+        if (!any) {
+            for (int ch = 0; ch < NCHAN; ch++)
+                if (g_probe.involved[ch]) {
+                    g_probe.culprit[ch] = 1;
+                    op_notch(ch, g_probe.f_hz, g_cfg.depth_start_db);
+                }
+            fprintf(stderr, "al: pas de coupable isolé %.0f Hz — notch "
+                    "gardé sur toutes les voies impliquées\n", g_probe.f_hz);
+        }
+        for (int i = 0; i < MAX_HELD; i++)
+            if (!g_held[i].used) {
+                g_held[i].used = 1;
+                g_held[i].f_hz = g_probe.f_hz;
+                g_held[i].depth_db = g_cfg.depth_start_db;
+                memcpy(g_held[i].voices, g_probe.culprit,
+                       sizeof(g_held[i].voices));
+                g_held[i].posed_at = g_held[i].last_hit = time(NULL);
+                break;
+            }
+        g_probe.state = P_IDLE;
+        return;
+    }
+    g_probe.refine_ch = next;
+    float o0 = energy_at(out_frames, 0, g_probe.bin);
+    float o1 = energy_at(out_frames, 1, g_probe.bin);
+    g_probe.out_pre_db = o0 > o1 ? o0 : o1;
+    op_release(next, g_probe.f_hz);
+    clock_gettime(CLOCK_MONOTONIC, &g_probe.t0);
+}
+
+/* récidive sur un notch tenu → approfondissement ; libération sinon */
+static void held_maintain(void)
+{
+    time_t now = time(NULL);
+    for (int i = 0; i < MAX_HELD; i++) {
+        struct held *h = &g_held[i];
+        if (!h->used)
+            continue;
+        for (int c = 0; c < MAX_CAND; c++)
+            if (g_cand[c].count &&
+                abs(g_cand[c].bin - (int)(h->f_hz / HZ_PER_BIN)) <= 2) {
+                if (h->depth_db + g_cfg.depth_step_db >= -40.0f &&
+                    now - h->last_hit >= 1) {
+                    h->depth_db += g_cfg.depth_step_db;
+                    for (int ch = 0; ch < NCHAN; ch++)
+                        if (h->voices[ch])
+                            op_notch(ch, h->f_hz, h->depth_db);
+                    fprintf(stderr, "al: récidive %.0f Hz → %.0f dB\n",
+                            h->f_hz, h->depth_db);
+                }
+                h->last_hit = now;
+                g_cand[c].count = 0;
+            }
+        if (now - h->last_hit > g_cfg.release_s) {
+            for (int ch = 0; ch < NCHAN; ch++)
+                if (h->voices[ch])
+                    op_release(ch, h->f_hz);
+            fprintf(stderr, "al: LIBÉRÉ %.0f Hz (%d s sans récidive)\n",
+                    h->f_hz, g_cfg.release_s);
+            memset(h, 0, sizeof(*h));
+        }
+    }
+}
+
+/* ================= statut socket (GUI /api/larsen) ================= */
 static int g_status_fd = -1;
 
 static void status_open(void)
@@ -407,53 +536,75 @@ static void status_open(void)
         listen(g_status_fd, 4);
 }
 
-static void clear_notch(int ch, struct notch *nt);
+static void al_set_enable(int en)
+{
+    g_cfg.enable = en ? 1 : 0;
+    char rep[128];
+    char req[64];
+    snprintf(req, sizeof(req), "{\"op\":\"larsen_enable\",\"on\":%d}\n",
+             g_cfg.enable);
+    mixer_op(req, rep, sizeof(rep));   /* off → le moteur retire tout */
+    if (!g_cfg.enable) {
+        memset(g_held, 0, sizeof(g_held));
+        memset(g_cand, 0, sizeof(g_cand));
+        g_probe.state = P_IDLE;
+    }
+    fprintf(stderr, "al: enable=%d\n", g_cfg.enable);
+}
 
 static void status_serve(void)
 {
     int c = accept(g_status_fd, NULL, NULL);
     if (c < 0)
         return;
-    /* V13-SCENES : commande optionnelle avant la réponse — « enable 0|1 »
-     * (toggle runtime depuis la GUI). Clients existants n'envoient rien :
-     * timeout court puis status comme avant. */
     {
-        struct timeval tv = { 0, 80000 };   /* 80 ms */
+        struct timeval tv = { 0, 80000 };
         setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        char cmd[32];
+        char cmd[64];
         ssize_t r = recv(c, cmd, sizeof(cmd) - 1, 0);
         if (r > 0) {
             cmd[r] = '\0';
             int en;
-            if (sscanf(cmd, "enable %d", &en) == 1) {
-                g_cfg.enable = en ? 1 : 0;
-                if (!g_cfg.enable)
-                    for (int ch2 = 0; ch2 < NCHAN; ch2++)
-                        for (int s2 = 0; s2 < SLOTS_PER_CH; s2++)
-                            if (g_notch[ch2][s2].used)
-                                clear_notch(ch2, &g_notch[ch2][s2]);
-                fprintf(stderr, "al: enable=%d (runtime)\n", g_cfg.enable);
-            }
+            float v;
+            if (sscanf(cmd, "enable %d", &en) == 1)
+                al_set_enable(en);
+            else if (sscanf(cmd, "verdict_ms %f", &v) == 1 &&
+                     v >= 100 && v <= 2000)
+                g_cfg.verdict_ms = v;
+            else if (sscanf(cmd, "thresh_db %f", &v) == 1 &&
+                     v >= -80 && v <= -20)
+                g_cfg.thresh_db = v;
         }
     }
     char buf[2048];
-    int n = snprintf(buf, sizeof(buf),
-                     "{\"ok\":true,\"enable\":%d,\"notches\":[", g_cfg.enable);
-    int first = 1;
     time_t now = time(NULL);
-    for (int ch = 0; ch < NCHAN; ch++)
-        for (int s = 0; s < SLOTS_PER_CH; s++) {
-            struct notch *nt = &g_notch[ch][s];
-            if (!nt->used)
-                continue;
-            n += snprintf(buf + n, sizeof(buf) - n,
-                          "%s{\"ch\":%d,\"bq\":%d,\"freq\":%.0f,"
-                          "\"depth\":%.0f,\"age\":%ld}",
-                          first ? "" : ",", ch, slot_bq(ch, nt),
-                          nt->f_hz, nt->depth_db,
-                          (long)(now - nt->posed_at));
-            first = 0;
-        }
+    int n = snprintf(buf, sizeof(buf),
+                     "{\"ok\":true,\"enable\":%d,\"engine\":%d,"
+                     "\"state\":\"%s\",\"probe_hz\":%.0f,"
+                     "\"verdict_ms\":%.0f,\"notches\":[",
+                     g_cfg.enable, g_engine_enable,
+                     g_probe.state == P_IDLE ? "idle" :
+                     g_probe.state == P_PROBE ? "probe" : "refine",
+                     g_probe.state != P_IDLE ? g_probe.f_hz : 0.0,
+                     g_cfg.verdict_ms);
+    int first = 1;
+    for (int i = 0; i < MAX_HELD; i++) {
+        struct held *h = &g_held[i];
+        if (!h->used)
+            continue;
+        int nv = 0;
+        char vs[64] = "";
+        for (int ch = 0; ch < NCHAN; ch++)
+            if (h->voices[ch])
+                nv += snprintf(vs + nv, sizeof(vs) - nv, "%s%d",
+                               nv ? "," : "", ch);
+        n += snprintf(buf + n, sizeof(buf) - n,
+                      "%s{\"freq\":%.0f,\"depth\":%.0f,\"voices\":[%s],"
+                      "\"age\":%ld}",
+                      first ? "" : ",", h->f_hz, h->depth_db, vs,
+                      (long)(now - h->posed_at));
+        first = 0;
+    }
     n += snprintf(buf + n, sizeof(buf) - n, "]}\n");
     (void)!write(c, buf, n);
     close(c);
@@ -476,15 +627,14 @@ static void conf_load(void)
         else if (!strcmp(k, "thresh_db")) g_cfg.thresh_db = v;
         else if (!strcmp(k, "pnr_db")) g_cfg.pnr_db = v;
         else if (!strcmp(k, "persist_n")) g_cfg.persist_n = (int)v;
-        else if (!strcmp(k, "notch_q")) g_cfg.notch_q = v;
         else if (!strcmp(k, "depth_start_db")) g_cfg.depth_start_db = v;
-        else if (!strcmp(k, "depth_max_db")) g_cfg.depth_max_db = v;
+        else if (!strcmp(k, "depth_step_db")) g_cfg.depth_step_db = v;
+        else if (!strcmp(k, "verdict_ms")) g_cfg.verdict_ms = v;
+        else if (!strcmp(k, "refine_ms")) g_cfg.refine_ms = v;
+        else if (!strcmp(k, "confirm_drop_db")) g_cfg.confirm_drop_db = v;
+        else if (!strcmp(k, "in_floor_db")) g_cfg.in_floor_db = v;
+        else if (!strcmp(k, "blacklist_s")) g_cfg.blacklist_s = (int)v;
         else if (!strcmp(k, "release_s")) g_cfg.release_s = (int)v;
-        else if (!strcmp(k, "coef_halved")) g_cfg.coef_halved = (int)v;
-        else if (!strcmp(k, "pair0")) g_cfg.pair_en[0] = (int)v;
-        else if (!strcmp(k, "pair1")) g_cfg.pair_en[1] = (int)v;
-        else if (!strcmp(k, "pair2")) g_cfg.pair_en[2] = (int)v;
-        else if (!strcmp(k, "pair3")) g_cfg.pair_en[3] = (int)v;
     }
     fclose(f);
 }
@@ -494,38 +644,20 @@ int main(void)
     signal(SIGINT, on_sig);
     signal(SIGTERM, on_sig);
     conf_load();
-    fprintf(stderr, "anti-larsen E1b: enable=%d thresh=%.0f pnr=%.0f "
-            "persist=%d q=%.0f halved=%d slots/ch=%d\n",
-            g_cfg.enable, g_cfg.thresh_db, g_cfg.pnr_db,
-            g_cfg.persist_n, g_cfg.notch_q, g_cfg.coef_halved,
-            SLOTS_PER_CH);
+    fprintf(stderr, "anti-larsen V15: enable=%d thresh=%.0f verdict=%.0fms "
+            "drop=%.0fdB probe=%.0fdB (actuation mixer-pro, JAMAIS le TAC)\n",
+            g_cfg.enable, g_cfg.thresh_db, g_cfg.verdict_ms,
+            g_cfg.confirm_drop_db, g_cfg.depth_start_db);
 
-    if (ctl_open() < 0) {
-        fprintf(stderr, "al: carte %s introuvable\n", CARD_NAME);
-        return 1;
-    }
-    /* état connu : slots AFS flat sur les 4 TAC */
-    for (int tac = 0; tac < 4; tac++)
-        for (int l = 0; l < 2; l++)
-            for (int s = 0; s < SLOTS_PER_CH; s++)
-                bq_write(tac, SLOT_BQ[l][s], FLAT_BLOB);
-
-    if (!g_cfg.enable)
-        /* V13-SCENES : on RESTE résident (activable depuis la GUI via
-         * le socket) — la boucle saute l'analyse tant que enable=0. */
-        fprintf(stderr, "al: enable=0 — en veille (activable runtime)\n");
-    /* BQ9/BQ10 exigent '3 Biquads/Ch' */
-    for (int tac = 0; tac < 4; tac++)
-        if (g_cfg.pair_en[tac])
-            bq_config3(tac);
-
-    while (tap_open() < 0 && !g_stop) {
-        fprintf(stderr, "al: tap indisponible, retry 5 s\n");
+    while ((tap_open(&g_tout, TAP_OUT_DEV) < 0 ||
+            tap_open(&g_tin, TAP_IN_DEV) < 0) && !g_stop) {
+        fprintf(stderr, "al: taps indisponibles, retry 5 s\n");
         sleep(5);
     }
     if (g_stop)
         return 0;
-    g_rd = tap_u32(20);
+    g_tout.rd = tap_u32(&g_tout, 20);
+    g_tin.rd = tap_u32(&g_tin, 20);
 
     g_fft_in = fftwf_alloc_real(NFFT);
     g_fft_out = fftwf_alloc_complex(NBINS);
@@ -534,37 +666,74 @@ int main(void)
         g_win[i] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * i / (NFFT - 1));
 
     status_open();
+    if (g_cfg.enable)
+        al_set_enable(1);   /* synchronise le moteur au boot */
 
-    static int32_t frames[NFFT][NCHAN];
-    int have = 0;
-    /* 100 ms : contraint par le ring du tap (~170 ms) */
-    const long period_ns = 100000000L;
+    static int32_t out_frames[NFFT][NCHAN], in_frames[NFFT][NCHAN];
+    int have_out = 0, have_in = 0, tick = 0;
+    const long period_ns = 100000000L;   /* 100 ms (ring tap ~170 ms) */
 
     while (!g_stop) {
         struct timespec ts = { 0, period_ns };
         nanosleep(&ts, NULL);
         status_serve();
+        if (++tick % 10 == 0)
+            poll_flags();
 
-        int n = tap_read(frames + have, NFFT - have);
-        have += n;
-        if (have < NFFT)
+        have_out += tap_read(&g_tout, out_frames + have_out,
+                             NFFT - have_out);
+        have_in  += tap_read(&g_tin, in_frames + have_in, NFFT - have_in);
+        if (have_out < NFFT || have_in < NFFT)
             continue;
 
-        for (int ch = 0; ch < NCHAN; ch++) {
-            if (!g_cfg.enable)   /* V13-SCENES : veille runtime */
+        if (g_cfg.enable && g_engine_enable) {
+            switch (g_probe.state) {
+            case P_IDLE:
+                /* candidates sur les sorties façade (0/1) + retours (2..7) */
+                for (int ch = 0; ch < NCHAN; ch++)
+                    if (ch_active(out_frames, ch,
+                                  g_cfg.thresh_db - 10.0f)) {
+                        spectrum_ch(out_frames, ch);
+                        detect_out_ch();
+                    }
+                held_maintain();
+                for (int c = 0; c < MAX_CAND; c++) {
+                    struct candidate *cd = &g_cand[c];
+                    if (cd->count < g_cfg.persist_n)
+                        continue;
+                    cd->count = 0;
+                    if (blacklisted(cd->bin) ||
+                        held_for(cd->bin * HZ_PER_BIN))
+                        continue;
+                    /* pré-condition : f présente dans ≥1 entrée flaguée
+                     * (sinon ça ne peut pas être un larsen micro) */
+                    int any = 0;
+                    for (int ch = 0; ch < NCHAN && !any; ch++)
+                        any = g_flag[ch] &&
+                              energy_at(in_frames, ch, cd->bin) >
+                              g_cfg.in_floor_db;
+                    if (any) {
+                        probe_start(cd->bin, in_frames);
+                        break;   /* une sonde à la fois */
+                    }
+                }
                 break;
-            if (!g_cfg.pair_en[ch / 2])
-                continue;
-            if (spectrum_ch(frames, ch))
-                analyse_ch(ch);
+            case P_PROBE:
+                if (ms_since(&g_probe.t0) >= g_cfg.verdict_ms)
+                    probe_verdict(in_frames);
+                break;
+            case P_REFINE:
+                if (g_probe.refine_ch < 0 ||
+                    ms_since(&g_probe.t0) >= g_cfg.refine_ms)
+                    refine_step(out_frames, in_frames);
+                break;
+            }
         }
-        have = 0;
+        have_out = have_in = 0;
     }
 
-    for (int ch = 0; ch < NCHAN; ch++)
-        for (int s = 0; s < SLOTS_PER_CH; s++)
-            if (g_notch[ch][s].used)
-                clear_notch(ch, &g_notch[ch][s]);
+    if (g_cfg.enable)
+        al_set_enable(0);   /* retire tous les notchs au shutdown */
     fprintf(stderr, "al: stop\n");
     return 0;
 }

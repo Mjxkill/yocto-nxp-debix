@@ -42,6 +42,8 @@ SRC_URI = " \
     file://control.c \
     file://fx_ops.c \
     file://tac_ops.c \
+    file://antilarsen.c \
+    file://antilarsen.h \
     file://control.h \
     file://effects.h \
     file://fx_dynamics.c \

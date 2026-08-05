@@ -1,5 +1,5 @@
 [Unit]
-Description=V11-AL anti-larsen automatique (AFS — notchs BQ TAC 7-12)
+Description=V15 anti-larsen v2 (détection tap NPU → notchs logiciels mixer-pro)
 # Apres tac-reset + ala-fx-restore : les registres TAC sont dans leur etat
 # final, le daemon part d'un etat connu (slots AFS rendus flat au start)
 After=mixer-pro.service tac-reset.service ala-fx-restore.service

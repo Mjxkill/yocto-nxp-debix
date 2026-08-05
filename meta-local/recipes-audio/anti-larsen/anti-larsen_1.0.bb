@@ -18,8 +18,8 @@ S = "${WORKDIR}"
 
 inherit systemd
 
-DEPENDS = "alsa-lib fftwf"
-RDEPENDS:${PN} = "alsa-lib libfftwf"
+DEPENDS = "fftwf"
+RDEPENDS:${PN} = "libfftwf mixer-pro"
 
 do_compile() {
     oe_runmake CC="${CC}" CFLAGS="${CFLAGS}" LDFLAGS="${LDFLAGS}"

@@ -18,6 +18,7 @@
 #include "automix.h"     /* g_bmx, BR_NAMES */
 #include "master.h"      /* g_meq_p, meq_recalc, g_master_on */
 #include "voice.h"       /* g_vf, g_vspat */
+#include "antilarsen.h"  /* g_al (flags persistés, V15) */
 #include "persist.h"
 #include "control.h"    /* handlers d'ops (V14.0 étape 4) */
 #include <unistd.h>
@@ -218,6 +219,18 @@ void save_state_to(const char *path)
 		(int)atomic_load(&g_vspat.amount_mq),
 		(int)atomic_load(&g_vspat.delay_smp));
 	fprintf(f, "solo_auto %d\n", g_bmx.solo_auto);
+	/* V15 : anti-larsen — enable + q + plafond + flags des 16 voies
+	 * (les notchs dynamiques ne sont JAMAIS persistés) */
+	fprintf(f, "larsen %d %.1f %.1f %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+		(int)atomic_load(&g_al.enable), g_al.q, g_al.depth_max_db,
+		(int)atomic_load(&g_al.v[0].flag), (int)atomic_load(&g_al.v[1].flag),
+		(int)atomic_load(&g_al.v[2].flag), (int)atomic_load(&g_al.v[3].flag),
+		(int)atomic_load(&g_al.v[4].flag), (int)atomic_load(&g_al.v[5].flag),
+		(int)atomic_load(&g_al.v[6].flag), (int)atomic_load(&g_al.v[7].flag),
+		(int)atomic_load(&g_al.v[8].flag), (int)atomic_load(&g_al.v[9].flag),
+		(int)atomic_load(&g_al.v[10].flag), (int)atomic_load(&g_al.v[11].flag),
+		(int)atomic_load(&g_al.v[12].flag), (int)atomic_load(&g_al.v[13].flag),
+		(int)atomic_load(&g_al.v[14].flag), (int)atomic_load(&g_al.v[15].flag));
 	/* V13.1 : matrice des sends par tranche (départs FX) — trouvé absent
 	 * par la campagne de validation. En FIN de fichier, une ligne par
 	 * tranche, parsé par la boucle fgets des loaders (états antérieurs
@@ -264,7 +277,7 @@ static void parse_state_lines(FILE *f)
 	char bl[160];
 	int src, on, role, live, rv, al = 0;
 	float thr, ratio, atk, rel, mk, shr, sv[8];
-	int lk[8];
+	int lk[8], fl2[8];   /* fl2 : flags larsen voies 8..15 (V15) */
 	while (fgets(bl, sizeof(bl), f)) {
 		if (sscanf(bl, "comp %d %d %f %f %f %f %f",
 			   &src, &on, &thr, &ratio, &atk, &rel,
@@ -319,6 +332,20 @@ static void parse_state_lines(FILE *f)
 				atomic_store(&g_vspat.amount_mq, src);
 			if (role >= 144 && role <= 1920)   /* 3..40 ms @48k */
 				atomic_store(&g_vspat.delay_smp, role);
+		} else if (sscanf(bl, "larsen %d %f %f %d %d %d %d %d %d %d %d "
+				  "%d %d %d %d %d %d %d %d",
+				  &on, &sv[0], &sv[1], &lk[0], &lk[1], &lk[2],
+				  &lk[3], &lk[4], &lk[5], &lk[6], &lk[7],
+				  &fl2[0], &fl2[1], &fl2[2], &fl2[3], &fl2[4],
+				  &fl2[5], &fl2[6], &fl2[7]) == 19) {
+			/* V15 : anti-larsen (enable + q + plafond + flags) */
+			atomic_store(&g_al.enable, on ? 1 : 0);
+			if (sv[0] >= 2.0f && sv[0] <= 40.0f)   g_al.q = sv[0];
+			if (sv[1] >= -40.0f && sv[1] <= -6.0f) g_al.depth_max_db = sv[1];
+			for (int i = 0; i < 8; i++) {
+				atomic_store(&g_al.v[i].flag, lk[i] ? 1 : 0);
+				atomic_store(&g_al.v[8 + i].flag, fl2[i] ? 1 : 0);
+			}
 		} else if (sscanf(bl, "solo_auto %d", &on) == 1) {
 			g_bmx.solo_auto = on ? 1 : 0;
 		} else if (sscanf(bl, "sends %d %f %f %f %f %f %f %f %f",

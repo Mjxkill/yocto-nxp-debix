@@ -25,6 +25,7 @@
 #include "automix.h"     /* eqx_render, automix_update, g_ms_* */
 #include "master.h"      /* meq_chain, g_meq_*, g_mk, K-weighting */
 #include "voice.h"       /* duck_render, vspat_render */
+#include "antilarsen.h"  /* al_render (V15) */
 #include "sampler.h"     /* smp_render */
 #include "looper.h"      /* loop_render */
 #include "midix.h"       /* midix_render */
@@ -391,6 +392,9 @@ void *audio_thread(void *arg)
 		/* V12-EXP : gate/expandeur par tranche, in-place AVANT tout
 		 * consommateur (sends/master/looper/automix/tap) */
 		exp_render(in_block);
+		/* V15 : notchs anti-larsen logiciels (voies flaguées, posés par
+		 * le daemon via ops — enable off = zéro coût) */
+		al_render(in_block);
 		/* V13.6 : EQ de placement par rôle (autolive), entre gate et comp */
 		eqx_render(in_block);
 		/* V13-COMP : compresseur par tranche, APRÈS le gate */
