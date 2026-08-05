@@ -371,6 +371,9 @@ void bmx_tick(void)
 				else                    Pm += g_bmx.lt_ms[i];
 			}
 			int hv = (Pv > 1e-6f), hm = (Pm > 1e-6f), hc = (Pc > 1e-6f);
+			/* V15.2 : snapshot pour le staging 4 Hz */
+			g_bmx.st_hv = hv; g_bmx.st_hm = hm; g_bmx.st_hc = hc;
+			g_bmx.st_Pv = Pv; g_bmx.st_Pm = Pm; g_bmx.st_Pc = Pc;
 			/* peak-hold du programme pour le gel (décroît 0,5 dB/s) */
 			float prog = 10.0f * log10f(Pv + Pc + Pm + 1e-12f);
 			if (prog > g_bmx.prog_peak) g_bmx.prog_peak = prog;
@@ -379,9 +382,11 @@ void bmx_tick(void)
 			 * récente. Sous ce seuil = creux (pause, fin, passage calme) :
 			 * on n'autorise PLUS aucune MONTÉE (la descente reste permise). */
 			int loud = (prog >= g_bmx.prog_peak - 3.0f);
+			g_bmx.st_loud = loud;   /* V15.2 : snapshot */
 			float lufs = atomic_load_explicit(&g_mk.lufs_c,
 					memory_order_relaxed) * 0.01f;
-			if (hv && hm && lufs > -50.0f) {
+			if (hv && hm && lufs > -50.0f &&
+			    g_bmx.bal_staged) {   /* V15.2 : pré-lock = bmx_balance_fast */
 				/* E = écart RÉEL en sortie : loudness pré-présence (lt_ms)
 				 * + les gains de groupe déjà appliqués → boucle fermée
 				 * (sinon l'axe écart file aux butées). LUFS l'est déjà. */
@@ -428,7 +433,7 @@ void bmx_tick(void)
 				if (g_bmx.g_voice_db < -24.0f) g_bmx.g_voice_db = -24.0f;
 				if (g_bmx.g_music_db >  36.0f) g_bmx.g_music_db =  36.0f;
 				if (g_bmx.g_music_db < -24.0f) g_bmx.g_music_db = -24.0f;
-			} else if (hm && !hv && lufs > -50.0f) {
+			} else if (hm && !hv && lufs > -50.0f && g_bmx.bal_staged) {
 				/* V15.1 : INTRO INSTRUMENTALE (musique active, pas encore
 				 * de voix) — la boucle complète exige hv&&hm et restait
 				 * gelée : mesuré 10 s de « trop fort » sur les gains
@@ -448,7 +453,7 @@ void bmx_tick(void)
 			/* CHŒURS : asservissement d'écart subordonné — tient les
 			 * chœurs à musique + bal_c_tgt (boucle fermée, slew ≤1 dB/
 			 * tick), même gel : jamais de montée dans un creux. */
-			if (hc && hm && lufs > -50.0f) {
+			if (hc && hm && lufs > -50.0f && g_bmx.bal_staged) {
 				float Ec = (10.0f * log10f(Pc) - 10.0f * log10f(Pm))
 					 + (g_bmx.g_choir_db - g_bmx.g_music_db);
 				float d = g_bmx.bal_c_tgt - Ec;   /* >0 → monter */
@@ -581,6 +586,92 @@ void bmx_tick(void)
 	pthread_mutex_lock(&g_st.target_lock);
 	for (int i = 0; i < N_EXP_CH; i++)
 		g_st.keeper_target[i] = powf(10.0f, g_bmx.kdb[i] / 20.0f);
+	pthread_mutex_unlock(&g_st.target_lock);
+}
+
+
+/* V15.2 — STAGING BALANCE 4 Hz (persistence loop, 250 ms) : entre le
+ * réarmement (gains 0 dB) et le 1er lock, le fast tick POSSÈDE les
+ * mouvements de gains — capteur = LUFS MOMENTANÉ (τ 0,4 s, frais) →
+ * pleine vitesse 8 dB/s sans plongée (le short-term 3 s de retard
+ * imposait lenteur ou dépassement, mesuré −21 LUFS le 2026-08-05).
+ * Flags/puissances = snapshot du tick 1 Hz (les EWMAs restent 1 Hz).
+ * Après le lock : cette fonction ne fait RIEN (boucles douces 1 Hz
+ * validées, intouchées). Quadrants, gels et clamps identiques au tick. */
+void bmx_balance_fast(void)
+{
+	if (!g_bmx.autolive || !g_bmx.balance_on || g_bmx.bal_staged)
+		return;
+	float lufs = atomic_load_explicit(&g_mk.lufs_m_c,
+					  memory_order_relaxed) * 0.01f;
+	if (lufs <= -50.0f)
+		return;
+	const float DT = 0.25f;   /* 4 Hz */
+	int hv = g_bmx.st_hv, hm = g_bmx.st_hm, hc = g_bmx.st_hc;
+	int loud = g_bmx.st_loud;
+	float lerr = lufs - g_bmx.bal_lufs_tgt;
+
+	if (hv && hm) {
+		if (fabsf(lerr) <= 2.0f) {   /* 1er lock → boucles douces 1 Hz */
+			g_bmx.bal_staged = 1;
+			return;
+		}
+		float E = (10.0f * log10f(g_bmx.st_Pv + 1e-12f)
+			 - 10.0f * log10f(g_bmx.st_Pm + 1e-12f))
+			+ (g_bmx.g_voice_db - g_bmx.g_music_db);
+		float eerr = E - g_bmx.bal_e_tgt;
+		float st = fminf(8.0f, fmaxf(1.0f, fabsf(lerr))) * DT;
+		float dv = 0.0f, dm = 0.0f;
+		if (lerr < -1.0f) {            /* trop faible → MONTER */
+			if (eerr > 1.0f) dm = +st;
+			else             dv = +st;
+		} else if (lerr > 1.0f) {      /* trop fort → BAISSER */
+			if (eerr > 1.0f) dv = -st;
+			else             dm = -st;
+		}
+		if (!loud) { if (dv > 0.0f) dv = 0.0f;
+			     if (dm > 0.0f) dm = 0.0f; }
+		if (dv > 0.0f && !hv) dv = 0.0f;
+		if (dm > 0.0f && !hm) dm = 0.0f;
+		g_bmx.g_voice_db += dv;
+		g_bmx.g_music_db += dm;
+	} else if (hm && !hv && lerr > 1.0f) {
+		/* intro instrumentale : descente seule (V15.1), cadencée */
+		g_bmx.g_music_db -= fminf(8.0f, fmaxf(1.0f, lerr)) * DT;
+	}
+	/* chœurs : même écart subordonné que le tick, cadencé */
+	if (hc && hm) {
+		float Ec = (10.0f * log10f(g_bmx.st_Pc + 1e-12f)
+			  - 10.0f * log10f(g_bmx.st_Pm + 1e-12f))
+			 + (g_bmx.g_choir_db - g_bmx.g_music_db);
+		float d = g_bmx.bal_c_tgt - Ec;
+		float cs = 8.0f * DT;
+		if (d >  cs) d =  cs;
+		if (d < -cs) d = -cs;
+		if (d > 0.0f && !loud) d = 0.0f;
+		g_bmx.g_choir_db += d;
+	}
+	/* clamps communs */
+	if (g_bmx.g_voice_db >  36.0f) g_bmx.g_voice_db =  36.0f;
+	if (g_bmx.g_voice_db < -24.0f) g_bmx.g_voice_db = -24.0f;
+	if (g_bmx.g_music_db >  36.0f) g_bmx.g_music_db =  36.0f;
+	if (g_bmx.g_music_db < -24.0f) g_bmx.g_music_db = -24.0f;
+	if (g_bmx.g_choir_db >  36.0f) g_bmx.g_choir_db =  36.0f;
+	if (g_bmx.g_choir_db < -24.0f) g_bmx.g_choir_db = -24.0f;
+
+	/* application immédiate des cibles de présence (même formule que le
+	 * tick 1 Hz, partie presence seulement) — sous target_lock. */
+	pthread_mutex_lock(&g_st.target_lock);
+	for (int i = 0; i < N_EXP_CH; i++) {
+		int r = g_bmx.role[i];
+		g_st.presence_target[i] =
+			(!g_bmx.balance_on || r == BR_OFF) ? 1.0f
+			: (r == BR_LEAD)
+				? powf(10.0f, g_bmx.g_voice_db / 20.0f)
+			: (r == BR_CHOIR)
+				? powf(10.0f, g_bmx.g_choir_db / 20.0f)
+				: powf(10.0f, g_bmx.g_music_db / 20.0f);
+	}
 	pthread_mutex_unlock(&g_st.target_lock);
 }
 

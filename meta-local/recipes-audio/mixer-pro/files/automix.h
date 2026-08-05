@@ -124,7 +124,12 @@ struct bmx_state {
 	float  g_choir_db;
 	float  g_music_db;
 	float  prog_peak;                 /* peak-hold loudness programme (gel) */
-	int    bal_staged;                /* staging initial 8 dB/s jusqu'au 1er lock */
+	int    bal_staged;                /* staging initial jusqu'au 1er lock */
+	/* V15.2 — instantané du tick 1 Hz pour le staging 4 Hz (flags
+	 * d'activité + puissances de groupe ; le fast tick ne recalcule
+	 * jamais les EWMAs, il ne fait que bouger les gains) */
+	int    st_hv, st_hm, st_hc, st_loud;
+	float  st_Pv, st_Pm, st_Pc;
 	/* V13.9 — SOLO manuel + détection auto (v2, base EWMA par voie) */
 	int    solo_src;                  /* voie en solo (−1 = aucune) */
 	int    solo_auto;
@@ -149,6 +154,10 @@ void bmx_calc(void);
  * Énergie post-fader, enveloppe asymétrique 10/200 ms, plancher floor. */
 void automix_update(const float in_block[N_INPUT_REAL][PERIOD_FRAMES],
 		    uint32_t N);
+
+/* V15.2 : staging balance 4 Hz (persistence loop, 250 ms) — actif
+ * uniquement tant que bal_staged=0 ; capteur = LUFS momentané. */
+void bmx_balance_fast(void);
 
 /* V13.6 : EQ de placement par rôle (audio_thread, entre gate et comp) */
 void eqx_render(float in_block[N_INPUT_REAL][PERIOD_FRAMES]);

@@ -44,6 +44,9 @@ SRC_URI = " \
     file://tac_ops.c \
     file://antilarsen.c \
     file://antilarsen.h \
+    file://voice_clean.c \
+    file://voice_clean.h \
+    file://voice_clean_shm.h \
     file://control.h \
     file://effects.h \
     file://fx_dynamics.c \

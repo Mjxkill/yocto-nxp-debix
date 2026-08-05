@@ -26,6 +26,8 @@
 #include "master.h"      /* meq_chain, g_meq_*, g_mk, K-weighting */
 #include "voice.h"       /* duck_render, vspat_render */
 #include "antilarsen.h"  /* al_render (V15) */
+#include "voice_clean.h"  /* vc_process (V16) */
+#include "voice_clean_shm.h"
 #include "sampler.h"     /* smp_render */
 #include "looper.h"      /* loop_render */
 #include "midix.h"       /* midix_render */
@@ -102,9 +104,11 @@ static void smooth_gains(void)
 	}
 
 	/* V13.9 — BALANCE AUTO : slew du gain de présence (τ ≈ 2 s, comme le
-	 * keeper — le dB/tick de la boucle 1 Hz fixe déjà la vitesse macro). */
+	 * keeper — le dB/tick de la boucle 1 Hz fixe déjà la vitesse macro).
+	 * V15.2 : pendant le STAGING (début de morceau), τ ≈ 250 ms — sinon le
+	 * lissage audio annule la réactivité du staging 4 Hz. Post-lock : 2 s. */
 	{
-		const float alpha_p = 0.001f;
+		const float alpha_p = g_bmx.bal_staged ? 0.001f : 0.008f;
 		for (int i = 0; i < N_INPUT_TOTAL; i++)
 			g_st.presence_gain[i] += alpha_p *
 				(g_st.presence_target[i] - g_st.presence_gain[i]);
@@ -392,6 +396,9 @@ void *audio_thread(void *arg)
 		/* V12-EXP : gate/expandeur par tranche, in-place AVANT tout
 		 * consommateur (sends/master/looper/automix/tap) */
 		exp_render(in_block);
+		/* V16 : voix nettoyée (daemon CPU3) — remplace la voie AVANT
+		 * tout consommateur (anti-larsen, eqx, automix, mesures, mix) */
+		vc_process(in_block);
 		/* V15 : notchs anti-larsen logiciels (voies flaguées, posés par
 		 * le daemon via ops — enable off = zéro coût) */
 		al_render(in_block);
@@ -509,7 +516,7 @@ void *audio_thread(void *arg)
 		/* V13.7 — mètre short-term LUFS K-pondéré (BS.1770) sur la sortie
 		 * réelle out 0/1, publié pour l'asservissement makeup (bmx_tick). */
 		if (atomic_load_explicit(&g_master_on, memory_order_relaxed)) {
-			float ms = g_mk.ms;
+			float ms = g_mk.ms, ms_m = g_mk.ms_m;
 			for (int f = 0; f < PERIOD_FRAMES; f++) {
 				float acc = 0.0f;
 				for (int ch = 0; ch < 2; ch++) {
@@ -523,10 +530,16 @@ void *audio_thread(void *arg)
 					acc += y2 * y2;
 				}
 				ms += LUFS_ST_A * (acc - ms);
+				ms_m += LUFS_M_A * (acc - ms_m);   /* V15.2 */
 			}
 			g_mk.ms = ms;
+			g_mk.ms_m = ms_m;
 			float lufs = -0.691f + 10.0f * log10f(ms + 1e-12f);
 			atomic_store_explicit(&g_mk.lufs_c, (int)(lufs * 100.0f),
+			                      memory_order_relaxed);
+			float lufs_m = -0.691f + 10.0f * log10f(ms_m + 1e-12f);
+			atomic_store_explicit(&g_mk.lufs_m_c,
+			                      (int)(lufs_m * 100.0f),
 			                      memory_order_relaxed);
 		}
 

@@ -57,6 +57,8 @@
 #include "uac2_ring.h" /* V14.0 étape 3 : isolation USB UAC2 (rings+threads+drift) */
 #include "audio_loop.h" /* V14.0 étape 3b : audio_thread + play_thread */
 #include "control.h"    /* V14.0 étape 4 : dispatcher ops + helpers JSON */
+#include "voice_clean.h" /* V16 : nettoyage voix (vc_init) */
+#include "voice_clean_shm.h"
 
 /* ============================== State ============================== */
 /* struct alsa_pcm + struct mixer_state : déplacées dans state.h (V14.0
@@ -141,8 +143,16 @@ _Atomic int g_assistant_source = 0;
 static void *persistence_thread(void *arg)
 {
 	(void)arg;
+	int subtick = 0;
 	while (atomic_load(&g_st.running)) {
-		sleep(1);
+		/* V15.2 : boucle à 250 ms — le staging balance (début de
+		 * morceau) a besoin de 4 Hz ; tout le reste garde sa cadence
+		 * 1 Hz (un passage sur quatre). */
+		usleep(250000);
+		bmx_balance_fast();   /* no-op dès le 1er lock */
+		if (++subtick < 4)
+			continue;
+		subtick = 0;
 		midix_try_map();   /* V12-MIDIX : mmap hors RT, retry 1 Hz */
 		bmx_tick();        /* V13-BANDMIX : soundcheck + keeper 1 Hz */
 		if (atomic_exchange(&g_presets_dirty, 0)) {
@@ -290,6 +300,8 @@ int main(int argc, char **argv)
 
 	/* V12-LOOP-PRO : buffers loopstation (looper.c, V14.0 étape 1) */
 	loop_init();
+	/* V16 : segment SHM voice-clean (owner) */
+	vc_init();
 
 	/* E6.h : eventfd pour signaler le play_thread depuis l'audio_thread.
 	 * EFD_SEMAPHORE-like accumule les writes ; on lit en bloc.

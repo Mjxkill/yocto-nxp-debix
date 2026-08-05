@@ -144,6 +144,10 @@ IMAGE_INSTALL:append = " mixer-console"
 # enable=0 par défaut dans /etc/mixer-pro/anti-larsen.conf.
 IMAGE_INSTALL:append = " anti-larsen"
 
+# V16 — voice-clean : nettoyage voix R&D (bouton BRUT/DTLN/SPECSUB,
+# ARCHI_V16_VOICE_CLEAN.md). Daemon CPU3, modes OFF par défaut.
+IMAGE_INSTALL:append = " voice-clean"
+
 # V10-N6e — pas de getty sur la dalle : le logo boot kernel A.L.A. (plein
 # écran) doit rester affiché jusqu'au modeset de mixer-console. getty@tty1
 # effaçait le framebuffer pendant le tac-reset. Login local : série + ssh.

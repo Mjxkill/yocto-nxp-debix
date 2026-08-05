@@ -27,6 +27,9 @@
 #define MASTER_MK_MAX_DB   (36.0f)   /* makeup = gain-staging global (stems faibles) */
 #define MASTER_MK_MIN_DB   (-6.0f)
 #define LUFS_ST_A          (1.0f / (3.0f * (float)SAMPLE_RATE))   /* short-term ~3 s */
+/* V15.2 : mètre MOMENTANÉ (τ 0,4 s) — capteur frais du staging balance
+ * (le short-term 3 s de retard imposait lenteur OU plongée). */
+#define LUFS_M_A           (1.0f / (0.4f * (float)SAMPLE_RATE))
 
 extern _Atomic int g_master_on;          /* étage master actif (autolive) */
 
@@ -49,10 +52,12 @@ extern struct meq_params {               /* params (control thread) */
 extern struct mk_state {
 	float k1[2][2], k2[2][2];   /* K-weighting : 2 biquads BS.1770 × L/R */
 	float ms;                   /* EWMA puissance K-pondérée (short-term) */
+	float ms_m;                 /* V15.2 : EWMA momentanée (τ 0,4 s) */
 	float mk_db;                /* makeup courant en dB (état bmx_tick) */
 	_Atomic int makeup_mq;      /* cible makeup ×1000 linéaire (→ audio) */
 	float makeup_cur;           /* gain lissé (audio_thread) */
 	_Atomic int lufs_c;         /* LUFS short-term ×100 publié (→ bmx_tick) */
+	_Atomic int lufs_m_c;       /* V15.2 : LUFS momentané ×100 (→ staging) */
 } g_mk;
 
 /* K-weighting ITU-R BS.1770 @ 48 kHz — coefficients canoniques (forme

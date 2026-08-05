@@ -196,6 +196,22 @@ document.getElementById("xpdpanic").addEventListener("click",()=>cmd({op:"midix_
 /* ---------------- AUTO MIX web (assistant groupe) ---------------- */
 const BMXROLES=["off","lead","choir","kick","snare","drums","bass","guitar","keys","line"];
 const BMXNAMES=["—","VOIX LEAD","CHŒURS","GR. CAISSE","C. CLAIRE","BATTERIE","BASSE","GUITARE","CLAVIER","LIGNE"];
+/* V16 : bouton VOIX PROPRE par voie lead/chœurs (brut/DTLN/GTCRN/spec) */
+let vcSt={src:-1,mode:0,avail:0,daemon:0};
+const VC_MODES=["BRUT","DTLN","GTCRN","SPEC"];
+function vcNext(m){
+  for(let k=1;k<=4;k++){
+    const n=(m+k)%4;
+    if(n===0||((vcSt.avail>>n)&1))return n;
+  }
+  return 0;
+}
+function vcPoll(){
+  cmd({op:"voice_clean_status"}).then(r=>{
+    if(r.ok){vcSt={src:r.src,mode:r.mode,avail:r.modes_avail,daemon:r.daemon};}
+  }).catch(()=>{});
+}
+setInterval(()=>{if(window.CURPAGE==="BANDMIX")vcPoll();},1500);
 const bmxStrip=(i)=>i<8?"M"+(i+1):"U"+(i-7);
 let bmxSt=null,bmxVf=null,bmxDugan=false,bmxVfDrag=false;
 function bmxRender(){
@@ -233,7 +249,12 @@ function bmxRender(){
           :(ch.done?("✓ "+ch.rms_db.toFixed(1)):"MESURER")}</button>
       <button class="wbtn" data-so="${i}" title="Solo (monte la voie à la place de la voix)"
         style="width:26px;padding:3px 2px;font-size:9px;font-weight:700;
-        ${st.solo===i?"background:#2a2214;border-color:#e5a13c;color:#e5a13c;":""}">S</button>`
+        ${st.solo===i?"background:#2a2214;border-color:#e5a13c;color:#e5a13c;":""}">S</button>${
+        (ch.role==="lead"||ch.role==="choir")?`<button class="wbtn" data-vc="${i}"
+        title="Voix propre : brut / DTLN / GTCRN / soustraction spectrale (latence +48 ms en mode traité)"
+        style="width:44px;padding:3px 2px;font-size:8px;font-weight:700;
+        ${vcSt.src===i&&vcSt.mode?"background:#12251a;border-color:#4cc470;color:#4cc470;":""}">${
+        vcSt.src===i?VC_MODES[vcSt.mode]:"BRUT"}</button>`:""}`
         :`<span style="width:122px;"></span>`}
       ${active?`
       <!-- VU (niveau) — prend la place restante -->
@@ -263,7 +284,16 @@ function bmxRender(){
     cmd({op:"bandmix_measure",src:+bt.dataset.bm}).then(bmxPoll)));
   c.querySelectorAll("[data-so]").forEach(bt=>bt.addEventListener("click",()=>{
     const i=+bt.dataset.so;
-    cmd({op:"bandmix_solo",src:bmxSt&&bmxSt.solo===i?-1:i}).then(bmxPoll);}));
+    cmd({op:"bandmix_solo",src:bmxSt&&bmxSt.solo===i?-1:i}).then(bmxPoll);
+  }));
+  /* V16 : cycle BRUT -> DTLN -> (GTCRN) -> SPEC sur la voie voix */
+  c.querySelectorAll("[data-vc]").forEach(b=>b.addEventListener("click",()=>{
+    const i=+b.dataset.vc;
+    const cur=(vcSt.src===i)?vcSt.mode:0;
+    cmd({op:"voice_clean",src:i,mode:vcNext(cur)}).then(r=>{
+      if(!r.ok&&r.err)console.warn("voice_clean:",r.err);
+      vcPoll();});
+  }));
   const sa=document.getElementById("bmxsoloauto");
   sa.textContent=st.solo_auto?(st.solo_is_auto?"● SOLO AUTO":"SOLO AUTO ON"):"SOLO AUTO";
   sa.style.color=st.solo_auto?(st.solo_is_auto?"#e5a13c":"#4cc470"):"";

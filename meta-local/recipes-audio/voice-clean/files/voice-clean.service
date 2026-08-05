@@ -1,0 +1,15 @@
+[Unit]
+Description=V16 voice-clean (nettoyage voix CPU3 - DTLN/SPECSUB, ring SHM mixer-pro)
+After=mixer-pro.service
+Requires=mixer-pro.service
+PartOf=mixer-pro.service
+
+[Service]
+ExecStart=/usr/bin/voice-clean
+Restart=always
+RestartSec=2
+# CPU3 + FIFO60 posés par le daemon lui-même (sous UAC2 FIFO95)
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target

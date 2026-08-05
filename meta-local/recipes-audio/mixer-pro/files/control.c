@@ -36,6 +36,7 @@
 #include "voice.h"
 #include "persist.h"
 #include "antilarsen.h"
+#include "voice_clean.h"
 #include "uac2_ring.h"   /* compteurs get_drift/reset_drift_stats */
 #include "audio_loop.h"  /* g_skip_*, histogrammes iter */
 #include "control.h"
@@ -114,7 +115,7 @@ static void handle_cmd(int fd, const char *line)
 	    midix_handle_op(fd, line)     || strip_dyn_handle_op(fd, line) ||
 	    automix_handle_op(fd, line)   || master_handle_op(fd, line) ||
 	    voice_handle_op(fd, line)     || persist_handle_op(fd, line) ||
-	    antilarsen_handle_op(fd, line) ||
+	    antilarsen_handle_op(fd, line) || voice_clean_handle_op(fd, line) ||
 	    fx_handle_op(fd, line)        || tac_handle_op(fd, line))
 		return;
 
