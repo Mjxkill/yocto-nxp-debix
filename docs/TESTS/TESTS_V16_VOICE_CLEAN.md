@@ -22,6 +22,9 @@ positions, CPU3). `MIXER_VERSION` = v16.0-voice-clean. But : Michael
    groupée non supportée) — sprint export dédié si souhaité.
 3. **GUI web** : bouton cyclique sur les lignes lead/chœurs de la page
    AUTO MIX (BRUT→DTLN→SPEC, vert quand actif, tooltip latence).
+4. **LCD** (commit c1592355) : même bouton sur la page AUTO MIX de la
+   console Qt6, mêmes ops, GTCRN sauté via modes_avail. Déployé board
+   (md5 ff67bfc6), 0 erreur QML — validation visuelle/tactile : Michael.
 
 ## Validation board
 
