@@ -21,6 +21,8 @@ Item {
     property var at: null      // automix_tune (gel/mémoire/marge — réglable live)
     property var bal: null     // set_balance (balance auto musique/voix)
     property var vsp: null     // set_vspatial (widener voix)
+    property var vc: null      // voice_clean_status (V16 — nettoyage voix)
+    readonly property var vcNames: ["BRUT", "DTLN", "GTCRN", "SPEC"]
     property bool vfDrag: false
     property bool atDrag: false
     property bool meqDrag: false
@@ -52,6 +54,22 @@ Item {
             mixer.call({ op: "set_vspatial" }, function(r) {
                 if (r.ok && !page.vspDrag) page.vsp = r;
             });
+        mixer.call({ op: "voice_clean_status" }, function(r) {
+            if (r.ok) page.vc = r;
+        });
+    }
+    // V16 : mode suivant pour la voie src — saute les modes que le daemon
+    // n'a pas chargés (modes_avail), comme la GUI web. Une seule voie
+    // traitée à la fois : une ligne non-active repart de BRUT.
+    function vcCycle(src) {
+        if (!vc) return;
+        var cur = (vc.src === src) ? vc.mode : 0;
+        var avail = vc.modes_avail || 0;
+        var nx = cur + 1;
+        while (nx <= 3 && !(avail & (1 << nx))) nx++;
+        if (nx > 3) nx = 0;
+        mixer.call({ op: "voice_clean", src: src, mode: nx },
+                   function() { page.refresh(); });
     }
     function setRole(src, dir) {
         if (!st) return;
@@ -792,6 +810,28 @@ Item {
                                     onTapped: mixer.call({ op: "bandmix_solo",
                                                            src: parent.so ? -1 : index },
                                                          function() { page.refresh(); })
+                                }
+                            }
+                            // V16 — VOICE CLEAN : cycle BRUT/DTLN/SPEC sur les
+                            // voies voix (GTCRN sauté tant qu'indisponible).
+                            // Latence +48 ms en mode traité, BRUT au boot.
+                            Rectangle {
+                                width: 52; height: 32; radius: 5
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: active && ch !== null
+                                         && (ch.role === "lead" || ch.role === "choir")
+                                property int m: page.vc && page.vc.src === index
+                                                ? page.vc.mode : 0
+                                color: m > 0 ? "#142a19" : "#1b2126"
+                                border.color: m > 0 ? "#4cc470" : "#39434b"
+                                border.width: m > 0 ? 2 : 1
+                                Text { anchors.centerIn: parent
+                                       text: page.vcNames[parent.m]
+                                       color: parent.m > 0 ? "#4cc470" : "#8b959d"
+                                       font.pixelSize: 9; font.bold: true }
+                                TapHandler {
+                                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                                    onTapped: page.vcCycle(index)
                                 }
                             }
                         }
